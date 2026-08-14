@@ -1,0 +1,103 @@
+# Restrictive redaction profile example. Runtime code remains authoritative and
+# a deployment override may add redaction, never remove mandatory protections.
+
+schema_version: 1
+mode: restrict_only
+
+replacement_tokens:
+  secret: "[SECRET_REDACTED]"
+  pii: "[PII_REDACTED]"
+  email: "[EMAIL_REDACTED]"
+  tax_code: "[TAX_CODE_REDACTED]"
+  iban: "[IBAN_REDACTED]"
+  phone: "[PHONE_REDACTED]"
+  binary: "[REDACTED_BINARY]"
+
+field_names:
+  always_secret:
+    - password
+    - passwd
+    - token
+    - api_key
+    - authorization
+    - cookie
+    - totp_secret
+    - storage_state
+    - confirmation_code
+    - confirmation_digest
+  always_pii:
+    - iban
+    - codice_fiscale
+    - tax_code
+    - phone
+    - telefono
+    - address
+    - indirizzo
+    - birth_date
+    - data_di_nascita
+    - internal_notes
+    - note_interne
+    - email
+
+text_detectors:
+  email:
+    enabled: true
+  italian_tax_code:
+    enabled: true
+  italian_iban:
+    enabled: true
+  phone:
+    enabled: true
+  bearer_credential:
+    enabled: true
+  provider_api_key:
+    enabled: true
+
+pseudonymization:
+  target_employee_id:
+    algorithm: hmac_sha256
+    prefix: emp_
+    displayed_hex_characters: 16
+    minimum_key_bytes: 32
+  reversible: false
+
+sinks:
+  openai:
+    store: false
+    allow_full_documents: false
+    allow_payrolls: false
+    allow_browser_session: false
+    allow_credentials: false
+    result_rendering_default: deterministic
+    redacted_ai_requires_pre_redacted_input: true
+  discord_public:
+    allowed: aggregate_non_sensitive_only
+    block_mentions_from_untrusted_text: true
+  discord_ephemeral:
+    redact_sensitive_profile_fields: true
+    allow_document_content: false
+    allow_payroll_content: false
+  structured_logs:
+    redact_recursively: true
+    pseudonymize_employee_target: true
+    allow_full_prompt: false
+    allow_file_content: false
+  audit:
+    allow_only_validated_redacted_payload: true
+    reject_sensitive_field_names: true
+
+files:
+  original_filename:
+    use_as_path: false
+    log_value: false
+    preserve_only_as_protected_metadata: true
+  discord_response:
+    expose_full_local_path: false
+    expose_content: false
+    return_opaque_upload_id: true
+
+diagnostic_artifacts:
+  screenshots_default: false
+  traces_default: false
+  require_redaction_review_before_commit: true
+  retention_hours_from: TRACE_RETENTION_HOURS

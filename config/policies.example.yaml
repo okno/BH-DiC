@@ -1,0 +1,170 @@
+# BH-DiC policy review example. It contains no Discord IDs, tenant IDs or secrets.
+# The immutable runtime source is bh_dic.policies.catalog. A deployment loader may
+# only make policy more restrictive; it must never broaden the catalog.
+
+schema_version: 1
+mode: restrict_only
+catalog_source: bh_dic.policies.catalog
+
+defaults:
+  effect: deny
+  expose_unknown_function_to_model: false
+  require_verified_tenant: true
+  require_allowlisted_guild: true
+  require_allowlisted_channel: true
+  deny_when_system_state_is_not: HEALTHY
+
+boundaries:
+  guild_ids_from: DISCORD_GUILD_ID
+  channel_ids_from: DISCORD_CHANNEL_ID
+  expected_tenant_from: DIC_EXPECTED_TENANT_ID
+  allow_direct_messages: false
+
+logical_roles:
+  READ_ONLY:
+    discord_ids_from: DISCORD_READONLY_ROLE_IDS
+  HR_READ:
+    discord_ids_from: DISCORD_HR_READ_ROLE_IDS
+  HR_WRITE:
+    discord_ids_from: DISCORD_HR_WRITE_ROLE_IDS
+  IAM_OPERATOR:
+    discord_ids_from: DISCORD_IAM_ROLE_IDS
+  DOCUMENT_OPERATOR:
+    discord_ids_from: DISCORD_DOCUMENT_ROLE_IDS
+  APPROVER:
+    discord_ids_from: DISCORD_APPROVER_ROLE_IDS
+  SECURITY_ADMIN:
+    discord_ids_from: DISCORD_SECURITY_ADMIN_ROLE_IDS
+  SYSTEM_ADMIN:
+    discord_ids_from: DISCORD_SYSTEM_ADMIN_ROLE_IDS
+
+feature_flags:
+  read_master: ENABLE_READ_ACTIONS
+  write_kill_switch: ENABLE_WRITE_ACTIONS
+  effective_write_rule: environment_and_runtime
+  recheck_at:
+    - PREPARE
+    - CONFIRM
+    - APPROVE
+    - EXECUTE
+  runtime_override_can_enable_environment_disabled_flag: false
+
+approval_policy:
+  pending_ttl_from: PENDING_ACTION_TTL_MINUTES
+  confirmation_code:
+    stored_as: hmac_sha256_digest
+    one_time: true
+    requester_only: true
+  requester_may_approve_own_action: false
+  repeated_approver_may_count_twice: false
+  critical_approvers_required: 2
+  critical_requires_motivation: true
+  critical_text_confirmation: "CONFIRM <EMPLOYEE_ID>"
+  employee_delete_text_confirmation: "DELETE <EMPLOYEE_ID>"
+  execution_requires_unchanged_state_fingerprint: true
+  uncertain_write_status: UNKNOWN_REQUIRES_RECONCILIATION
+  automatically_retry_uncertain_write: false
+
+function_overrides:
+  # READ_ONLY is sufficient only for aggregate counts. Employee lists require HR_READ.
+  EMP-READ-001:
+    aggregate_role: READ_ONLY
+    list_role: HR_READ
+  EMP-BAL-001:
+    role: HR_READ
+    additional_entitlement: balances:read
+  EMP-DOC-001:
+    role: DOCUMENT_OPERATOR
+
+  EMP-UPDATE-001:
+    role: HR_WRITE
+    flag: ENABLE_EMPLOYEE_UPDATE
+    extra_flag_for_sensitive_fields: ENABLE_SENSITIVE_PROFILE_UPDATE
+    confirmation: requester
+  EMP-CREATE-001:
+    role: HR_WRITE
+    flag: ENABLE_EMPLOYEE_CREATE
+    confirmation: requester
+    from_payroll_status: NEEDS_VALIDATION
+  EMP-CONTRACT-002:
+    role: HR_WRITE
+    flag: ENABLE_CONTRACT_WRITE
+    independent_approvers: 1
+  EMP-MAT-002:
+    role: HR_WRITE
+    flag: ENABLE_MATURATION_WRITE
+    independent_approvers: 1
+    live_write_status: LIVE_WRITE_UNVERIFIED
+  EMP-CONNECT-001:
+    role: IAM_OPERATOR
+    flag: ENABLE_ACCOUNT_CONNECT
+    independent_approvers: 1
+  EMP-INVITE-001:
+    role: IAM_OPERATOR
+    flag: ENABLE_INVITE_ACTIONS
+    confirmation: requester
+  EMP-INVITE-002:
+    role: IAM_OPERATOR
+    flag: ENABLE_INVITE_ACTIONS
+    confirmation: requester
+  EMP-STATUS-002:
+    role: HR_WRITE
+    flag: ENABLE_STATUS_CHANGE
+    independent_approvers: 1
+  EMP-DOC-002:
+    role: DOCUMENT_OPERATOR
+    flag: ENABLE_DOCUMENT_UPLOAD
+    required_capability: clamav
+    confirmation: requester
+  EMP-DOC-004:
+    role: DOCUMENT_OPERATOR
+    flag: ENABLE_DOCUMENT_UPDATE
+    confirmation: requester
+  EMP-EXPORT-001:
+    flag: ENABLE_EXPORT
+    output: local_protected_only
+    source_roles:
+      employees: HR_READ
+      balances: HR_READ+balances:read
+      documents: DOCUMENT_OPERATOR
+
+critical_functions:
+  # Every entry is also subordinate to ENABLE_WRITE_ACTIONS.
+  EMP-BAL-002:
+    flag: ENABLE_BALANCE_CORRECTION
+    requester_role: HR_WRITE
+    model_exposed: false
+  EMP-CONNECT-002:
+    flag: ENABLE_ACCOUNT_DISCONNECT
+    requester_role: IAM_OPERATOR
+  EMP-RBAC-002:
+    flag: ENABLE_RBAC_WRITE
+    requester_roles_all: [IAM_OPERATOR, APPROVER]
+    model_exposed: false
+  EMP-STATUS-001:
+    flag: ENABLE_STATUS_CHANGE
+    requester_roles_all: [HR_WRITE, APPROVER]
+  EMP-DOC-005:
+    flag: ENABLE_DOCUMENT_DELETE
+    requester_role: DOCUMENT_OPERATOR
+  EMP-DOC-003:
+    flag: ENABLE_DOCUMENT_DOWNLOAD
+    requester_role: DOCUMENT_OPERATOR
+    output: local_protected_only
+    model_exposed: false
+  EMP-CONTRACT-003:
+    flag: ENABLE_CONTRACT_DELETE
+    requester_role: HR_WRITE
+    model_exposed: false
+  EMP-DELETE-001:
+    flag: ENABLE_EMPLOYEE_DELETE
+    requester_role: SYSTEM_ADMIN
+    text_confirmation: "DELETE <EMPLOYEE_ID>"
+    model_exposed: false
+
+live_write_test_guard:
+  required_all:
+    - ENABLE_LIVE_WRITE_TESTS=true
+    - DIC_TEST_EMPLOYEE_ID is explicitly configured
+    - DIC_TEST_TENANT_CONFIRMED=true
+  production_data_allowed: false

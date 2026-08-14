@@ -1,0 +1,80 @@
+# Feature matrix
+
+Fonte normativa: `src/bh_dic/policies/catalog.py`. Questa pagina è una proiezione documentale e
+non deve essere mantenuta come secondo catalogo runtime.
+
+## Stato verificato
+
+- **32/32** Function ID hanno specifica policy e percorso mock sintetico testato.
+- **13 read**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `NEEDS_VALIDATION`.
+- **17 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+  `DISABLED_BY_POLICY`; **2 operazioni artifact** (`EMP-EXPORT-001`, `EMP-DOC-003`) sono
+  `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`, con
+  adapter live `NOT_AVAILABLE`. I 19 flag sono disabilitati per default nella configurazione di
+  esempio.
+- Nessuna operazione live è stata eseguita; nessun bot è stato avviato localmente, mentre bot e
+  deployment sul target sono `UNVERIFIED`/`BLOCKED` per assenza dell'identità SSH.
+
+“Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
+Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il
+catalogo esclude anche dalla tool exposure ordinaria.
+
+## Read-only
+
+| Function ID | Funzione | Ruolo/scope minimo | Flag | Tool | Stato |
+|---|---|---|---|---|---|
+| `EMP-READ-001` | elenco/conteggio | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-READ-002` | riepilogo anagrafico redatto | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-SEARCH-001` | ricerca dipendente | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-FILTER-001` | filtri elenco | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-SORT-001` | ordinamento | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-PAGE-001` | paginazione | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-CONTRACT-001` | contratti | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-RBAC-001` | gruppi/ruoli | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-PAY-001` | metadati buste paga | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-DOC-001` | metadati documenti | document operator | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+
+## Write, file ed export
+
+Tutte le righe richiedono conferma monouso e il kill switch `ENABLE_WRITE_ACTIONS`; “A1” è una
+approvazione distinta dal richiedente, “A2” richiede due approvatori distinti tra loro e dal
+richiedente. Il numero `0` non elimina preview, conferma, RBAC, idempotenza o postcondizione.
+
+| Function ID | Funzione | Flag specifico | Appr. | Tool | Stato |
+|---|---|---|---:|---|---|
+| `EMP-UPDATE-001` | modifica dipendente | `ENABLE_EMPLOYEE_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CREATE-001` | creazione dipendente | `ENABLE_EMPLOYEE_CREATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CONTRACT-002` | crea/modifica contratto | `ENABLE_CONTRACT_WRITE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-MAT-002` | nuova maturazione | `ENABLE_MATURATION_WRITE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-BAL-002` | correzione bilancio | `ENABLE_BALANCE_CORRECTION` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CONNECT-001` | collega account | `ENABLE_ACCOUNT_CONNECT` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CONNECT-002` | scollega account | `ENABLE_ACCOUNT_DISCONNECT` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-INVITE-001` | reinvia invito | `ENABLE_INVITE_ACTIONS` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-INVITE-002` | annulla invito | `ENABLE_INVITE_ACTIONS` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-RBAC-002` | modifica ruoli | `ENABLE_RBAC_WRITE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-STATUS-001` | disattiva dipendente | `ENABLE_STATUS_CHANGE` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-STATUS-002` | riattiva dipendente | `ENABLE_STATUS_CHANGE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-DOC-002` | upload documento | `ENABLE_DOCUMENT_UPLOAD` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-DOC-004` | metadati documento | `ENABLE_DOCUMENT_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-DOC-005` | elimina documento | `ENABLE_DOCUMENT_DELETE` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-EXPORT-001` | export locale protetto | `ENABLE_EXPORT` | 0 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
+| `EMP-DOC-003` | download locale protetto | `ENABLE_DOCUMENT_DOWNLOAD` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
+| `EMP-DELETE-001` | elimina dipendente | `ENABLE_EMPLOYEE_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CONTRACT-003` | elimina contratto | `ENABLE_CONTRACT_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+
+## Condizioni non rappresentate da una singola colonna
+
+- guild, canale e tenant devono coincidere con lo scope consentito;
+- il ruolo logico deriva da ID Discord configurati, non dal testo utente;
+- file upload (`EMP-DOC-002`) richiede quarantena e ClamAV disponibile/fail-closed;
+- azioni critiche richiedono conferma testuale del target e A2;
+- TTL, version/CAS, idempotency claim e kill switch sono ricontrollati all'esecuzione;
+- un esito ambiguo diventa `UNKNOWN_REQUIRES_RECONCILIATION`, mai retry automatico;
+- `ENABLE_LIVE_WRITE_TESTS` richiede employee sintetico dedicato e tenant confermato, ma resta
+  vietato finché non esiste un'autorizzazione esplicita separata.
+
+Vedere [Configuration](CONFIGURATION.md), [Security architecture](SECURITY_ARCHITECTURE.md) e
+[Testing](TESTING.md).

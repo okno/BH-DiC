@@ -1,0 +1,115 @@
+<!--
+  BH-DiC local Wazuh rules example. Validate with the installed Wazuh version
+  and wazuh-logtest before merging/restarting. Rule IDs are in the local range.
+-->
+<group name="bh_dic,security,">
+  <rule id="110500" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="logger" type="pcre2">^bh_dic(?:\.|$)</field>
+    <description>BH-DiC structured event</description>
+  </rule>
+
+  <rule id="110501" level="8">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(guild|channel|role).*(denied|unauthori[sz]ed)|access.*denied</field>
+    <description>BH-DiC unauthorized Discord context or role</description>
+    <group>access_denied,</group>
+  </rule>
+
+  <rule id="110502" level="7">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(feature|function|write).*(disabled|denied)|policy\.feature_disabled</field>
+    <description>BH-DiC disabled function attempt</description>
+    <group>policy_denied,</group>
+  </rule>
+
+  <rule id="110503" level="10">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)approval.*(self|duplicate|unauthori[sz]ed|replay|denied)</field>
+    <description>BH-DiC approval separation or replay violation</description>
+    <group>approval_abuse,</group>
+  </rule>
+
+  <rule id="110504" level="7">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(authentication|auth).*(interactive_required|captcha|mfa|session_expired)</field>
+    <description>BH-DiC interactive authentication or expired session</description>
+    <group>authentication,</group>
+  </rule>
+
+  <rule id="110505" level="8">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(authentication|auth|login).*(failed|failure|denied)</field>
+    <description>BH-DiC authentication failure</description>
+    <group>authentication_failed,</group>
+  </rule>
+
+  <rule id="110506" level="12" frequency="5" timeframe="300">
+    <if_matched_sid>110505</if_matched_sid>
+    <description>BH-DiC repeated authentication failures</description>
+    <group>authentication_failures,</group>
+  </rule>
+
+  <rule id="110507" level="9">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(ui_drift|selector.*(missing|failed|not_found)|route_mismatch)</field>
+    <description>BH-DiC browser UI drift or selector failure</description>
+    <group>availability,browser_drift,</group>
+  </rule>
+
+  <rule id="110508" level="14">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(file|upload|antivirus).*(infected|malware)</field>
+    <description>BH-DiC malware detected in quarantined file</description>
+    <group>malware,</group>
+  </rule>
+
+  <rule id="110509" level="10">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(mime.*mismatch|path.*traversal|unsafe_filename|extension.*mismatch)</field>
+    <description>BH-DiC malicious or inconsistent file metadata</description>
+    <group>file_validation,</group>
+  </rule>
+
+  <rule id="110510" level="10">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(prompt.*injection|forbidden.*data|prohibited.*data|sensitive.*request)</field>
+    <description>BH-DiC prompt injection or forbidden-data request</description>
+    <group>prompt_injection,data_loss_prevention,</group>
+  </rule>
+
+  <rule id="110511" level="12">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(delete|destructive).*(attempt|prepare|denied|requested)</field>
+    <description>BH-DiC destructive action attempt</description>
+    <group>destructive_action,</group>
+  </rule>
+
+  <rule id="110512" level="15">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">^audit\.(integrity_failed|append_failed)$</field>
+    <description>BH-DiC audit chain or append failure</description>
+    <group>audit_integrity,</group>
+  </rule>
+
+  <rule id="110513" level="13">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(unknown_requires_reconciliation|uncertain.*write|write.*uncertain)</field>
+    <description>BH-DiC mutating action has an uncertain outcome</description>
+    <group>uncertain_write,</group>
+  </rule>
+
+  <rule id="110514" level="13">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(tenant.*mismatch|cross_tenant|tenant.*denied)</field>
+    <description>BH-DiC DIC tenant mismatch</description>
+    <group>tenant_isolation,</group>
+  </rule>
+
+  <rule id="110515" level="5">
+    <if_sid>110500</if_sid>
+    <field name="event_type" type="pcre2">(?i)(rate_limit|rate.*limited)</field>
+    <description>BH-DiC request rate limited</description>
+    <group>rate_limit,</group>
+  </rule>
+</group>

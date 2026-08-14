@@ -1,0 +1,14 @@
+<!--
+  BH-DiC Wazuh agent example.
+  Merge the localfile element into the host's existing <ossec_config> and adapt
+  /opt/bh-dic if the deployment uses another absolute directory.
+
+  app.jsonl already contains all component events. Do not additionally collect
+  every component JSONL unless duplicate downstream alerts are intentional.
+-->
+<ossec_config>
+  <localfile>
+    <location>/opt/bh-dic/var/log/app.jsonl</location>
+    <log_format>json</log_format>
+  </localfile>
+</ossec_config>

@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bh-dic"
+version = "0.1.0"
+description = "Secure Discord assistant for authorized Dipendenti in Cloud employee workflows."
+requires-python = ">=3.12"
+authors = [{ name = "BH-DiC maintainers" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = [
+  "aiosqlite>=0.22,<1",
+  "alembic>=1.19,<2",
+  "asyncpg>=0.30,<1",
+  "cryptography>=49,<51",
+  "discord.py>=2.7,<3",
+  "openai>=3,<4",
+  "playwright>=1.62,<2",
+  "pydantic>=2.13,<3",
+  "pydantic-settings>=2.15,<3",
+  "python-dotenv>=1.2,<2",
+  "python-magic>=0.4.27,<1",
+  "PyYAML>=6.0.3,<7",
+  "SQLAlchemy[asyncio]>=2.0.52,<3",
+  "structlog>=25,<26",
+  "tenacity>=9,<10",
+  "typer>=0.20,<1",
+  "tzdata>=2025.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "bandit>=1.8,<2",
+  "coverage[toml]>=7.10,<8",
+  "mypy>=1.18,<2",
+  "pip-audit>=2.10,<3",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=0.26,<2",
+  "ruff>=0.16,<1",
+  "types-PyYAML>=6.0.12",
+]
+
+[project.scripts]
+bh-dic = "bh_dic.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["var", "migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106"]
+"migrations/**/*.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/versions"]
+
+[[tool.mypy.overrides]]
+module = ["magic", "discord.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "integration: integration tests using local synthetic resources only",
+  "e2e: end-to-end tests; live writes remain forbidden by default",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["bh_dic"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+
+[tool.bandit]
+exclude_dirs = ["tests", "migrations"]
+skips = ["B101"]
