@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
+import re
+import stat
 import uuid
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from dataclasses import replace
@@ -11,12 +15,18 @@ from typing import Any, TypedDict, Unpack
 
 from bh_dic.files.antivirus import AntivirusScanner, AntivirusVerdict
 from bh_dic.files.mime import MimeDetector, canonical_mime, extension_matches_mime
-from bh_dic.files.models import UploadRecord, UploadStatus
+from bh_dic.files.models import ResolvedUpload, UploadRecord, UploadStatus
 from bh_dic.files.quarantine import QuarantineStore, SizeLimitExceeded
 from bh_dic.files.repository import UploadRepository
 from bh_dic.security.sanitization import InputValidationError, sanitize_filename_metadata
 
 EventSink = Callable[[str, Mapping[str, Any]], None]
+_UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class UploadResolutionError(ValueError):
+    """A quarantined upload cannot safely cross the DIC delivery boundary."""
 
 
 class _UploadChanges(TypedDict, total=False):
@@ -58,6 +68,7 @@ class FileService:
         self._clamav_required = clamav_required
         self._event_sink = event_sink or (lambda _event, _metadata: None)
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._delivery_lock = asyncio.Lock()
 
     async def ingest(
         self,
@@ -143,19 +154,130 @@ class FileService:
         return clean
 
     async def mark_processed(self, upload_id: str) -> UploadRecord:
-        record = await self.get(upload_id)
-        if record.status != UploadStatus.CLEAN or record.bucket != "clean":
-            raise ValueError("only a clean upload can be marked processed")
-        self._store.move(upload_id, "clean", "processed")
-        updated = await self._update(record, status=UploadStatus.PROCESSED, bucket="processed")
-        self._event("FILE_PROCESSED", updated)
-        return updated
+        await self.claim_clean_upload(upload_id)
+        return await self.get(upload_id)
+
+    async def resolve_clean_upload(self, upload_id: str) -> ResolvedUpload:
+        """Return an internal capability for a verified CLEAN record without changing state."""
+
+        record = await self._clean_record(upload_id)
+        return await asyncio.to_thread(self._verify_stored_record, record, "clean")
+
+    async def claim_clean_upload(self, upload_id: str) -> ResolvedUpload:
+        """Consume one CLEAN upload before dispatch so it cannot be delivered twice."""
+
+        async with self._delivery_lock:
+            record = await self._clean_record(upload_id)
+            await asyncio.to_thread(self._verify_stored_record, record, "clean")
+            try:
+                self._store.move(upload_id, "clean", "processed")
+            except (OSError, ValueError):
+                raise UploadResolutionError("clean upload could not be claimed") from None
+            try:
+                updated = await self._update(
+                    record,
+                    status=UploadStatus.PROCESSED,
+                    bucket="processed",
+                )
+            except Exception:
+                # The atomic filesystem move already prevents reuse. Metadata repair is an
+                # operator action; never move the file back into the reusable CLEAN bucket.
+                raise UploadResolutionError("upload claim metadata update failed closed") from None
+            resolved = await asyncio.to_thread(
+                self._verify_stored_record, updated, "processed", False
+            )
+            self._event("FILE_PROCESSED", updated)
+            return resolved
 
     async def get(self, upload_id: str) -> UploadRecord:
         record = await self._repository.get(upload_id)
         if record is None:
             raise KeyError(upload_id)
         return record
+
+    async def _clean_record(self, upload_id: str) -> UploadRecord:
+        if not _UPLOAD_ID.fullmatch(upload_id):
+            raise UploadResolutionError("invalid upload identifier")
+        try:
+            record = await self.get(upload_id)
+        except KeyError:
+            raise UploadResolutionError("upload is unavailable") from None
+        if (
+            record.upload_id != upload_id
+            or record.opaque_name != upload_id
+            or record.status is not UploadStatus.CLEAN
+            or record.bucket != "clean"
+            or record.deleted_at is not None
+            or record.expires_at <= self._now()
+            or record.antivirus_status != AntivirusVerdict.CLEAN.value
+            or record.detected_mime not in self._allowed
+            or record.size_bytes <= 0
+            or record.sha256 is None
+            or not _SHA256.fullmatch(record.sha256)
+        ):
+            raise UploadResolutionError("upload is not eligible for delivery")
+        return record
+
+    def _verify_stored_record(
+        self,
+        record: UploadRecord,
+        bucket: str,
+        require_clean_status: bool = True,
+    ) -> ResolvedUpload:
+        if require_clean_status and record.status is not UploadStatus.CLEAN:
+            raise UploadResolutionError("upload state changed before delivery")
+        expected_status = UploadStatus.CLEAN if bucket == "clean" else UploadStatus.PROCESSED
+        if record.bucket != bucket or record.status is not expected_status:
+            raise UploadResolutionError("upload metadata and storage bucket disagree")
+        bucket_directory = self._store.root / bucket
+        candidate = bucket_directory / record.upload_id
+        try:
+            if bucket_directory.is_symlink() or candidate.is_symlink():
+                raise UploadResolutionError("upload storage contains a symbolic link")
+            resolved_directory = bucket_directory.resolve(strict=True)
+            resolved_path = candidate.resolve(strict=True)
+        except OSError:
+            raise UploadResolutionError("upload file is unavailable") from None
+        if (
+            resolved_directory.parent != self._store.root
+            or resolved_path.parent != resolved_directory
+        ):
+            raise UploadResolutionError("upload storage escaped the configured root")
+
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(resolved_path, flags)
+        except OSError:
+            raise UploadResolutionError("upload file cannot be opened safely") from None
+        digest = hashlib.sha256()
+        observed_size = 0
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise UploadResolutionError("upload storage entry is not a regular file")
+            if os.name == "posix" and metadata.st_mode & 0o077:
+                raise UploadResolutionError("upload file permissions are too broad")
+            with os.fdopen(descriptor, "rb", closefd=True) as handle:
+                descriptor = -1
+                while chunk := handle.read(64 * 1024):
+                    observed_size += len(chunk)
+                    digest.update(chunk)
+        except OSError:
+            raise UploadResolutionError("upload file could not be verified") from None
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        if observed_size != record.size_bytes or digest.hexdigest() != record.sha256:
+            raise UploadResolutionError("upload integrity verification failed")
+        if record.detected_mime is None:
+            raise UploadResolutionError("upload MIME metadata is unavailable")
+        return ResolvedUpload(
+            upload_id=record.upload_id,
+            path=resolved_path,
+            sha256=record.sha256,
+            size_bytes=record.size_bytes,
+            detected_mime=record.detected_mime,
+        )
 
     async def _record_early_rejection(
         self,
@@ -214,7 +336,6 @@ class FileService:
                 "upload_id": record.upload_id,
                 "status": record.status.value,
                 "size_bytes": record.size_bytes,
-                "sha256": record.sha256,
                 "detected_mime": record.detected_mime,
                 "reason": record.rejection_reason,
             },

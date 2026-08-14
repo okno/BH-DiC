@@ -4,13 +4,13 @@
 
 - repository privata collegata localmente;
 - server `10.1.2.253` non raggiunto: utente/chiave SSH mancanti;
-- bot non avviato, nessun PID dichiarato;
+- processo bot assente nel workspace locale; stato sul target `UNVERIFIED`;
 - nessun read o write live verificato;
 - write mock-only, kill switch globale e flag specifici disabilitati.
 
-I 22 script Bash richiesti sono presenti e il gate locale ha verificato parsing `bash -n` e 29
-casi di contratto operativo. Restano non eseguiti sul target Linux: un test locale non equivale a
-un comando riuscito sul server.
+I 22 script Bash richiesti sono presenti e il gate locale ha verificato parsing `bash -n`, 29 casi
+statici di contratto e 2 casi comportamentali (31 totali). Restano non eseguiti sul target Linux:
+un test locale non equivale a un comando riuscito sul server.
 
 ## Runbook giornaliero
 

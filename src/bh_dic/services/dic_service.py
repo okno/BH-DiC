@@ -19,6 +19,7 @@ from bh_dic.dic.errors import (
     DicWriteDisabledError,
 )
 from bh_dic.dic.models import (
+    BalanceCorrectionState,
     BalanceResult,
     ContractRecord,
     DicCredentials,
@@ -40,11 +41,20 @@ from bh_dic.dic.models import (
     TimeAccessResult,
 )
 from bh_dic.dic.protocol import DipendentiInCloudAdapter
-from bh_dic.policies.catalog import get_function_spec
+from bh_dic.policies.catalog import (
+    FunctionSpec,
+    WriteParameterValidationError,
+    get_function_spec,
+    validate_write_parameters,
+)
 from bh_dic.policies.feature_flags import FeatureFlags
 
 _JSON_MAPPING = TypeAdapter(dict[str, JsonValue])
 _SECRET_KEY = re.compile(r"(?:password|passwd|token|secret|cookie|api[_-]?key|totp)", re.I)
+_DOCUMENT_EXECUTION_ONLY_PARAMETERS = frozenset(
+    {"safe_local_path", "safe_local_sha256", "safe_local_size", "detected_mime"}
+)
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 class DicService:
@@ -105,6 +115,68 @@ class DicService:
             return _JSON_MAPPING.validate_python(dict(parameters))
         except ValidationError as exc:
             raise DicValidationError("write parameters must be JSON-compatible") from exc
+
+    @classmethod
+    def _catalog_validated_parameters(
+        cls,
+        pending: PendingAction,
+        spec: FunctionSpec,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, JsonValue]:
+        """Re-enforce the catalog at the final service boundary.
+
+        DOC-002 is the sole exception to the persisted schema shape: ``upload_id``
+        has already been consumed by the application and is replaced by four
+        execution-only values derived from a claimed CLEAN server-side record.
+        """
+
+        json_parameters = cls._validated_parameters(parameters)
+        candidate: dict[str, Any]
+        if pending.function_id == "EMP-DOC-002":
+            public_names = spec.operational_parameter_names - {"upload_id"}
+            allowed = public_names | _DOCUMENT_EXECUTION_ONLY_PARAMETERS
+            unexpected = set(json_parameters).difference(allowed)
+            missing_internal = _DOCUMENT_EXECUTION_ONLY_PARAMETERS.difference(json_parameters)
+            if unexpected or missing_internal or "upload_id" in json_parameters:
+                raise DicValidationError("document execution parameters violate the closed schema")
+            path = json_parameters.get("safe_local_path")
+            sha256 = json_parameters.get("safe_local_sha256")
+            size = json_parameters.get("safe_local_size")
+            mime = json_parameters.get("detected_mime")
+            if (
+                not isinstance(path, str)
+                or not path
+                or not isinstance(sha256, str)
+                or _SHA256.fullmatch(sha256) is None
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+                or not isinstance(mime, str)
+                or not mime
+                or len(mime) > 128
+            ):
+                raise DicValidationError("document execution capability is malformed")
+            candidate = {
+                name: value for name, value in json_parameters.items() if name in public_names
+            }
+            # The original opaque upload ID was schema-validated before persistence;
+            # a fixed syntactic sentinel lets the same catalog validate only metadata.
+            candidate["upload_id"] = "0" * 32
+        else:
+            candidate = dict(json_parameters)
+        if pending.motivation is not None:
+            candidate["motivation"] = pending.motivation
+        try:
+            normalized = validate_write_parameters(spec, candidate)
+        except WriteParameterValidationError as exc:
+            raise DicValidationError("write parameters violate the policy catalog") from exc
+        normalized.pop("motivation", None)
+        normalized.pop("upload_id", None)
+        if pending.function_id == "EMP-DOC-002":
+            normalized.update(
+                {name: json_parameters[name] for name in _DOCUMENT_EXECUTION_ONLY_PARAMETERS}
+            )
+        return cls._validated_parameters(normalized)
 
     @staticmethod
     def _fingerprint(
@@ -194,7 +266,7 @@ class DicService:
             raise DicInvalidPreparedActionError("approval requirement differs from policy catalog")
         if spec.requires_target and pending.target_employee_id is None:
             raise DicInvalidPreparedActionError("approved action has no stable employee target")
-        validated = self._validated_parameters(parameters)
+        validated = self._catalog_validated_parameters(pending, spec, parameters)
         return PreparedAction(
             action_id=pending.action_id,
             function_id=function_id,
@@ -252,6 +324,11 @@ class DicService:
 
     async def get_balance(self, employee_id: str, year: int) -> BalanceResult:
         return await self.adapter.get_balance(employee_id, year)
+
+    async def get_balance_correction_state(
+        self, employee_id: str, year: int, month: int, category: str
+    ) -> BalanceCorrectionState:
+        return await self.adapter.get_balance_correction_state(employee_id, year, month, category)
 
     async def get_payroll_metadata(
         self, employee_id: str, year: int | None = None

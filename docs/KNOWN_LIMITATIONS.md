@@ -45,14 +45,21 @@
 
 ## Write, riconciliazione e file
 
-- Tutte le write sono `DISABLED_BY_DEFAULT` e `LIVE_WRITE_UNVERIFIED`. Non devono
-  essere abilitate soltanto per completare un test.
-- `EMP-EXPORT-001` e `EMP-DOC-003` sono implementate nel catalogo/policy/mock, ma
-  il dispatch Playwright resta bloccato finché manca un artifact service locale
-  protetto con permessi, cifratura, audit e retention definiti.
-- L'upload documenti richiede un path risolto sotto una quarantine root e la
-  capability ClamAV. Dimensioni/formati effettivi, validazioni del form,
-  versionamento, firma, sostituzione e notifiche del sito restano ignoti.
+- Tutte le write sono `DISABLED_BY_POLICY` e `LIVE_WRITE_UNVERIFIED`.
+  `DISABLED_BY_DEFAULT` descrive soltanto l'evidenza di configurazione in `.env.example`, non uno
+  stato operativo alternativo. Le write non devono essere abilitate soltanto per completare un test.
+- `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`, `EMP-DOC-003` e
+  `EMP-CONTRACT-003` sono presenti nel catalogo/policy/mock, ma il dispatch Playwright è
+  `NOT_AVAILABLE` e fallisce chiuso. Per export e download manca inoltre un artifact service
+  locale protetto con permessi, cifratura, audit e retention definiti.
+- `EMP-CREATE-001` è `PARTIALLY_COMPLETED`: il mock copre lo schema completo, mentre il live
+  accetta solo il subset riconciliabile. `birth_date`, `iban`, `phone`, `address` e `notes` sono
+  rifiutati prima della creazione del pending.
+- L'upload documenti richiede un file risolto sotto la root controllata e la capability ClamAV.
+  Il pending conserva soltanto l'`upload_id`: path locale e SHA-256 non entrano in eventi, log,
+  Discord o OpenAI. Lo SHA-256 è visibile esclusivamente all'operatore locale nei metadati file.
+  Dimensioni/formati effettivi, validazioni del form, versionamento, firma, sostituzione e
+  notifiche del sito restano ignoti.
 - Le write create/update possono non restituire un ID stabile. Senza ID o
   postcondizione confrontabile, la riconciliazione restituisce `UNKNOWN` e vieta
   il retry automatico.

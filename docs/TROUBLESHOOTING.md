@@ -9,8 +9,8 @@ Partire sempre da stato e log redatti:
 ./scripts/audit-verify.sh
 ```
 
-Non avviare il bot o abilitare write per diagnosticare. Il bot corrente è fermo e il deployment
-è bloccato.
+Non avviare il bot o abilitare write per diagnosticare. Nel workspace locale il processo bot è
+assente; sul target il suo stato è `UNVERIFIED` e il deployment è `BLOCKED`.
 
 | Sintomo | Verifica | Azione sicura |
 |---|---|---|

@@ -24,7 +24,7 @@ from bh_dic.approvals.service import ApprovalService
 from bh_dic.approvals.storage import InMemoryApprovalRepository
 from bh_dic.audit.service import AuditService
 from bh_dic.database.engine import Database
-from bh_dic.dic.errors import DicAmbiguousWriteOutcomeError
+from bh_dic.dic.errors import DicAmbiguousWriteOutcomeError, DicReconciliationRequiredError
 from bh_dic.dic.mock import MockDicAdapter
 from bh_dic.dic.models import (
     ContractRecord,
@@ -35,7 +35,7 @@ from bh_dic.dic.models import (
 )
 from bh_dic.discord.checks import DiscordActor
 from bh_dic.discord.interactions import AttachmentPayload
-from bh_dic.files.models import UploadRecord, UploadStatus
+from bh_dic.files.models import ResolvedUpload, UploadRecord, UploadStatus
 from bh_dic.files.service import FileService
 from bh_dic.openai.client import RoutedIntent
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata, Sensitivity
@@ -150,7 +150,7 @@ async def _harness(
         router=router,
         policy=PolicyEngine(),
         flags=flags,
-        dic=DicService(adapter, flags),
+        dic=DicService(adapter, flags, capabilities=capabilities),
         scope=ApplicationScope(
             allowed_guild_ids=frozenset({"2001"}),
             allowed_channel_ids=frozenset({"3001"}),
@@ -179,9 +179,12 @@ def _sqlite_url(path: Path) -> str:
 
 
 class FileStub:
+    upload_id = "0" * 32
+
     def __init__(self, status: UploadStatus) -> None:
         self.status = status
         self.received = b""
+        self.claim_calls = 0
 
     async def ingest(
         self,
@@ -193,9 +196,9 @@ class FileStub:
         self.received = b"".join([chunk async for chunk in chunks])
         now = datetime.now(UTC)
         return UploadRecord(
-            upload_id="00000000-0000-4000-8000-000000000501",
+            upload_id=self.upload_id,
             original_filename=original_filename,
-            opaque_name="00000000-0000-4000-8000-000000000501.bin",
+            opaque_name=self.upload_id,
             status=self.status,
             bucket="quarantine",
             claimed_mime=claimed_mime,
@@ -207,6 +210,20 @@ class FileStub:
             created_at=now,
             expires_at=now + timedelta(hours=1),
         )
+
+    async def resolve_clean_upload(self, upload_id: str) -> ResolvedUpload:
+        assert upload_id == self.upload_id
+        return ResolvedUpload(
+            upload_id=upload_id,
+            path=Path("C:/synthetic/processed-upload"),
+            sha256="a" * 64,
+            size_bytes=len(self.received),
+            detected_mime="application/pdf",
+        )
+
+    async def claim_clean_upload(self, upload_id: str) -> ResolvedUpload:
+        self.claim_calls += 1
+        return await self.resolve_clean_upload(upload_id)
 
 
 def test_coordinator_rejects_short_pseudonym_key() -> None:
@@ -333,10 +350,16 @@ async def test_upload_denial_unavailable_size_and_scan_outcomes() -> None:
     try:
         with pytest.raises(ApplicationPolicyDenied):
             await missing.coordinator.upload(
-                _actor(LogicalRole.HR_READ), "EMP-SYNTH-001", "CV", attachment
+                _actor(LogicalRole.HR_READ),
+                "EMP-SYNTH-001",
+                "CV",
+                attachment,
             )
         unavailable = await missing.coordinator.upload(
-            _actor(LogicalRole.DOCUMENT_OPERATOR), "EMP-SYNTH-001", "CV", attachment
+            _actor(LogicalRole.DOCUMENT_OPERATOR),
+            "EMP-SYNTH-001",
+            "CV",
+            attachment,
         )
         assert not unavailable.success
     finally:
@@ -358,7 +381,10 @@ async def test_upload_denial_unavailable_size_and_scan_outcomes() -> None:
                 replace(attachment, declared_size=99),
             )
         denied = await rejected.coordinator.upload(
-            _actor(LogicalRole.DOCUMENT_OPERATOR), "EMP-SYNTH-001", "CV", attachment
+            _actor(LogicalRole.DOCUMENT_OPERATOR),
+            "EMP-SYNTH-001",
+            "CV",
+            attachment,
         )
         assert rejected_files.received == b"data"
         assert denied.title == "Allegato rifiutato"
@@ -375,12 +401,115 @@ async def test_upload_denial_unavailable_size_and_scan_outcomes() -> None:
     )
     try:
         preview = await clean.coordinator.upload(
-            _actor(LogicalRole.DOCUMENT_OPERATOR), "EMP-SYNTH-001", "CV", attachment
+            _actor(LogicalRole.DOCUMENT_OPERATOR),
+            "EMP-SYNTH-001",
+            "CV",
+            attachment,
         )
         assert preview.action_id is not None
         assert preview.title == "Anteprima EMP-DOC-002"
+        assert "synthetic/processed-upload" not in preview.description
+        assert attachment.original_filename not in repr(preview)
+        assert clean.repository is not None
+        assert clean.cipher is not None
+        pending = await clean.repository.get(preview.action_id)
+        assert pending is not None
+        payload = clean.cipher.decrypt_json(pending.encrypted_parameters)
+        assert payload["parameters"] == {
+            "upload_id": FileStub.upload_id,
+            "category": "CV",
+        }
+        assert "safe_local" not in repr(payload)
+
+        result = await clean.coordinator.approve(
+            _actor(LogicalRole.DOCUMENT_OPERATOR),
+            preview.action_id,
+            _confirmation_code(preview.description),
+        )
+
+        assert result.success
+        assert clean_files.claim_calls == 1
+        assert "synthetic/processed-upload" not in result.description
+        completed = await clean.repository.get(preview.action_id)
+        assert completed is not None
+        assert completed.status is ActionStatus.SUCCEEDED
+        persisted_payload = clean.cipher.decrypt_json(completed.encrypted_parameters)
+        assert persisted_payload["parameters"] == payload["parameters"]
+        assert "safe_local" not in repr(persisted_payload)
     finally:
         await clean.close()
+
+
+@pytest.mark.asyncio
+async def test_write_preview_masks_field_sensitive_pii_but_encrypted_payload_preserves_it() -> None:
+    harness = await _harness(
+        writes=True,
+        write_flags=frozenset({"ENABLE_EMPLOYEE_CREATE", "ENABLE_CONTRACT_WRITE"}),
+    )
+    assert harness.repository is not None
+    assert harness.cipher is not None
+    actor = _actor(LogicalRole.HR_WRITE)
+    employee_parameters = {
+        "first_name": "Arianna",
+        "last_name": "Confidenziale",
+        "payroll_number": "PAY-SENSITIVE-77",
+        "tax_code": "RSSMRA80A01H501U",
+        "birth_date": "1980-01-01",
+        "iban": "IT60X0542811101000000123456",
+        "phone": "+393331234567",
+        "business_email": "arianna@example.test",
+        "address": "Via Riservata 42",
+        "notes": "Nota personale da non mostrare",
+    }
+    contract_description = "Descrizione contrattuale riservata"
+    try:
+        employee_preview = await harness.coordinator._prepare_write(
+            actor,
+            "corr-sensitive-create",
+            _intent(
+                "EMP-CREATE-001",
+                ActionClass.PREPARE_WRITE,
+                parameters=employee_parameters,
+            ),
+        )
+        contract_preview = await harness.coordinator._prepare_write(
+            actor,
+            "corr-sensitive-contract",
+            _intent(
+                "EMP-CONTRACT-002",
+                ActionClass.PREPARE_WRITE,
+                employee_id="EMP-SYNTH-001",
+                parameters={
+                    "contract_id": "CON-SYNTH-001",
+                    "description": contract_description,
+                },
+            ),
+        )
+
+        raw_values = (*employee_parameters.values(), contract_description)
+        rendered = repr((employee_preview, contract_preview))
+        assert "[PII_REDACTED]" in rendered
+        assert "[REDACTED]" in rendered
+        assert all(str(value) not in rendered for value in raw_values)
+
+        for preview, expected_parameters in (
+            (employee_preview, employee_parameters),
+            (
+                contract_preview,
+                {
+                    "contract_id": "CON-SYNTH-001",
+                    "description": contract_description,
+                },
+            ),
+        ):
+            assert preview.action_id is not None
+            pending = await harness.repository.get(preview.action_id)
+            assert pending is not None
+            assert all(str(value) not in repr(pending.redacted_diff) for value in raw_values)
+            payload = harness.cipher.decrypt_json(pending.encrypted_parameters)
+            assert payload["parameters"] == expected_parameters
+    finally:
+        await harness.close()
 
 
 @pytest.mark.asyncio
@@ -401,28 +530,34 @@ async def test_prepare_write_validates_target_parameters_motivation_and_redactio
         )
         assert missing_target.title == "Employee ID necessario"
 
-        missing_parameters = await harness.coordinator._prepare_write(
-            actor,
-            "corr-missing-parameters",
-            _intent(
-                "EMP-UPDATE-001",
-                ActionClass.PREPARE_WRITE,
-                employee_id="EMP-SYNTH-001",
-            ),
-        )
-        assert missing_parameters.title == "Parametri mancanti"
+        with pytest.raises(ApplicationError, match="one write parameter is required"):
+            await harness.coordinator._prepare_write(
+                actor,
+                "corr-missing-parameters",
+                _intent(
+                    "EMP-UPDATE-001",
+                    ActionClass.PREPARE_WRITE,
+                    employee_id="EMP-SYNTH-001",
+                ),
+            )
 
-        no_motivation = await harness.coordinator._prepare_write(
-            actor,
-            "corr-missing-motivation",
-            _intent(
-                "EMP-BAL-002",
-                ActionClass.PREPARE_WRITE,
-                employee_id="EMP-SYNTH-001",
-                parameters={"year": 2026, "amount": "1"},
-            ),
-        )
-        assert no_motivation.title == "Motivazione necessaria"
+        with pytest.raises(ApplicationError, match=r"missing write parameters.*motivation"):
+            await harness.coordinator._prepare_write(
+                actor,
+                "corr-missing-motivation",
+                _intent(
+                    "EMP-BAL-002",
+                    ActionClass.PREPARE_WRITE,
+                    employee_id="EMP-SYNTH-001",
+                    parameters={
+                        "year": 2026,
+                        "month": 8,
+                        "category": "Ferie",
+                        "previous_value": "0",
+                        "amount": "1",
+                    },
+                ),
+            )
 
         critical = await harness.coordinator._prepare_write(
             actor,
@@ -431,7 +566,14 @@ async def test_prepare_write_validates_target_parameters_motivation_and_redactio
                 "EMP-BAL-002",
                 ActionClass.PREPARE_WRITE,
                 employee_id="EMP-SYNTH-001",
-                parameters={"year": 2026, "amount": "1", "motivation": " Synthetic reason "},
+                parameters={
+                    "year": 2026,
+                    "month": 8,
+                    "category": "Ferie",
+                    "previous_value": "0",
+                    "amount": "1",
+                    "motivation": " Synthetic reason ",
+                },
             ),
         )
         assert "CONFIRM EMP-SYNTH-001" in critical.description
@@ -443,10 +585,10 @@ async def test_prepare_write_validates_target_parameters_motivation_and_redactio
             _intent(
                 "EMP-CREATE-001",
                 ActionClass.PREPARE_WRITE,
-                parameters={"display_name_redacted": "N. E."},
+                parameters={"first_name": "Nome", "last_name": "Esempio"},
             ),
         )
-        assert targetless.fields[0].value.startswith("Nuovo record")
+        assert targetless.fields[0].value.startswith("Nuovo dipendente")
 
         monkeypatch.setattr(application_module, "redact_structure", lambda _value: [])
         with pytest.raises(ApplicationError, match="remain an object"):
@@ -544,16 +686,34 @@ async def test_decrypted_pending_payload_validation_is_fail_closed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("reconciliation", "expected_status", "success"),
+    ("execution_error", "reconciliation", "expected_status", "success"),
     [
-        (ReconciliationState.CONFIRMED_APPLIED, ActionStatus.SUCCEEDED, True),
         (
+            DicAmbiguousWriteOutcomeError(),
+            ReconciliationState.CONFIRMED_APPLIED,
+            ActionStatus.SUCCEEDED,
+            True,
+        ),
+        (
+            DicAmbiguousWriteOutcomeError(),
             ReconciliationState.CONFIRMED_NOT_APPLIED,
-            ActionStatus.RECONCILED_NOT_APPLIED,
+            ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION,
             False,
         ),
-        (ReconciliationState.UNKNOWN, ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION, False),
         (
+            DicReconciliationRequiredError(),
+            ReconciliationState.CONFIRMED_NOT_APPLIED,
+            ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION,
+            False,
+        ),
+        (
+            DicAmbiguousWriteOutcomeError(),
+            ReconciliationState.UNKNOWN,
+            ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION,
+            False,
+        ),
+        (
+            DicAmbiguousWriteOutcomeError(),
             RuntimeError("synthetic reconciliation failure"),
             ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION,
             False,
@@ -563,6 +723,7 @@ async def test_decrypted_pending_payload_validation_is_fail_closed() -> None:
 @pytest.mark.asyncio
 async def test_uncertain_write_reconciles_without_retry(
     monkeypatch: pytest.MonkeyPatch,
+    execution_error: Exception,
     reconciliation: ReconciliationState | Exception,
     expected_status: ActionStatus,
     success: bool,
@@ -582,7 +743,7 @@ async def test_uncertain_write_reconciles_without_retry(
     try:
         preview = await harness.coordinator.ask(requester, "modifica sintetica")
         assert preview.action_id is not None
-        execute = AsyncMock(side_effect=DicAmbiguousWriteOutcomeError())
+        execute = AsyncMock(side_effect=execution_error)
         monkeypatch.setattr(harness.coordinator.dic, "execute", execute)
         if isinstance(reconciliation, Exception):
             reconcile = AsyncMock(side_effect=reconciliation)
@@ -644,6 +805,121 @@ async def test_deterministic_execution_failure_is_persisted_and_reraised(
         persisted = await harness.repository.get(preview.action_id)
         assert persisted is not None
         assert persisted.status is ActionStatus.FAILED
+    finally:
+        await harness.close()
+
+
+@pytest.mark.parametrize(
+    ("reconciliation_state", "expected_status"),
+    [
+        (ReconciliationState.CONFIRMED_APPLIED, ActionStatus.SUCCEEDED),
+        (
+            ReconciliationState.CONFIRMED_NOT_APPLIED,
+            ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_verified_write_persistence_failure_never_downgrades_or_dispatches_twice(
+    monkeypatch: pytest.MonkeyPatch,
+    reconciliation_state: ReconciliationState,
+    expected_status: ActionStatus,
+) -> None:
+    harness = await _harness(
+        _intent(
+            "EMP-UPDATE-001",
+            ActionClass.PREPARE_WRITE,
+            employee_id="EMP-SYNTH-001",
+            parameters={"job_title": "Persisted write"},
+        ),
+        writes=True,
+        write_flags=frozenset({"ENABLE_EMPLOYEE_UPDATE"}),
+    )
+    assert harness.approvals is not None
+    assert harness.repository is not None
+    requester = _actor(LogicalRole.HR_WRITE)
+    try:
+        preview = await harness.coordinator.ask(requester, "modifica sintetica")
+        assert preview.action_id is not None
+        execute = AsyncMock(wraps=harness.coordinator.dic.execute)
+        complete_failure = AsyncMock(wraps=harness.approvals.complete_failure)
+        monkeypatch.setattr(harness.coordinator.dic, "execute", execute)
+        monkeypatch.setattr(
+            harness.coordinator.dic,
+            "reconcile",
+            AsyncMock(
+                return_value=ReconciliationResult(
+                    action_id=preview.action_id,
+                    state=reconciliation_state,
+                    detail="synthetic persistence recovery",
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            harness.approvals,
+            "complete_success",
+            AsyncMock(side_effect=RuntimeError("synthetic database failure")),
+        )
+        monkeypatch.setattr(harness.approvals, "complete_failure", complete_failure)
+
+        await harness.coordinator.approve(
+            requester,
+            preview.action_id,
+            _confirmation_code(preview.description),
+        )
+        persisted = await harness.repository.get(preview.action_id)
+        assert persisted is not None
+        assert persisted.status is expected_status
+        assert persisted.status is not ActionStatus.FAILED
+        execute.assert_awaited_once()
+        assert complete_failure.await_args.kwargs["outcome_uncertain"] is True
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_verified_write_remains_executing_if_unknown_persistence_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = await _harness(
+        _intent(
+            "EMP-UPDATE-001",
+            ActionClass.PREPARE_WRITE,
+            employee_id="EMP-SYNTH-001",
+            parameters={"job_title": "Claimed write"},
+        ),
+        writes=True,
+        write_flags=frozenset({"ENABLE_EMPLOYEE_UPDATE"}),
+    )
+    assert harness.approvals is not None
+    assert harness.repository is not None
+    requester = _actor(LogicalRole.HR_WRITE)
+    try:
+        preview = await harness.coordinator.ask(requester, "modifica sintetica")
+        assert preview.action_id is not None
+        execute = AsyncMock(wraps=harness.coordinator.dic.execute)
+        monkeypatch.setattr(harness.coordinator.dic, "execute", execute)
+        monkeypatch.setattr(
+            harness.approvals,
+            "complete_success",
+            AsyncMock(side_effect=RuntimeError("synthetic success persistence failure")),
+        )
+        monkeypatch.setattr(
+            harness.approvals,
+            "complete_failure",
+            AsyncMock(side_effect=RuntimeError("synthetic unknown persistence failure")),
+        )
+
+        with pytest.raises(ApplicationError, match="remains claimed"):
+            await harness.coordinator.approve(
+                requester,
+                preview.action_id,
+                _confirmation_code(preview.description),
+            )
+        persisted = await harness.repository.get(preview.action_id)
+        assert persisted is not None
+        assert persisted.status is ActionStatus.EXECUTING
+        execute.assert_awaited_once()
     finally:
         await harness.close()
 

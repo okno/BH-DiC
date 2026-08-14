@@ -55,6 +55,20 @@ def test_tool_exposure_hides_write_schemas() -> None:
     assert all(tool["parameters"]["additionalProperties"] is False for tool in tools)
 
 
+def test_model_hidden_operator_ids_are_filtered_even_if_a_caller_passes_them() -> None:
+    tools = build_openai_tools(
+        {
+            "EMP-BAL-002",
+            "EMP-RBAC-002",
+            "EMP-DOC-003",
+            "EMP-DELETE-001",
+            "EMP-CONTRACT-003",
+        }
+    )
+
+    assert [tool["name"] for tool in tools] == ["unsupported_request"]
+
+
 def test_redaction_and_prompt_injection_rejection() -> None:
     prepared = prepare_provider_input("cerca mario.rossi@example.test codice RSSMRA80A01H501U")
     assert "example.test" not in prepared
@@ -101,6 +115,94 @@ def test_envelope_from_call_rejects_non_exposed_id() -> None:
     )
     with pytest.raises(IntentProviderError):
         envelope_from_call("prepare_status_change", arguments, frozenset({"EMP-READ-001"}))
+
+
+def test_envelope_from_call_rejects_model_hidden_id_even_if_allowlisted() -> None:
+    arguments = json.dumps(
+        {
+            "function_id": "EMP-DELETE-001",
+            "employee_id": "EMP-SYNTH-001",
+            "parameters_json": "{}",
+            "sensitivity": "CRITICAL",
+            "confidence": 1.0,
+        }
+    )
+    with pytest.raises(IntentProviderError, match="non-exposed"):
+        envelope_from_call(
+            "prepare_destructive_action",
+            arguments,
+            frozenset({"EMP-DELETE-001"}),
+        )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "function_id", "parameters"),
+    [
+        ("prepare_employee_update", "EMP-UPDATE-001", {}),
+        (
+            "prepare_employee_update",
+            "EMP-UPDATE-001",
+            {"job_title": "Synthetic", "roles": ["Admin"]},
+        ),
+        ("prepare_invite_action", "EMP-CONNECT-001", {"status": "connected"}),
+        (
+            "prepare_document_upload",
+            "EMP-DOC-002",
+            {
+                "upload_id": "0" * 32,
+                "category": "CV",
+                "safe_local_path": "C:/forbidden/provider-path",
+            },
+        ),
+    ],
+)
+def test_openai_write_boundary_reapplies_closed_catalog(
+    tool_name: str,
+    function_id: str,
+    parameters: dict[str, object],
+) -> None:
+    arguments = json.dumps(
+        {
+            "function_id": function_id,
+            "employee_id": "EMP-SYNTH-001",
+            "query": None,
+            "parameters_json": json.dumps(parameters),
+            "date_from": None,
+            "date_to": None,
+            "requires_clarification": False,
+            "clarification_question": None,
+            "sensitivity": "HIGH",
+            "confidence": 1.0,
+        }
+    )
+
+    with pytest.raises(IntentProviderError, match="write parameters violate"):
+        envelope_from_call(tool_name, arguments, frozenset({function_id}))
+
+
+def test_openai_write_boundary_returns_catalog_normalized_parameters() -> None:
+    arguments = json.dumps(
+        {
+            "function_id": "EMP-UPDATE-001",
+            "employee_id": "EMP-SYNTH-001",
+            "query": None,
+            "parameters_json": json.dumps({"job_title": "  Synthetic lead  "}),
+            "date_from": None,
+            "date_to": None,
+            "requires_clarification": False,
+            "clarification_question": None,
+            "sensitivity": "HIGH",
+            "confidence": 1.0,
+        }
+    )
+
+    envelope = envelope_from_call(
+        "prepare_employee_update",
+        arguments,
+        frozenset({"EMP-UPDATE-001"}),
+    )
+
+    assert envelope.parameters == {"job_title": "Synthetic lead"}
 
 
 class _FakeResponses:

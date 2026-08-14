@@ -122,5 +122,13 @@ Approfondimenti: [architettura di sicurezza](docs/SECURITY_ARCHITECTURE.md),
 [privacy](docs/PRIVACY_GDPR.md), [audit](docs/AUDIT.md),
 [gestione file](docs/FILE_HANDLING.md) e [troubleshooting](docs/TROUBLESHOOTING.md).
 
+Setup e confini delle integrazioni: [autenticazione DIC](docs/DIC_AUTHENTICATION.md),
+[Discord](docs/DISCORD_SETUP.md), [OpenAI](docs/OPENAI_SETUP.md) e
+[threat model](docs/THREAT_MODEL.md). Per la manutenzione dell'adapter consultare
+[baseline di ricognizione](docs/RECONNAISSANCE_BASELINE.md),
+[manutenzione selettori](docs/SELECTOR_MAINTENANCE.md),
+[stato di verifica live](docs/LIVE_VERIFICATION_STATUS.md) e
+[limitazioni note](docs/KNOWN_LIMITATIONS.md).
+
 La repository deve restare privata. Non aggiungere una licenza open source senza
 autorizzazione.

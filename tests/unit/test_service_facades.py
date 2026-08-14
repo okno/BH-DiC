@@ -70,8 +70,21 @@ async def test_read_facades_delegate_to_policy_checked_coordinator() -> None:
         declared_size=4,
         content=b"test",
     )
-    assert await documents.upload(actor, "EMP-SYNTH-001", "contract", attachment) is expected
-    raw.upload.assert_awaited_once_with(actor, "EMP-SYNTH-001", "contract", attachment)
+    assert (
+        await documents.upload(
+            actor,
+            "EMP-SYNTH-001",
+            "contract",
+            attachment,
+        )
+        is expected
+    )
+    raw.upload.assert_awaited_once_with(
+        actor,
+        "EMP-SYNTH-001",
+        "contract",
+        attachment,
+    )
 
     assert await BalanceService(coordinator).get_balance(actor, "EMP-SYNTH-001", 2026) is expected
     raw.balances.assert_awaited_once_with(actor, "EMP-SYNTH-001", 2026)

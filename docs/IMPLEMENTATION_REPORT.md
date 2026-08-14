@@ -1,7 +1,8 @@
 # Implementation report
 
-Snapshot di verità: **14 agosto 2026**, commit candidato locale. Aggiornare questo file dopo il
-deployment senza sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
+Snapshot di verità: **14 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
+un commit non può auto-referenziare il proprio hash. Aggiornare questo file dopo il deployment senza
+sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 
 ## Repository
 
@@ -10,10 +11,10 @@ deployment senza sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 | Owner | `okno` |
 | Nome | `BH-DiC` |
 | Remote | `https://github.com/okno/BH-DiC.git` |
-| Visibilità | `PRIVATE` secondo il gate repository del progetto |
+| Visibilità | `PRIVATE`, verificata tramite GitHub API |
 | Branch | `main` |
 | Commit SHA | riportato nel report di consegna; non auto-referenziato nel commit stesso |
-| Git | root commit candidato creato; pulizia verificata dal gate di consegna |
+| Git | branch `main` pushato; worktree e tracking remoto verificati dal gate di consegna |
 
 Il remote non contiene credenziali. La repository deve restare privata; nessuna licenza open
 source è stata aggiunta.
@@ -54,10 +55,13 @@ Completati nel codice e testati con risorse sintetiche:
 Stato funzionale:
 
 - 13 read: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `NEEDS_VALIDATION`;
-- 17 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
-  `DISABLED_BY_POLICY`; `EMP-EXPORT-001` e `EMP-DOC-003` sono invece
-  `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`, con
-  percorso live `NOT_AVAILABLE`; i 19 flag restano false per default;
+- 13 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+  `DISABLED_BY_POLICY`; 6 write sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
+  `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`: `EMP-CREATE-001` supporta live soltanto il subset
+  con postcondizione verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`,
+  `EMP-DOC-003` ed `EMP-CONTRACT-003` hanno percorso live `NOT_AVAILABLE`; i 19 Function ID write
+  sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
+  default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
 - nessun bot avviato nel workspace locale; stato target `UNVERIFIED`; nessuna modifica di
   produzione.
@@ -66,18 +70,19 @@ Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
 ## Test e gate osservati
 
+La tabella seguente riporta il gate completo eseguito sul worktree finale della consegna.
+
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS: 173 file già formattati |
+| `ruff format --check .` | PASS: 175 file già formattati |
 | `ruff check .` | PASS: zero issue |
-| `mypy src` | PASS: 103 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 310 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 310 test |
-| `coverage report --show-missing` | PASS: 89%, soglia 80% |
-| coverage application/OpenAI/audit/repository | PASS: 100% nella suite completa |
+| `mypy src` | PASS: 104 source file, zero issue |
+| `pytest` (pytest 9.0.3) | PASS: 411 test, 1 warning esterno `discord.py/audioop` |
+| `coverage run --branch -m pytest` | PASS: 411 test |
+| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (7.550 statement, 2.266 branch), soglia 80% |
 | `bandit -q -r src` | PASS: nessun issue riportato |
-| `pip-audit --strict -r requirements.lock --no-deps` | PASS: nessuna vulnerabilità nota |
-| `gitleaks detect --source . --no-banner --redact` | PASS: gitleaks 8.30.1, un commit scansionato, nessun finding |
+| `python -m pip_audit --skip-editable` | PASS: nessuna vulnerabilità nota; distribuzione editable locale esclusa |
+| `gitleaks detect --source . --no-banner --redact` + staged-diff scan | PASS: gitleaks 8.30.1, nessun finding |
 | parsing YAML/XML docs/security | PASS |
 | scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
 | 22 script `bash -n` + contratti/lifecycle ops | PASS: 31 casi; start fail-closed e status/stop sintetici inclusi |
@@ -114,7 +119,9 @@ PostgreSQL.
 - write globalmente e specificamente disabilitate;
 - A2 richiede identità distinta e kill switch ricontrollato all'esecuzione;
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
-- nessuna write/read live e nessun bot avviato.
+- il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
+  Discord o OpenAI, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
+- nessuna write/read live eseguita in questa sessione di Fase 2 e nessun processo bot locale.
 
 ## Problemi residui
 
@@ -125,6 +132,9 @@ PostgreSQL.
 - MFA/CAPTCHA e funzionalità TeamSystem non documentate possono bloccare flussi;
 - rotazione log e Wazuh non installati/testati sul target;
 - restore drill e backup server non eseguiti;
+- i file tracciati sono privi di PII rilevata, ma i commit già pubblicati conservano l'identità
+  e-mail della configurazione Git locale nei metadati Author/Committer; i nuovi commit usano
+  l'identità GitHub `noreply` e la cronologia non è stata riscritta perché richiederebbe force-push;
 - GitHub Advanced Security, secret/push scanning e branch protection non sono disponibili sul piano
   privato corrente: CodeQL esegue l'analisi in workflow con upload SARIF disabilitato; Bandit,
   dependency audit, gitleaks, required review tramite processo operativo e i gate CI restano i

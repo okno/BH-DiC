@@ -144,6 +144,7 @@ def _coordinator(
         contracts=AsyncMock(return_value=response),
         documents=AsyncMock(return_value=response),
         balances=AsyncMock(return_value=response),
+        prepare_operator_action=AsyncMock(return_value=response),
     )
     return cast(InteractionCoordinator, raw), raw
 
@@ -362,6 +363,90 @@ async def test_all_slash_command_routes_and_upload_guards() -> None:
     assert attachment.read_calls == [True]
     payload = raw_coordinator.upload.await_args.args[-1]
     assert payload.content == b"content"
+
+
+@pytest.mark.asyncio
+async def test_operator_slash_routes_are_explicit_and_catalog_deterministic() -> None:
+    coordinator, raw_coordinator = _coordinator(
+        InteractionResult("Pending", "Preview", action_id=ACTION_ID)
+    )
+    group = BHCommandGroup(gate=_gate(), coordinator=coordinator)
+    routes: tuple[tuple[Any, tuple[object, ...]], ...] = (
+        (
+            BHCommandGroup.operator_balance_correction_command,
+            ("EMP-1", 2026, 8, "Ferie", "2", "3", "Correzione autorizzata"),
+        ),
+        (
+            BHCommandGroup.operator_rbac_update_command,
+            ("EMP-1", "Cambio autorizzato", "Employee", False),
+        ),
+        (
+            BHCommandGroup.operator_document_download_command,
+            ("EMP-1", "DOC-1", "Accesso autorizzato"),
+        ),
+        (
+            BHCommandGroup.operator_employee_delete_command,
+            ("EMP-1", "Cessazione verificata"),
+        ),
+        (
+            BHCommandGroup.operator_contract_delete_command,
+            ("EMP-1", "CON-1", "Contratto errato"),
+        ),
+    )
+    for command, arguments in routes:
+        interaction, raw = _interaction()
+        await _invoke(command, group, interaction, *arguments)
+        assert isinstance(raw.followup.sent[0][1]["view"], ApprovalView)
+
+    routed = [call.args[1:] for call in raw_coordinator.prepare_operator_action.await_args_list]
+    assert routed == [
+        (
+            "EMP-BAL-002",
+            "EMP-1",
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "2",
+                "amount": "3",
+                "motivation": "Correzione autorizzata",
+            },
+        ),
+        (
+            "EMP-RBAC-002",
+            "EMP-1",
+            {
+                "motivation": "Cambio autorizzato",
+                "role_name": "Employee",
+                "enabled": False,
+            },
+        ),
+        (
+            "EMP-DOC-003",
+            "EMP-1",
+            {"document_id": "DOC-1", "motivation": "Accesso autorizzato"},
+        ),
+        (
+            "EMP-DELETE-001",
+            "EMP-1",
+            {"motivation": "Cessazione verificata"},
+        ),
+        (
+            "EMP-CONTRACT-003",
+            "EMP-1",
+            {"contract_id": "CON-1", "motivation": "Contratto errato"},
+        ),
+    ]
+    operator_names = {
+        command.name for command in group.commands if command.name.startswith("operator-")
+    }
+    assert operator_names == {
+        "operator-balance-correction",
+        "operator-rbac-update",
+        "operator-document-download",
+        "operator-employee-delete",
+        "operator-contract-delete",
+    }
 
 
 @pytest.mark.asyncio

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from bh_dic.policies.catalog import (
     ALL_FUNCTION_IDS,
     FUNCTION_CATALOG,
     READ_FUNCTION_IDS,
     WRITE_FUNCTION_IDS,
+    WriteParameterValidationError,
+    validate_write_parameters,
 )
 from bh_dic.policies.decisions import DecisionCode
 from bh_dic.policies.engine import PolicyContext, PolicyEngine, PolicyPhase
@@ -49,6 +53,51 @@ EXPECTED_IDS = frozenset(
         "EMP-CONTRACT-003",
     }
 )
+
+VALID_WRITE_PARAMETERS: dict[str, dict[str, object]] = {
+    "EMP-UPDATE-001": {"job_title": "Lead"},
+    "EMP-CREATE-001": {"first_name": "Nome", "last_name": "Esempio"},
+    "EMP-CONTRACT-002": {"schedule": "full-time"},
+    "EMP-MAT-002": {"category": "Ferie"},
+    "EMP-BAL-002": {
+        "year": 2026,
+        "month": 8,
+        "category": "Ferie",
+        "previous_value": "0",
+        "amount": "1.5",
+        "motivation": "Correzione autorizzata",
+    },
+    "EMP-CONNECT-001": {},
+    "EMP-CONNECT-002": {"motivation": "Disconnessione autorizzata"},
+    "EMP-INVITE-001": {},
+    "EMP-INVITE-002": {},
+    "EMP-RBAC-002": {
+        "role_name": "Employee",
+        "enabled": False,
+        "motivation": "Cambio autorizzato",
+    },
+    "EMP-STATUS-001": {"motivation": "Disattivazione autorizzata"},
+    "EMP-STATUS-002": {},
+    "EMP-DOC-002": {
+        "upload_id": "0" * 32,
+        "category": "contract",
+    },
+    "EMP-DOC-004": {"document_id": "DOC-1", "category": "contract"},
+    "EMP-DOC-005": {
+        "document_id": "DOC-1",
+        "motivation": "Eliminazione autorizzata",
+    },
+    "EMP-EXPORT-001": {"scope": "employees"},
+    "EMP-DOC-003": {
+        "document_id": "DOC-1",
+        "motivation": "Download autorizzato",
+    },
+    "EMP-DELETE-001": {"motivation": "Eliminazione autorizzata"},
+    "EMP-CONTRACT-003": {
+        "contract_id": "CON-1",
+        "motivation": "Eliminazione autorizzata",
+    },
+}
 
 
 def _flags(**overrides: bool) -> RuntimeFeatureFlags:
@@ -99,6 +148,47 @@ def test_policy_catalog_is_complete_unique_and_safe_by_default() -> None:
     )
 
 
+@pytest.mark.parametrize("function_id", sorted(WRITE_FUNCTION_IDS))
+def test_every_write_has_one_closed_authoritative_schema(function_id: str) -> None:
+    spec = FUNCTION_CATALOG[function_id]
+    assert spec.resource_snapshot is not None
+    assert spec.write_parameters
+    validated = validate_write_parameters(spec, VALID_WRITE_PARAMETERS[function_id])
+    assert set(validated).issubset({parameter.name for parameter in spec.write_parameters})
+    with pytest.raises(WriteParameterValidationError, match="unsupported write parameters"):
+        validate_write_parameters(spec, {**VALID_WRITE_PARAMETERS[function_id], "extra": "x"})
+
+
+@pytest.mark.parametrize(
+    ("function_id", "parameters"),
+    [
+        ("EMP-UPDATE-001", {}),
+        ("EMP-CONTRACT-002", {"contract_id": "CON-1"}),
+        ("EMP-DOC-004", {"document_id": "DOC-1"}),
+    ],
+)
+def test_write_schema_rejects_empty_mutations(
+    function_id: str, parameters: dict[str, object]
+) -> None:
+    with pytest.raises(WriteParameterValidationError, match="one write parameter is required"):
+        validate_write_parameters(FUNCTION_CATALOG[function_id], parameters)
+
+
+def test_zero_argument_actions_allow_only_motivation_and_upload_never_accepts_a_path() -> None:
+    connect = FUNCTION_CATALOG["EMP-CONNECT-001"]
+    assert validate_write_parameters(connect, {}) == {}
+    with pytest.raises(WriteParameterValidationError, match="unsupported write parameters"):
+        validate_write_parameters(connect, {"status": "connected"})
+    with pytest.raises(WriteParameterValidationError, match="unsupported write parameters"):
+        validate_write_parameters(
+            FUNCTION_CATALOG["EMP-DOC-002"],
+            {
+                **VALID_WRITE_PARAMETERS["EMP-DOC-002"],
+                "safe_local_path": "C:/not-allowed",
+            },
+        )
+
+
 def test_high_risk_catalog_entries_require_a2_and_are_not_model_exposed() -> None:
     for function_id in {
         "EMP-DOC-003",
@@ -111,6 +201,34 @@ def test_high_risk_catalog_entries_require_a2_and_are_not_model_exposed() -> Non
         assert spec.approvals_required == 2
         assert spec.expose_to_model is False
         assert spec.destructive is True
+
+
+def test_live_routes_without_a_provable_postcondition_are_blocked_before_pending() -> None:
+    unavailable = {
+        function_id
+        for function_id in WRITE_FUNCTION_IDS
+        if not FUNCTION_CATALOG[function_id].operator_live_available
+    }
+    assert unavailable == {
+        "EMP-INVITE-001",
+        "EMP-DOC-003",
+        "EMP-DOC-005",
+        "EMP-EXPORT-001",
+        "EMP-CONTRACT-003",
+    }
+
+
+@pytest.mark.parametrize(
+    ("function_id", "parameter"),
+    [("EMP-DOC-003", "document_id"), ("EMP-CONTRACT-003", "contract_id")],
+)
+def test_unavailable_destructive_routes_still_validate_stable_identifier_syntax(
+    function_id: str, parameter: str
+) -> None:
+    invalid = dict(VALID_WRITE_PARAMETERS[function_id])
+    invalid[parameter] = "../ambiguous target"
+    with pytest.raises(WriteParameterValidationError, match="invalid syntax"):
+        validate_write_parameters(FUNCTION_CATALOG[function_id], invalid)
 
 
 def test_readonly_can_count_but_cannot_list_or_read_detail() -> None:

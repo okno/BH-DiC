@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 from bh_dic import __version__
 from bh_dic.errors import ConfigurationError, ErrorCode
@@ -59,6 +60,31 @@ def test_json_formatter_emits_structured_redacted_event() -> None:
     assert "abc.def.ghi" not in event["message"]
     assert event["target_employee_id"] == "[REDACTED_TARGET]"
     assert event["details"]["password"] == "[REDACTED]"
+
+
+def test_json_formatter_redacts_email_and_phone_from_message_and_exception() -> None:
+    email = "alice@example.invalid"
+    phone = "+39 333 1234567"
+    try:
+        raise RuntimeError(f"provider failure for {email} at {phone}")
+    except RuntimeError:
+        exception_info = sys.exc_info()
+    record = logging.LogRecord(
+        name="bh_dic.security",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=f"request rejected for {email} at {phone}",
+        args=(),
+        exc_info=exception_info,
+    )
+
+    rendered = JsonFormatter(timezone="UTC").format(record)
+
+    assert email not in rendered
+    assert phone not in rendered
+    assert "[REDACTED_EMAIL]" in rendered
+    assert "[REDACTED_PHONE]" in rendered
 
 
 def test_identifier_pseudonym_is_stable_and_keyed() -> None:

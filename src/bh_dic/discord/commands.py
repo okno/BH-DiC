@@ -200,7 +200,12 @@ class BHCommandGroup(app_commands.Group):
                 declared_size=attachment.size,
                 content=content,
             )
-            return await self._coordinator.upload(actor, str(employee_id), str(category), payload)
+            return await self._coordinator.upload(
+                actor,
+                str(employee_id),
+                str(category),
+                payload,
+            )
 
         await self._send(interaction, operation)
 
@@ -257,4 +262,143 @@ class BHCommandGroup(app_commands.Group):
         await self._send(
             interaction,
             lambda actor: self._coordinator.balances(actor, str(employee_id), int(year)),
+        )
+
+    @app_commands.command(
+        name="operator-balance-correction",
+        description="Prepara una correzione bilancio ad alta criticita",
+    )
+    @app_commands.describe(
+        previous_value="Valore corrente verificato dall'operatore",
+        new_value="Nuovo valore da applicare",
+        motivation="Motivazione obbligatoria per audit e approvazione",
+    )
+    async def operator_balance_correction_command(
+        self,
+        interaction: discord.Interaction,
+        employee_id: app_commands.Range[str, 1, 64],
+        year: app_commands.Range[int, 2000, 2100],
+        month: app_commands.Range[int, 1, 12],
+        category: app_commands.Range[str, 1, 64],
+        previous_value: app_commands.Range[str, 1, 64],
+        new_value: app_commands.Range[str, 1, 64],
+        motivation: app_commands.Range[str, 3, 500],
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.prepare_operator_action(
+                actor,
+                "EMP-BAL-002",
+                str(employee_id),
+                {
+                    "year": int(year),
+                    "month": int(month),
+                    "category": str(category),
+                    "previous_value": str(previous_value),
+                    "amount": str(new_value),
+                    "motivation": str(motivation),
+                },
+            ),
+        )
+
+    @app_commands.command(
+        name="operator-rbac-update",
+        description="Prepara una modifica autorizzazioni ad alta criticita",
+    )
+    @app_commands.describe(
+        motivation="Motivazione obbligatoria per audit e approvazione",
+        role_name="Nome esatto del ruolo gia presente sul dipendente",
+        enabled="Nuovo stato del ruolo",
+    )
+    async def operator_rbac_update_command(
+        self,
+        interaction: discord.Interaction,
+        employee_id: app_commands.Range[str, 1, 64],
+        motivation: app_commands.Range[str, 3, 500],
+        role_name: app_commands.Range[str, 1, 128],
+        enabled: bool,
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.prepare_operator_action(
+                actor,
+                "EMP-RBAC-002",
+                str(employee_id),
+                {
+                    "motivation": str(motivation),
+                    "role_name": str(role_name),
+                    "enabled": enabled,
+                },
+            ),
+        )
+
+    @app_commands.command(
+        name="operator-document-download",
+        description="Prepara un artifact documentale locale protetto",
+    )
+    @app_commands.describe(
+        document_id="Identificativo stabile del documento",
+        motivation="Motivazione obbligatoria per audit e approvazione",
+    )
+    async def operator_document_download_command(
+        self,
+        interaction: discord.Interaction,
+        employee_id: app_commands.Range[str, 1, 64],
+        document_id: app_commands.Range[str, 1, 128],
+        motivation: app_commands.Range[str, 3, 500],
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.prepare_operator_action(
+                actor,
+                "EMP-DOC-003",
+                str(employee_id),
+                {"document_id": str(document_id), "motivation": str(motivation)},
+            ),
+        )
+
+    @app_commands.command(
+        name="operator-employee-delete",
+        description="Prepara l'eliminazione definitiva di un dipendente",
+    )
+    @app_commands.describe(motivation="Motivazione obbligatoria per audit e approvazione")
+    async def operator_employee_delete_command(
+        self,
+        interaction: discord.Interaction,
+        employee_id: app_commands.Range[str, 1, 64],
+        motivation: app_commands.Range[str, 3, 500],
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.prepare_operator_action(
+                actor,
+                "EMP-DELETE-001",
+                str(employee_id),
+                {"motivation": str(motivation)},
+            ),
+        )
+
+    @app_commands.command(
+        name="operator-contract-delete",
+        description="Prepara l'eliminazione di un contratto",
+    )
+    @app_commands.describe(
+        contract_id="Identificativo stabile del contratto",
+        motivation="Motivazione obbligatoria per audit e approvazione",
+    )
+    async def operator_contract_delete_command(
+        self,
+        interaction: discord.Interaction,
+        employee_id: app_commands.Range[str, 1, 64],
+        contract_id: app_commands.Range[str, 1, 128],
+        motivation: app_commands.Range[str, 3, 500],
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.prepare_operator_action(
+                actor,
+                "EMP-CONTRACT-003",
+                str(employee_id),
+                {"contract_id": str(contract_id), "motivation": str(motivation)},
+            ),
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
@@ -11,7 +12,8 @@ from bh_dic.application import (
     BHApplicationCoordinator,
 )
 from bh_dic.approvals.confirmation import ConfirmationHasher
-from bh_dic.approvals.service import ApprovalService
+from bh_dic.approvals.models import ActionStatus
+from bh_dic.approvals.service import ApprovalService, StaleTargetError
 from bh_dic.approvals.storage import InMemoryApprovalRepository
 from bh_dic.dic.errors import DicAmbiguousWriteOutcomeError
 from bh_dic.dic.mock import MockDicAdapter
@@ -101,6 +103,7 @@ async def coordinator_for(
     router: FixedRouter,
     *,
     writes: bool = False,
+    mock_mode: bool = False,
     requester_actor_resolver: object | None = None,
     write_flags: frozenset[str] = frozenset({"ENABLE_EMPLOYEE_UPDATE"}),
     adapter_override: MockDicAdapter | None = None,
@@ -131,6 +134,7 @@ async def coordinator_for(
             allowed_channel_ids=frozenset({"3001"}),
             current_tenant_id="TENANT-SYNTH-001",
             allowed_tenant_ids=frozenset({"TENANT-SYNTH-001"}),
+            mock_mode=mock_mode,
         ),
         pseudonym_key=b"P" * 32,
         approvals=approvals,
@@ -330,6 +334,140 @@ async def test_write_preview_does_not_mutate_and_confirmation_executes_once() ->
 
 
 @pytest.mark.asyncio
+async def test_exposed_update_resource_cas_rejects_stale_approved_values() -> None:
+    def update_intent(value: str) -> IntentEnvelope:
+        return IntentEnvelope(
+            intent="employee_update",
+            function_id="EMP-UPDATE-001",
+            action_class=ActionClass.PREPARE_WRITE,
+            employee_id="EMP-SYNTH-001",
+            query=None,
+            parameters={"job_title": value},
+            date_from=None,
+            date_to=None,
+            requires_clarification=False,
+            clarification_question=None,
+            sensitivity=Sensitivity.HIGH,
+            confidence=1.0,
+        )
+
+    router = FixedRouter(update_intent("First approved value"))
+    coordinator, adapter, repository = await coordinator_for(router, writes=True)
+    requester = actor(LogicalRole.HR_WRITE)
+    try:
+        stale_preview = await coordinator.ask(requester, "prima modifica")
+        router.envelope = update_intent("Competing approved value")
+        competing_preview = await coordinator.ask(requester, "seconda modifica")
+        assert stale_preview.action_id is not None
+        assert competing_preview.action_id is not None
+        stale_code = re.search(r"Codice monouso: `([A-Z0-9]+)`", stale_preview.description)
+        competing_code = re.search(r"Codice monouso: `([A-Z0-9]+)`", competing_preview.description)
+        assert stale_code is not None and competing_code is not None
+
+        await coordinator.approve(
+            requester,
+            competing_preview.action_id,
+            competing_code.group(1),
+        )
+        with pytest.raises(StaleTargetError, match="changed after preview"):
+            await coordinator.approve(
+                requester,
+                stale_preview.action_id,
+                stale_code.group(1),
+            )
+        stale = await repository.get(stale_preview.action_id)
+        summary = await adapter.get_employee_summary("EMP-SYNTH-001")
+        assert stale is not None and stale.status.value == "STALE"
+        assert summary.job_title == "Competing approved value"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approved_writes_hold_cas_dispatch_and_persistence_under_one_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def update_intent(value: str) -> IntentEnvelope:
+        return IntentEnvelope(
+            intent="employee_update",
+            function_id="EMP-UPDATE-001",
+            action_class=ActionClass.PREPARE_WRITE,
+            employee_id="EMP-SYNTH-001",
+            query=None,
+            parameters={"job_title": value},
+            date_from=None,
+            date_to=None,
+            requires_clarification=False,
+            clarification_question=None,
+            sensitivity=Sensitivity.HIGH,
+            confidence=1.0,
+        )
+
+    router = FixedRouter(update_intent("First serialized value"))
+    coordinator, adapter, repository = await coordinator_for(router, writes=True)
+    requester = actor(LogicalRole.HR_WRITE)
+    entered_dispatch = asyncio.Event()
+    release_dispatch = asyncio.Event()
+    original_execute = coordinator.dic.execute
+    execute_calls = 0
+
+    async def delayed_execute(*args: object, **kwargs: object) -> object:
+        nonlocal execute_calls
+        execute_calls += 1
+        entered_dispatch.set()
+        await release_dispatch.wait()
+        return await original_execute(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(coordinator.dic, "execute", delayed_execute)
+    first_task: asyncio.Task[object] | None = None
+    second_task: asyncio.Task[object] | None = None
+    outcomes: list[object] = []
+    second_waited_approved = False
+    try:
+        first_preview = await coordinator.ask(requester, "prima modifica concorrente")
+        router.envelope = update_intent("Second serialized value")
+        second_preview = await coordinator.ask(requester, "seconda modifica concorrente")
+        assert first_preview.action_id is not None
+        assert second_preview.action_id is not None
+        first_code = re.search(r"Codice monouso: `([A-Z0-9]+)`", first_preview.description)
+        second_code = re.search(r"Codice monouso: `([A-Z0-9]+)`", second_preview.description)
+        assert first_code is not None and second_code is not None
+
+        first_task = asyncio.create_task(
+            coordinator.approve(requester, first_preview.action_id, first_code.group(1))
+        )
+        await asyncio.wait_for(entered_dispatch.wait(), timeout=2)
+        second_task = asyncio.create_task(
+            coordinator.approve(requester, second_preview.action_id, second_code.group(1))
+        )
+        for _attempt in range(100):
+            second_waiting = await repository.get(second_preview.action_id)
+            if second_waiting is not None and second_waiting.status is ActionStatus.APPROVED:
+                second_waited_approved = True
+                break
+            await asyncio.sleep(0)
+    finally:
+        release_dispatch.set()
+        tasks = [task for task in (first_task, second_task) if task is not None]
+        if tasks:
+            outcomes = list(await asyncio.gather(*tasks, return_exceptions=True))
+
+    try:
+        first = await repository.get(first_preview.action_id)
+        second = await repository.get(second_preview.action_id)
+        summary = await adapter.get_employee_summary("EMP-SYNTH-001")
+        assert second_waited_approved
+        assert execute_calls == 1
+        assert first is not None and first.status is ActionStatus.SUCCEEDED
+        assert second is not None and second.status is ActionStatus.STALE
+        assert summary.job_title == "First serialized value"
+        assert sum(isinstance(outcome, StaleTargetError) for outcome in outcomes) == 1
+        assert sum(not isinstance(outcome, BaseException) for outcome in outcomes) == 1
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
 async def test_execution_rechecks_requester_roles_instead_of_using_approver() -> None:
     router = FixedRouter(
         IntentEnvelope(
@@ -445,7 +583,7 @@ async def test_ambiguous_write_is_reconciled_once_and_never_retried() -> None:
 
     assert not result.success
     assert persisted is not None
-    assert persisted.status.value == "RECONCILED_NOT_APPLIED"
+    assert persisted.status.value == "UNKNOWN_REQUIRES_RECONCILIATION"
     assert ambiguous_adapter.execute_calls == 1
     assert ambiguous_adapter.reconcile_calls == 1
 
@@ -655,3 +793,682 @@ async def test_clarification_unsupported_and_write_precondition_responses() -> N
     with pytest.raises(ApplicationPolicyDenied, match="employee ID is required"):
         await coordinator.ask(actor(LogicalRole.HR_WRITE), "modifica")
     await adapter.close()
+
+
+def _operator_router() -> FixedRouter:
+    return FixedRouter(
+        IntentEnvelope(
+            intent="employee_count",
+            function_id="EMP-READ-001",
+            action_class=ActionClass.READ,
+            employee_id=None,
+            query=None,
+            parameters={"status": "active"},
+            date_from=None,
+            date_to=None,
+            requires_clarification=False,
+            clarification_question=None,
+            sensitivity=Sensitivity.LOW,
+            confidence=1.0,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("function_id", "roles", "flag", "parameters"),
+    [
+        (
+            "EMP-BAL-002",
+            (LogicalRole.HR_WRITE,),
+            "ENABLE_BALANCE_CORRECTION",
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "0",
+                "amount": "3",
+                "motivation": "Correzione sintetica autorizzata",
+            },
+        ),
+        (
+            "EMP-RBAC-002",
+            (LogicalRole.IAM_OPERATOR, LogicalRole.APPROVER),
+            "ENABLE_RBAC_WRITE",
+            {
+                "role_name": "Employee",
+                "enabled": False,
+                "motivation": "Modifica sintetica autorizzata",
+            },
+        ),
+        (
+            "EMP-DOC-003",
+            (LogicalRole.DOCUMENT_OPERATOR,),
+            "ENABLE_DOCUMENT_DOWNLOAD",
+            {
+                "document_id": "DOC-SYNTH-001",
+                "motivation": "Accesso sintetico autorizzato",
+            },
+        ),
+        (
+            "EMP-DELETE-001",
+            (LogicalRole.SYSTEM_ADMIN,),
+            "ENABLE_EMPLOYEE_DELETE",
+            {"motivation": "Cessazione sintetica verificata"},
+        ),
+        (
+            "EMP-CONTRACT-003",
+            (LogicalRole.HR_WRITE,),
+            "ENABLE_CONTRACT_DELETE",
+            {
+                "contract_id": "CON-SYNTH-001",
+                "motivation": "Contratto sintetico errato",
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_hidden_operator_actions_enter_normal_pending_flow(
+    function_id: str,
+    roles: tuple[LogicalRole, ...],
+    flag: str,
+    parameters: dict[str, object],
+) -> None:
+    router = _operator_router()
+    coordinator, adapter, repository = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({flag}),
+    )
+    try:
+        result = await coordinator.prepare_operator_action(
+            actor(*roles), function_id, "EMP-SYNTH-001", parameters
+        )
+        assert result.action_id is not None
+        pending = await repository.get(result.action_id)
+    finally:
+        await adapter.close()
+
+    assert router.exposed is None
+    assert pending is not None
+    assert pending.function_id == function_id
+    assert pending.status.value == "PENDING"
+    assert pending.approvals_required == 2
+    assert pending.motivation == parameters["motivation"]
+    assert "[CURRENT]" not in repr(pending.redacted_diff)
+    expected_before = {
+        "EMP-BAL-002": ("amount", "0"),
+        "EMP-RBAC-002": ("enabled", True),
+        "EMP-DOC-003": ("document_id", "DOC-SYNTH-001"),
+        "EMP-DELETE-001": ("employee_state", "active"),
+        "EMP-CONTRACT-003": ("contract_id", "CON-SYNTH-001"),
+    }[function_id]
+    assert pending.redacted_diff[expected_before[0]]["before"] == expected_before[1]
+
+
+@pytest.mark.asyncio
+async def test_operator_resource_target_must_be_current_and_unique_before_pending() -> None:
+    router = _operator_router()
+    coordinator, adapter, repository = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset(
+            {
+                "ENABLE_BALANCE_CORRECTION",
+                "ENABLE_RBAC_WRITE",
+                "ENABLE_DOCUMENT_DOWNLOAD",
+                "ENABLE_CONTRACT_DELETE",
+            }
+        ),
+    )
+    cases = (
+        (
+            actor(LogicalRole.HR_WRITE),
+            "EMP-BAL-002",
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "9",
+                "amount": "3",
+                "motivation": "Precondizione sintetica errata",
+            },
+        ),
+        (
+            actor(LogicalRole.IAM_OPERATOR, LogicalRole.APPROVER),
+            "EMP-RBAC-002",
+            {
+                "role_name": "Missing",
+                "enabled": True,
+                "motivation": "Ruolo sintetico inesistente",
+            },
+        ),
+        (
+            actor(LogicalRole.DOCUMENT_OPERATOR),
+            "EMP-DOC-003",
+            {
+                "document_id": "DOC-MISSING",
+                "motivation": "Documento sintetico inesistente",
+            },
+        ),
+        (
+            actor(LogicalRole.HR_WRITE),
+            "EMP-CONTRACT-003",
+            {
+                "contract_id": "CON-MISSING",
+                "motivation": "Contratto sintetico inesistente",
+            },
+        ),
+    )
+    try:
+        for requester, function_id, parameters in cases:
+            with pytest.raises(ApplicationError):
+                await coordinator.prepare_operator_action(
+                    requester, function_id, "EMP-SYNTH-001", parameters
+                )
+        actions = await repository.list_actions()
+    finally:
+        await adapter.close()
+
+    assert actions == ()
+
+
+@pytest.mark.asyncio
+async def test_operator_entrypoint_rejects_non_hidden_ids_and_invalid_parameters() -> None:
+    router = _operator_router()
+    hidden_flags = frozenset(
+        {
+            "ENABLE_BALANCE_CORRECTION",
+            "ENABLE_RBAC_WRITE",
+            "ENABLE_DOCUMENT_DOWNLOAD",
+            "ENABLE_EMPLOYEE_DELETE",
+            "ENABLE_CONTRACT_DELETE",
+        }
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=hidden_flags,
+    )
+    valid_balance: dict[str, object] = {
+        "year": 2026,
+        "month": 8,
+        "category": "Ferie",
+        "previous_value": "0",
+        "amount": "3",
+        "motivation": "Correzione sintetica",
+    }
+    invalid_requests: tuple[tuple[str, str, dict[str, object]], ...] = (
+        ("EMP-READ-001", "EMP-SYNTH-001", {}),
+        ("EMP-UPDATE-001", "EMP-SYNTH-001", {}),
+        ("EMP-NOT-999", "EMP-SYNTH-001", {}),
+        ("EMP-BAL-002", "EMP-SYNTH-001", {**valid_balance, "unexpected": True}),
+        (
+            "EMP-BAL-002",
+            "EMP-SYNTH-001",
+            {key: value for key, value in valid_balance.items() if key != "month"},
+        ),
+        ("EMP-BAL-002", "EMP-SYNTH-001", {**valid_balance, "month": 13}),
+        ("EMP-BAL-002", "EMP-SYNTH-001", {**valid_balance, "year": True}),
+        ("EMP-BAL-002", "EMP-SYNTH-001", {**valid_balance, "amount": 1.5}),
+        ("EMP-BAL-002", "EMP-SYNTH-001", {**valid_balance, "amount": "1e3"}),
+        (
+            "EMP-RBAC-002",
+            "EMP-SYNTH-001",
+            {"motivation": "Nessuna modifica", "role_name": "Employee"},
+        ),
+        (
+            "EMP-RBAC-002",
+            "EMP-SYNTH-001",
+            {"motivation": "Tipo errato", "role_name": "Employee", "enabled": "yes"},
+        ),
+        ("EMP-DELETE-001", "EMP-SYNTH-001", {"motivation": "  "}),
+        ("EMP-BAL-002", "target ambiguo", valid_balance),
+    )
+    try:
+        for function_id, employee_id, parameters in invalid_requests:
+            with pytest.raises(ApplicationError):
+                await coordinator.prepare_operator_action(
+                    actor(LogicalRole.SYSTEM_ADMIN, LogicalRole.HR_WRITE),
+                    function_id,
+                    employee_id,
+                    parameters,
+                )
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_actions_enforce_feature_flags_and_catalog_rbac() -> None:
+    router = _operator_router()
+    coordinator, adapter, _ = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_BALANCE_CORRECTION", "ENABLE_RBAC_WRITE"}),
+    )
+    balance_parameters = {
+        "year": 2026,
+        "month": 8,
+        "category": "Ferie",
+        "previous_value": "0",
+        "amount": "3",
+        "motivation": "Correzione sintetica",
+    }
+    try:
+        with pytest.raises(ApplicationPolicyDenied, match="role"):
+            await coordinator.prepare_operator_action(
+                actor(LogicalRole.HR_READ),
+                "EMP-BAL-002",
+                "EMP-SYNTH-001",
+                balance_parameters,
+            )
+        with pytest.raises(ApplicationPolicyDenied, match="role"):
+            await coordinator.prepare_operator_action(
+                actor(LogicalRole.IAM_OPERATOR),
+                "EMP-RBAC-002",
+                "EMP-SYNTH-001",
+                {
+                    "role_name": "Employee",
+                    "enabled": False,
+                    "motivation": "Cambio sintetico",
+                },
+            )
+    finally:
+        await adapter.close()
+
+    disabled, disabled_adapter, _ = await coordinator_for(router, mock_mode=True)
+    try:
+        with pytest.raises(ApplicationPolicyDenied, match="feature"):
+            await disabled.prepare_operator_action(
+                actor(LogicalRole.HR_WRITE),
+                "EMP-BAL-002",
+                "EMP-SYNTH-001",
+                balance_parameters,
+            )
+    finally:
+        await disabled_adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_hidden_operator_ids_never_enter_the_model_allowlist() -> None:
+    router = _operator_router()
+    hidden_flags = frozenset(
+        {
+            "ENABLE_BALANCE_CORRECTION",
+            "ENABLE_RBAC_WRITE",
+            "ENABLE_DOCUMENT_DOWNLOAD",
+            "ENABLE_EMPLOYEE_DELETE",
+            "ENABLE_CONTRACT_DELETE",
+        }
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=hidden_flags,
+    )
+    try:
+        await coordinator.ask(
+            actor(
+                LogicalRole.READ_ONLY,
+                LogicalRole.HR_READ,
+                LogicalRole.HR_WRITE,
+                LogicalRole.IAM_OPERATOR,
+                LogicalRole.APPROVER,
+                LogicalRole.DOCUMENT_OPERATOR,
+                LogicalRole.SYSTEM_ADMIN,
+            ),
+            "Quanti dipendenti sono attivi?",
+        )
+    finally:
+        await adapter.close()
+
+    assert router.exposed is not None
+    assert {
+        "EMP-BAL-002",
+        "EMP-RBAC-002",
+        "EMP-DOC-003",
+        "EMP-DELETE-001",
+        "EMP-CONTRACT-003",
+    }.isdisjoint(router.exposed)
+
+
+@pytest.mark.asyncio
+async def test_balance_operator_approval_applies_exact_month_value_and_verifies_postcondition() -> (
+    None
+):
+    router = _operator_router()
+    coordinator, adapter, repository = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_BALANCE_CORRECTION"}),
+    )
+    requester = actor(LogicalRole.HR_WRITE)
+    try:
+        preview = await coordinator.prepare_operator_action(
+            requester,
+            "EMP-BAL-002",
+            "EMP-SYNTH-001",
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "0.000",
+                "amount": "3.5000",
+                "motivation": "Correzione sintetica verificata",
+            },
+        )
+        code = re.search(r"Codice monouso: `([A-Z0-9]+)`", preview.description)
+        assert preview.action_id is not None and code is not None
+        assert any(field.name == "amount" and field.value == "0 → 3.5" for field in preview.fields)
+
+        await coordinator.approve(
+            requester,
+            preview.action_id,
+            code.group(1),
+            "CONFIRM EMP-SYNTH-001",
+        )
+        partial = await coordinator.approve(
+            actor(LogicalRole.APPROVER, user_id=1002), preview.action_id, "APPROVE"
+        )
+        completed = await coordinator.approve(
+            actor(LogicalRole.APPROVER, user_id=1003), preview.action_id, "APPROVE"
+        )
+        balance = await adapter.get_balance("EMP-SYNTH-001", 2026)
+        correction = await adapter.get_balance_correction_state("EMP-SYNTH-001", 2026, 8, "Ferie")
+        persisted = await repository.get(preview.action_id)
+    finally:
+        await adapter.close()
+
+    assert partial.action_id == preview.action_id
+    assert completed.success
+    assert correction.current_value == "3.5"
+    assert balance.lines[0].corrections == "3.5"
+    assert persisted is not None
+    assert persisted.status.value == "SUCCEEDED"
+    assert persisted.postcondition_result == "synthetic operation applied"
+
+
+@pytest.mark.asyncio
+async def test_balance_resource_cas_marks_stale_after_competing_approved_change() -> None:
+    router = _operator_router()
+    coordinator, adapter, repository = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_BALANCE_CORRECTION"}),
+    )
+    requester = actor(LogicalRole.HR_WRITE)
+
+    async def prepare(amount: str, motivation: str) -> tuple[str, str]:
+        result = await coordinator.prepare_operator_action(
+            requester,
+            "EMP-BAL-002",
+            "EMP-SYNTH-001",
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "0",
+                "amount": amount,
+                "motivation": motivation,
+            },
+        )
+        match = re.search(r"Codice monouso: `([A-Z0-9]+)`", result.description)
+        assert result.action_id is not None and match is not None
+        await coordinator.approve(
+            requester,
+            result.action_id,
+            match.group(1),
+            "CONFIRM EMP-SYNTH-001",
+        )
+        return result.action_id, match.group(1)
+
+    try:
+        stale_action_id, _ = await prepare("3", "Prima correzione sintetica")
+        winner_action_id, _ = await prepare("1", "Correzione concorrente sintetica")
+        for user_id in (1002, 1003):
+            await coordinator.approve(
+                actor(LogicalRole.APPROVER, user_id=user_id), winner_action_id, "APPROVE"
+            )
+        await coordinator.approve(
+            actor(LogicalRole.APPROVER, user_id=1002), stale_action_id, "APPROVE"
+        )
+        with pytest.raises(StaleTargetError, match="changed after preview"):
+            await coordinator.approve(
+                actor(LogicalRole.APPROVER, user_id=1003), stale_action_id, "APPROVE"
+            )
+        stale = await repository.get(stale_action_id)
+        correction = await adapter.get_balance_correction_state("EMP-SYNTH-001", 2026, 8, "Ferie")
+    finally:
+        await adapter.close()
+
+    assert stale is not None and stale.status.value == "STALE"
+    assert correction.current_value == "1"
+
+
+@pytest.mark.asyncio
+async def test_document_download_operator_route_stays_not_available_in_live_mode() -> None:
+    router = _operator_router()
+    coordinator, adapter, repository = await coordinator_for(
+        router,
+        writes=True,
+        mock_mode=False,
+        write_flags=frozenset({"ENABLE_DOCUMENT_DOWNLOAD"}),
+    )
+    try:
+        result = await coordinator.prepare_operator_action(
+            actor(LogicalRole.DOCUMENT_OPERATOR),
+            "EMP-DOC-003",
+            "EMP-SYNTH-001",
+            {
+                "document_id": "DOC-SYNTH-001",
+                "motivation": "Accesso sintetico autorizzato",
+            },
+        )
+        actions = await repository.list_actions()
+    finally:
+        await adapter.close()
+
+    assert not result.success
+    assert result.action_id is None
+    assert "NOT_AVAILABLE" in result.description
+    assert actions == ()
+
+
+@pytest.mark.parametrize(
+    ("function_id", "employee_id", "parameters", "field_name", "before", "after"),
+    [
+        (
+            "EMP-UPDATE-001",
+            "EMP-SYNTH-001",
+            {"job_title": "Lead"},
+            "job_title",
+            "Synthetic tester",
+            "Lead",
+        ),
+        (
+            "EMP-CREATE-001",
+            None,
+            {"first_name": "Nome", "last_name": "Esempio"},
+            "first_name",
+            "[NOT_SET]",
+            "[PII_REDACTED]",
+        ),
+        (
+            "EMP-CONTRACT-002",
+            "EMP-SYNTH-001",
+            {"contract_id": "CON-SYNTH-001", "schedule": "Part time"},
+            "schedule",
+            "40h",
+            "Part time",
+        ),
+        (
+            "EMP-MAT-002",
+            "EMP-SYNTH-001",
+            {"category": "Permessi"},
+            "category",
+            "[NOT_SET]",
+            "Permessi",
+        ),
+        (
+            "EMP-CONNECT-002",
+            "EMP-SYNTH-001",
+            {"motivation": "Disconnessione autorizzata"},
+            "account_state",
+            "connected",
+            "not_connected",
+        ),
+        (
+            "EMP-INVITE-001",
+            "EMP-SYNTH-001",
+            {},
+            "account_state",
+            "connected",
+            "invited",
+        ),
+        (
+            "EMP-STATUS-001",
+            "EMP-SYNTH-001",
+            {"motivation": "Disattivazione autorizzata"},
+            "employee_state",
+            "active",
+            "inactive",
+        ),
+        (
+            "EMP-DOC-004",
+            "EMP-SYNTH-001",
+            {"document_id": "DOC-SYNTH-001", "category": "contract"},
+            "category",
+            "CV",
+            "contract",
+        ),
+        (
+            "EMP-DOC-005",
+            "EMP-SYNTH-001",
+            {
+                "document_id": "DOC-SYNTH-001",
+                "motivation": "Eliminazione autorizzata",
+            },
+            "document_id",
+            "DOC-SYNTH-001",
+            "[DELETE]",
+        ),
+        (
+            "EMP-EXPORT-001",
+            None,
+            {"scope": "employees"},
+            "scope",
+            "employees",
+            "employees",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_all_write_resource_kinds_render_real_before_without_current_placeholders(
+    function_id: str,
+    employee_id: str | None,
+    parameters: dict[str, object],
+    field_name: str,
+    before: str,
+    after: str,
+) -> None:
+    coordinator, adapter, _repository = await coordinator_for(
+        _operator_router(),
+        writes=True,
+        mock_mode=True,
+    )
+    action_class = (
+        ActionClass.EXPORT if function_id == "EMP-EXPORT-001" else ActionClass.PREPARE_WRITE
+    )
+    intent = IntentEnvelope(
+        intent="synthetic_write",
+        function_id=function_id,
+        action_class=action_class,
+        employee_id=employee_id,
+        query=None,
+        parameters=parameters,
+        date_from=None,
+        date_to=None,
+        requires_clarification=False,
+        clarification_question=None,
+        sensitivity=Sensitivity.HIGH,
+        confidence=1.0,
+    )
+    try:
+        preview = await coordinator._prepare_write(
+            actor(LogicalRole.HR_WRITE),
+            f"corr-{function_id}",
+            intent,
+        )
+    finally:
+        await adapter.close()
+
+    assert preview.action_id is not None
+    assert all("[CURRENT]" not in field.value for field in preview.fields)
+    field = next(field for field in preview.fields if field.name == field_name)
+    assert before in field.value
+    assert after in field.value
+
+
+@pytest.mark.parametrize(
+    ("function_id", "parameters"),
+    [
+        ("EMP-CONNECT-001", {}),
+        ("EMP-STATUS-002", {}),
+        (
+            "EMP-RBAC-002",
+            {
+                "role_name": "employee",
+                "enabled": True,
+                "motivation": "Verifica no op autorizzata",
+            },
+        ),
+        (
+            "EMP-BAL-002",
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "ferie",
+                "previous_value": "0",
+                "amount": "0",
+                "motivation": "Verifica no op autorizzata",
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_resource_no_op_ignores_selectors_and_uses_canonical_state_values(
+    function_id: str, parameters: dict[str, object]
+) -> None:
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(), writes=True, mock_mode=True
+    )
+    intent = IntentEnvelope(
+        intent="synthetic_no_op",
+        function_id=function_id,
+        action_class=ActionClass.PREPARE_WRITE,
+        employee_id="EMP-SYNTH-001",
+        query=None,
+        parameters=parameters,
+        date_from=None,
+        date_to=None,
+        requires_clarification=False,
+        clarification_question=None,
+        sensitivity=Sensitivity.CRITICAL,
+        confidence=1.0,
+    )
+    try:
+        with pytest.raises(ApplicationError, match="no-op"):
+            await coordinator._prepare_write(
+                actor(LogicalRole.HR_WRITE),
+                f"corr-no-op-{function_id}",
+                intent,
+            )
+        assert await repository.list_actions() == ()
+    finally:
+        await adapter.close()

@@ -2,7 +2,8 @@
 
 Il debug deve preservare gli stessi confini di produzione. Non disabilitare TLS, host-key
 checking, RBAC, redazione, ClamAV, audit o feature flag per ottenere un test verde. Usare solo
-dati sintetici; il bot corrente è fermo e nessun flusso live è stato verificato.
+dati sintetici; nel workspace locale il processo bot è assente, mentre lo stato sul target è
+`UNVERIFIED`. Nessun flusso live è stato eseguito durante questa sessione di Fase 2.
 
 ## Modalità DEBUG locale
 

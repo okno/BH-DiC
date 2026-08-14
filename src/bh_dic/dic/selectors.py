@@ -46,7 +46,7 @@ class SelectorRegistry:
         return frozenset(self._entries)
 
 
-def role(role_name: str, name: str, *, exact: bool = False) -> SelectorCandidate:
+def role(role_name: str, name: str | None = None, *, exact: bool = False) -> SelectorCandidate:
     return SelectorCandidate(SelectorKind.ROLE, role_name, name, exact)
 
 
@@ -81,6 +81,7 @@ DEFAULT_SELECTORS = SelectorRegistry(
             role("button", "Conferma", exact=True),
             test_id("confirm-action"),
         ),
+        "common.confirm_dialog": (role("dialog"),),
         "auth.username": (
             label("Email"),
             label("Username"),
@@ -116,6 +117,7 @@ DEFAULT_SELECTORS = SelectorRegistry(
             test_id("employee-row"),
             css("table tbody tr"),
         ),
+        "employees.container": (css("table"),),
         "employees.total": (
             test_id("employee-total"),
             css("[data-total-count]"),
@@ -238,6 +240,7 @@ DEFAULT_SELECTORS = SelectorRegistry(
             css("[data-field='timestamping-enabled'] input[type='checkbox']"),
             css("[data-field='timestamping-enabled']"),
         ),
+        "contracts.container": (css("table"),),
         "contracts.rows": (test_id("contract-row"), css("table tbody tr")),
         "contracts.new": (role("button", "Nuovo"), test_id("new-contract")),
         "contracts.edit": (role("button", "Modifica"), test_id("edit-contract")),
@@ -264,6 +267,7 @@ DEFAULT_SELECTORS = SelectorRegistry(
         "contract_row.type": (css("[data-field='type']"),),
         "contract_row.status": (css("[data-field='status']"),),
         "contract_row.period": (css("[data-field='period']"),),
+        "maturations.container": (css("table"),),
         "maturations.rows": (test_id("maturation-row"), css("table tbody tr")),
         "maturations.new": (role("button", "Nuovo"), test_id("new-maturation")),
         "maturations.category": (label("Categoria"),),
@@ -279,8 +283,13 @@ DEFAULT_SELECTORS = SelectorRegistry(
         "maturation_row.valid_to": (css("[data-field='valid-to']"),),
         "maturation_row.status": (css("[data-field='status']"),),
         "balance.year": (label("Anno"), test_id("balance-year")),
+        "balance.month": (label("Mese"), test_id("balance-month")),
         "balance.rows": (test_id("balance-row"), css("table tbody tr")),
         "balance.correct": (role("button", "Correggi"), test_id("balance-correct")),
+        "balance.correction_month": (
+            label("Mese correzione"),
+            test_id("balance-correction-month"),
+        ),
         "balance.category": (label("Categoria"),),
         "balance.amount": (label("Correzione"),),
         "balance.save": (role("button", "Salva"), test_id("balance-save")),
@@ -298,6 +307,7 @@ DEFAULT_SELECTORS = SelectorRegistry(
         "payroll_row.month": (css("[data-field='month']"),),
         "payroll_row.status": (css("[data-field='status']"),),
         "payroll_row.published_at": (css("[data-field='published-at']"),),
+        "documents.container": (css("table"),),
         "documents.rows": (test_id("document-row"), css("table tbody tr")),
         "documents.search": (role("searchbox", "Cerca"), placeholder("Cerca")),
         "documents.uploaded": (role("tab", "Caricati"),),

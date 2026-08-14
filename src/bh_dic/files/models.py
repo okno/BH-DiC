@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 
 
 class UploadStatus(StrEnum):
@@ -32,3 +33,14 @@ class UploadRecord:
     expires_at: datetime
     deleted_at: datetime | None = None
     version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedUpload:
+    """Internal delivery capability; its filesystem path must never be rendered or logged."""
+
+    upload_id: str
+    path: Path = field(repr=False)
+    sha256: str = field(repr=False)
+    size_bytes: int
+    detected_mime: str

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
@@ -92,4 +93,12 @@ class InteractionCoordinator(Protocol):
 
     async def balances(
         self, actor: DiscordActor, employee_id: str, year: int
+    ) -> InteractionResult: ...
+
+    async def prepare_operator_action(
+        self,
+        actor: DiscordActor,
+        function_id: str,
+        employee_id: str,
+        parameters: Mapping[str, object],
     ) -> InteractionResult: ...

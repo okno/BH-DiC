@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
-from pathlib import Path
 from typing import Literal
 
 from pydantic import JsonValue
@@ -13,11 +11,13 @@ from pydantic import JsonValue
 from bh_dic.dic.errors import DicNotFoundError, DicUiChangedError, DicValidationError
 from bh_dic.dic.models import (
     AccountState,
+    BalanceCorrectionState,
     BalanceLine,
     BalanceResult,
     ContractRecord,
     DocumentMetadata,
     DocumentQuery,
+    EmployeeFilter,
     EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
@@ -32,12 +32,23 @@ from bh_dic.dic.models import (
     SortDirection,
     TimeAccessResult,
 )
-from bh_dic.dic.pages.base import BaseDicPage, LocatorLike
+from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, VerifiedUploadPayload
+from bh_dic.dic.values import canonical_decimal_text
 
 
 def _stable_record_id(prefix: str, *values: str | None) -> str:
     payload = "\x1f".join(value or "" for value in values)
     return f"{prefix}-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _is_fallback_record_id(value: str, prefix: str) -> bool:
+    return re.fullmatch(rf"{re.escape(prefix)}-[a-f0-9]{{16}}", value) is not None
+
+
+def _expected_value_matches(actual: object, expected: JsonValue) -> bool:
+    if isinstance(actual, str) and isinstance(expected, str):
+        return actual.strip().casefold() == expected.strip().casefold()
+    return actual == expected
 
 
 def _parameter_text(
@@ -137,12 +148,16 @@ class EmployeesListPage(BaseDicPage):
             if disabled is not None or aria_disabled == "true":
                 break
             await next_button.click()
+        if await self.locate("employees.container", required=False) is None:
+            raise DicUiChangedError("employee list container is unavailable")
         rows = await self.all_matches("employees.rows")
         row_count = await rows.count()
         items = tuple([await self._read_row(rows.nth(index)) for index in range(row_count)])
         total_text = await self.read_text("employees.total")
         total_matches = re.findall(r"\d+", (total_text or "").replace(".", ""))
         total = int(total_matches[-1]) if total_matches else row_count
+        if row_count == 0 and (not total_matches or total != 0):
+            raise DicUiChangedError("empty employee result has no verified zero total")
         next_button = await self.locate("employees.next", required=False)
         has_next = False
         if next_button is not None:
@@ -182,16 +197,93 @@ class EmployeesListPage(BaseDicPage):
         unexpected = set(action.parameters).difference(set(allowed) | {"creation_mode"})
         if unexpected:
             raise DicValidationError(f"unsupported create fields: {sorted(unexpected)}")
-        if not _parameter_text(action.parameters, "first_name"):
-            raise DicValidationError("first_name is required")
-        if not _parameter_text(action.parameters, "last_name"):
-            raise DicValidationError("last_name is required")
+        first_name = _parameter_text(action.parameters, "first_name", required=True)
+        last_name = _parameter_text(action.parameters, "last_name", required=True)
         for parameter, selector_key in allowed.items():
             value = _parameter_text(action.parameters, parameter)
             if value is not None:
                 await self.fill(selector_key, value)
         await self.click("employees.create_save")
-        await self.confirm_if_present()
+        await self.confirm_if_present(expected_identity=(first_name or "", last_name or ""))
+
+    @staticmethod
+    def _create_query(parameters: dict[str, JsonValue]) -> str:
+        first_name = _parameter_text(parameters, "first_name", required=True)
+        last_name = _parameter_text(parameters, "last_name", required=True)
+        return f"{first_name} {last_name}"
+
+    async def stable_employee_ids_for_create(
+        self, parameters: dict[str, JsonValue]
+    ) -> frozenset[str]:
+        """Capture an exhaustive stable-ID baseline for the intended new employee."""
+
+        result = await self.list(
+            EmployeeListQuery(
+                query=self._create_query(parameters),
+                employee_filter=EmployeeFilter.ALL,
+                page_size=100,
+            )
+        )
+        if result.has_next:
+            raise DicUiChangedError("employee create baseline is not exhaustive")
+        return frozenset(item.employee_id for item in result.items)
+
+    async def verify_created_employee(
+        self,
+        baseline_ids: frozenset[str],
+        parameters: dict[str, JsonValue],
+    ) -> bool | None:
+        """Verify exactly one new stable ID and raw observable values in-page."""
+
+        allowed = {
+            "first_name",
+            "last_name",
+            "payroll_number",
+            "tax_code",
+            "job_title",
+            "business_email",
+            "workplace",
+            "creation_mode",
+        }
+        if set(parameters).difference(allowed):
+            return None
+        query = self._create_query(parameters)
+        result = await self.list(
+            EmployeeListQuery(
+                query=query,
+                employee_filter=EmployeeFilter.ALL,
+                page_size=100,
+            )
+        )
+        if result.has_next:
+            return None
+        rows = await self.all_matches("employees.rows")
+        candidates: list[LocatorLike] = []
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            employee_id = await self._employee_id(row)
+            if employee_id not in baseline_ids:
+                candidates.append(row)
+        if len(candidates) != 1:
+            return None
+        row = candidates[0]
+        raw_name = await self.read_text("row.name", root=row)
+        if not _expected_value_matches(raw_name, query):
+            return False
+        selectors = {
+            "payroll_number": "row.payroll_number",
+            "tax_code": "row.tax_code",
+            "job_title": "row.job_title",
+            "business_email": "row.email",
+            "workplace": "row.workplace",
+        }
+        for parameter, selector_key in selectors.items():
+            expected = parameters.get(parameter)
+            if expected is not None and not _expected_value_matches(
+                await self.read_text(selector_key, root=row), expected
+            ):
+                return False
+        return True
 
 
 class EmployeeSummaryPage(BaseDicPage):
@@ -216,6 +308,36 @@ class EmployeeSummaryPage(BaseDicPage):
             state=_employee_state(await self.read_text("summary.state")),
         )
 
+    async def verify_expected(
+        self, employee_id: str, parameters: dict[str, JsonValue]
+    ) -> bool | None:
+        """Compare every approved update field in-page without returning raw PII."""
+
+        selectors = {
+            "first_name": "summary.first_name",
+            "last_name": "summary.last_name",
+            "payroll_number": "summary.payroll_number",
+            "tax_code": "summary.tax_code",
+            "birth_date": "summary.birth_date",
+            "iban": "summary.iban",
+            "job_title": "summary.job_title",
+            "phone": "summary.phone",
+            "business_email": "summary.email",
+            "address": "summary.address",
+            "workplace": "summary.workplace",
+            "notes": "summary.notes",
+        }
+        if not parameters or set(parameters).difference(selectors):
+            return None
+        await self.open(employee_id)
+        for parameter, expected in parameters.items():
+            if not isinstance(expected, str):
+                return None
+            observed = await self.read_text(selectors[parameter])
+            if not _expected_value_matches(observed, expected):
+                return False
+        return True
+
     async def execute(self, action: PreparedAction) -> None:
         if action.employee_id is None:
             raise DicValidationError("employee_id is required")
@@ -238,12 +360,16 @@ class EmployeeSummaryPage(BaseDicPage):
             unexpected = set(action.parameters).difference(allowed)
             if unexpected:
                 raise DicValidationError(f"unsupported update fields: {sorted(unexpected)}")
+            if not action.parameters:
+                raise DicValidationError("employee update requires at least one field")
             for parameter, selector_key in allowed.items():
                 value = _parameter_text(action.parameters, parameter)
                 if value is not None:
                     await self.fill(selector_key, value)
             await self.click("summary.save")
         else:
+            if action.parameters:
+                raise DicValidationError("summary action does not accept parameters")
             controls = {
                 FunctionId.EMP_CONNECT_001: "summary.connect",
                 FunctionId.EMP_CONNECT_002: "summary.disconnect",
@@ -258,7 +384,7 @@ class EmployeeSummaryPage(BaseDicPage):
             except KeyError as exc:
                 raise DicValidationError("function is not handled by summary page") from exc
             await self.click(selector_key)
-        await self.confirm_if_present()
+        await self.confirm_if_present(expected_identity=action.employee_id)
 
 
 class EmployeeRolesPage(BaseDicPage):
@@ -297,27 +423,33 @@ class EmployeeRolesPage(BaseDicPage):
         if action.employee_id is None:
             raise DicValidationError("employee_id is required")
         await self.open(action.employee_id)
-        field_map = {
-            "timestamping_enabled": "roles.time.timestamping",
-            "attendance_sheet_access": "roles.time.attendance",
-            "shift_management": "roles.time.shifts",
-            "expense_access": "roles.time.expenses",
-        }
-        unexpected = set(action.parameters).difference(field_map)
-        if unexpected:
-            raise DicValidationError(f"unsupported role fields: {sorted(unexpected)}")
-        for parameter, selector_key in field_map.items():
-            value = action.parameters.get(parameter)
-            if value is None:
-                continue
-            if not isinstance(value, bool):
-                raise DicValidationError(f"{parameter} must be boolean")
-            locator = await self.locate(selector_key)
-            if locator is None:
-                raise DicUiChangedError("role control is unavailable")
-            await locator.set_checked(value)
+        role_name = _parameter_text(action.parameters, "role_name")
+        if role_name is None or set(action.parameters) != {"role_name", "enabled"}:
+            raise DicValidationError("role update requires only role_name and enabled")
+        enabled = action.parameters.get("enabled")
+        if not isinstance(enabled, bool):
+            raise DicValidationError("enabled must be boolean")
+        role_nodes = await self.all_matches("roles.items")
+        matches: list[LocatorLike] = []
+        for index in range(await role_nodes.count()):
+            node = role_nodes.nth(index)
+            if (await node.inner_text()).strip().casefold() == role_name.casefold():
+                matches.append(node)
+        if len(matches) != 1:
+            raise DicValidationError("role_name must identify exactly one role")
+        role = matches[0]
+        try:
+            current = await role.is_checked()
+        except Exception:
+            aria_checked = await role.get_attribute("aria-checked")
+            if aria_checked not in {"true", "false"}:
+                raise DicUiChangedError("role control state is unavailable") from None
+            current = aria_checked == "true"
+        if current is enabled:
+            raise DicValidationError("role state already matches requested value")
+        await role.set_checked(enabled)
         await self.click("roles.save")
-        await self.confirm_if_present()
+        await self.confirm_if_present(expected_identity=(action.employee_id, role_name))
 
 
 class TimestampEmployeesPage(BaseDicPage):
@@ -348,8 +480,15 @@ class TimestampEmployeesPage(BaseDicPage):
 class EmployeeContractsPage(BaseDicPage):
     route_template = "/it/app/employees/info/{employee_id}/contracts"
 
+    async def _rows(self) -> LocatorLike:
+        if await self.locate("contracts.container", required=False) is None:
+            raise DicUiChangedError("contract list container is unavailable")
+        return await self.all_matches("contracts.rows")
+
     async def _find_row(self, contract_id: str) -> LocatorLike:
-        rows = await self.all_matches("contracts.rows")
+        if _is_fallback_record_id(contract_id, "CON"):
+            raise DicValidationError("fallback contract identifiers are not actionable")
+        rows = await self._rows()
         for index in range(await rows.count()):
             row = rows.nth(index)
             value = await self.read_attribute("contract_row.id", "data-contract-id", root=row)
@@ -359,7 +498,7 @@ class EmployeeContractsPage(BaseDicPage):
 
     async def read(self, employee_id: str) -> tuple[ContractRecord, ...]:
         await self.open(employee_id)
-        rows = await self.all_matches("contracts.rows")
+        rows = await self._rows()
         result: list[ContractRecord] = []
         for index in range(await rows.count()):
             row = rows.nth(index)
@@ -380,9 +519,12 @@ class EmployeeContractsPage(BaseDicPage):
                 )
             }
             contract_id = await self.read_attribute("contract_row.id", "data-contract-id", root=row)
+            stable_identifier = bool(contract_id)
             contract_id = contract_id or _stable_record_id(
                 "CON", values["start_date"], values["type"], values["period"]
             )
+            edit = await self.locate("contracts.edit", root=row, required=False)
+            delete = await self.locate("contracts.delete", root=row, required=False)
             permanent_text = (values["permanent"] or "").casefold()
             permanent = None
             if permanent_text:
@@ -391,6 +533,8 @@ class EmployeeContractsPage(BaseDicPage):
                 ContractRecord(
                     contract_id=contract_id,
                     employee_id=employee_id,
+                    stable_identifier=stable_identifier,
+                    actionable=stable_identifier and edit is not None and delete is not None,
                     schedule=values["schedule"],
                     flexibility=values["flexibility"],
                     permanent=permanent,
@@ -406,21 +550,133 @@ class EmployeeContractsPage(BaseDicPage):
             )
         return tuple(result)
 
+    async def stable_contract_ids(self, employee_id: str) -> frozenset[str]:
+        """Return only DOM-stable identifiers for an in-process create baseline."""
+
+        await self.open(employee_id)
+        rows = await self._rows()
+        identifiers: set[str] = set()
+        for index in range(await rows.count()):
+            value = await self.read_attribute(
+                "contract_row.id", "data-contract-id", root=rows.nth(index)
+            )
+            if value:
+                identifiers.add(value)
+        return frozenset(identifiers)
+
+    async def verify_created_contract(
+        self,
+        employee_id: str,
+        baseline_ids: frozenset[str],
+        parameters: dict[str, JsonValue],
+    ) -> bool | None:
+        """Verify one new stable contract and all requested values after dispatch."""
+
+        await self.open(employee_id)
+        allowed = {
+            "schedule": "schedule",
+            "flexibility": "flexibility",
+            "start_date": "start_date",
+            "end_date": "end_date",
+            "ccnl_level": "ccnl_level",
+            "work_regime": "work_regime",
+            "description": "description",
+            "contract_type": "type",
+            "permanent": "permanent",
+        }
+        expected = {key: value for key, value in parameters.items() if key in allowed}
+        if not expected or set(parameters).difference(allowed):
+            return None
+        rows = await self._rows()
+        candidates: list[LocatorLike] = []
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            observed_id = await self.read_attribute("contract_row.id", "data-contract-id", root=row)
+            if observed_id and observed_id not in baseline_ids:
+                candidates.append(row)
+        if len(candidates) != 1:
+            return None
+        row = candidates[0]
+        observed: dict[str, object] = {}
+        for parameter, selector_suffix in allowed.items():
+            raw = await self.read_text(f"contract_row.{selector_suffix}", root=row)
+            if parameter == "permanent":
+                normalized = (raw or "").strip().casefold()
+                observed[parameter] = (
+                    None
+                    if not normalized
+                    else any(word in normalized for word in ("sì", "si", "true", "yes"))
+                )
+            else:
+                observed[parameter] = raw
+        return all(_expected_value_matches(observed[key], value) for key, value in expected.items())
+
+    async def verify_expected(
+        self,
+        employee_id: str,
+        contract_id: str | None,
+        parameters: dict[str, JsonValue],
+    ) -> bool | None:
+        """Compare raw contract values internally; never return contract text."""
+
+        if contract_id is not None and _is_fallback_record_id(contract_id, "CON"):
+            return None
+        await self.open(employee_id)
+        rows = await self._rows()
+        allowed = {
+            "schedule": "schedule",
+            "flexibility": "flexibility",
+            "start_date": "start_date",
+            "end_date": "end_date",
+            "ccnl_level": "ccnl_level",
+            "work_regime": "work_regime",
+            "description": "description",
+            "contract_type": "type",
+            "permanent": "permanent",
+        }
+        expected = {key: value for key, value in parameters.items() if key in allowed}
+        if not expected or set(parameters).difference(set(allowed) | {"contract_id"}):
+            return None
+        if contract_id is None:
+            return None
+        matches = 0
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            observed_id = await self.read_attribute("contract_row.id", "data-contract-id", root=row)
+            if contract_id is not None and observed_id != contract_id:
+                continue
+            if contract_id is not None and not observed_id:
+                return None
+            observed: dict[str, object] = {}
+            for parameter, selector_suffix in allowed.items():
+                raw = await self.read_text(f"contract_row.{selector_suffix}", root=row)
+                if parameter == "permanent":
+                    normalized = (raw or "").strip().casefold()
+                    observed[parameter] = (
+                        None
+                        if not normalized
+                        else any(word in normalized for word in ("sì", "si", "true", "yes"))
+                    )
+                else:
+                    observed[parameter] = raw
+            if all(
+                _expected_value_matches(observed[key], value) for key, value in expected.items()
+            ):
+                matches += 1
+        return matches == 1
+
     async def execute(self, action: PreparedAction) -> None:
         if action.employee_id is None:
             raise DicValidationError("employee_id is required")
         await self.open(action.employee_id)
         if action.function_id is FunctionId.EMP_CONTRACT_003:
+            if set(action.parameters) != {"contract_id"}:
+                raise DicValidationError("contract delete requires only contract_id")
             contract_id = _parameter_text(action.parameters, "contract_id", required=True)
             row = await self._find_row(contract_id or "")
             await self.click("contracts.delete", root=row)
-            await self.confirm_if_present()
+            await self.confirm_if_present(expected_identity=(action.employee_id, contract_id or ""))
             return
-        contract_id = _parameter_text(action.parameters, "contract_id")
-        if contract_id:
-            await self.click("contracts.edit", root=await self._find_row(contract_id))
-        else:
-            await self.click("contracts.new")
         allowed = {
             "schedule": "contracts.schedule",
             "flexibility": "contracts.flexibility",
@@ -434,6 +690,13 @@ class EmployeeContractsPage(BaseDicPage):
         unexpected = set(action.parameters).difference(set(allowed) | {"contract_id", "permanent"})
         if unexpected:
             raise DicValidationError(f"unsupported contract fields: {sorted(unexpected)}")
+        if not set(action.parameters).intersection(set(allowed) | {"permanent"}):
+            raise DicValidationError("contract write requires at least one editable field")
+        contract_id = _parameter_text(action.parameters, "contract_id")
+        if contract_id:
+            await self.click("contracts.edit", root=await self._find_row(contract_id))
+        else:
+            await self.click("contracts.new")
         for parameter, selector_key in allowed.items():
             value = _parameter_text(action.parameters, parameter)
             if value is not None:
@@ -447,15 +710,22 @@ class EmployeeContractsPage(BaseDicPage):
                 raise DicUiChangedError("contract permanence control is unavailable")
             await locator.set_checked(permanent)
         await self.click("contracts.save")
-        await self.confirm_if_present()
+        await self.confirm_if_present(
+            expected_identity=(action.employee_id, contract_id or action.employee_id)
+        )
 
 
 class EmployeeMaturationsPage(BaseDicPage):
     route_template = "/it/app/employees/info/{employee_id}/maturations"
 
+    async def _rows(self) -> LocatorLike:
+        if await self.locate("maturations.container", required=False) is None:
+            raise DicUiChangedError("maturation list container is unavailable")
+        return await self.all_matches("maturations.rows")
+
     async def read(self, employee_id: str) -> tuple[MaturationRecord, ...]:
         await self.open(employee_id)
-        rows = await self.all_matches("maturations.rows")
+        rows = await self._rows()
         result: list[MaturationRecord] = []
         for index in range(await rows.count()):
             row = rows.nth(index)
@@ -478,11 +748,59 @@ class EmployeeMaturationsPage(BaseDicPage):
             )
         return tuple(result)
 
+    async def stable_maturation_ids(self, employee_id: str) -> frozenset[str]:
+        """Return only DOM-stable identifiers for an in-process create baseline."""
+
+        await self.open(employee_id)
+        rows = await self._rows()
+        identifiers: set[str] = set()
+        for index in range(await rows.count()):
+            value = await self.read_attribute(
+                "maturation_row.id", "data-maturation-id", root=rows.nth(index)
+            )
+            if value:
+                identifiers.add(value)
+        return frozenset(identifiers)
+
+    async def verify_created_maturation(
+        self,
+        employee_id: str,
+        baseline_ids: frozenset[str],
+        parameters: dict[str, JsonValue],
+    ) -> bool | None:
+        """Verify one new stable maturation and all requested values."""
+
+        allowed = {"category": "category", "valid_from": "valid_from", "valid_to": "valid_to"}
+        expected = {key: value for key, value in parameters.items() if key in allowed}
+        if (
+            set(parameters).difference(allowed)
+            or not isinstance(expected.get("category"), str)
+            or not expected["category"]
+        ):
+            return None
+        await self.open(employee_id)
+        rows = await self._rows()
+        candidates: list[LocatorLike] = []
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            observed_id = await self.read_attribute(
+                "maturation_row.id", "data-maturation-id", root=row
+            )
+            if observed_id and observed_id not in baseline_ids:
+                candidates.append(row)
+        if len(candidates) != 1:
+            return None
+        row = candidates[0]
+        observed = {
+            key: await self.read_text(f"maturation_row.{selector_suffix}", root=row)
+            for key, selector_suffix in allowed.items()
+        }
+        return all(_expected_value_matches(observed[key], value) for key, value in expected.items())
+
     async def execute(self, action: PreparedAction) -> None:
         if action.employee_id is None:
             raise DicValidationError("employee_id is required")
         await self.open(action.employee_id)
-        await self.click("maturations.new")
         allowed = {
             "category": "maturations.category",
             "valid_from": "maturations.valid_from",
@@ -491,14 +809,19 @@ class EmployeeMaturationsPage(BaseDicPage):
         unexpected = set(action.parameters).difference(allowed)
         if unexpected:
             raise DicValidationError(f"unsupported maturation fields: {sorted(unexpected)}")
-        if not _parameter_text(action.parameters, "category", required=True):
-            raise DicValidationError("category is required")
+        category = _parameter_text(action.parameters, "category", required=True)
+        await self.click("maturations.new")
         for parameter, selector_key in allowed.items():
             value = _parameter_text(action.parameters, parameter)
             if value is not None:
                 await self.fill(selector_key, value)
         await self.click("maturations.save")
-        await self.confirm_if_present()
+        await self.confirm_if_present(
+            expected_identity=(
+                action.employee_id,
+                category or "",
+            )
+        )
 
 
 class EmployeeBalancePage(BaseDicPage):
@@ -524,21 +847,76 @@ class EmployeeBalancePage(BaseDicPage):
             )
         return BalanceResult(employee_id=employee_id, year=year, lines=tuple(lines))
 
+    async def read_correction_state(
+        self, employee_id: str, year: int, month: int, category: str
+    ) -> BalanceCorrectionState:
+        if isinstance(year, bool) or year not in range(2000, 2201):
+            raise DicValidationError("year must be between 2000 and 2200")
+        if isinstance(month, bool) or month not in range(1, 13):
+            raise DicValidationError("month must be between 1 and 12")
+        normalized_category = category.strip().casefold()
+        if not normalized_category:
+            raise DicValidationError("category is required")
+        await self.open(employee_id)
+        await self.select("balance.year", str(year))
+        await self.select("balance.month", str(month))
+        rows = await self.all_matches("balance.rows")
+        matches: list[LocatorLike] = []
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            observed = (await self.read_text("balance_row.category", root=row) or "").casefold()
+            if observed == normalized_category:
+                matches.append(row)
+        if len(matches) != 1:
+            raise DicValidationError("balance category must identify exactly one row")
+        raw_current = await self.read_text("balance_row.corrections", root=matches[0])
+        try:
+            current = canonical_decimal_text(raw_current)
+        except ValueError as exc:
+            raise DicValidationError(
+                "current balance correction is not a canonical decimal"
+            ) from exc
+        return BalanceCorrectionState(
+            employee_id=employee_id,
+            year=year,
+            month=month,
+            category=category.strip(),
+            current_value=current,
+        )
+
     async def execute(self, action: PreparedAction) -> None:
         if action.employee_id is None:
             raise DicValidationError("employee_id is required")
-        await self.open(action.employee_id)
+        expected_keys = {"year", "month", "category", "previous_value", "amount"}
+        if set(action.parameters) != expected_keys:
+            raise DicValidationError("balance correction parameters are incomplete or unsupported")
         year = action.parameters.get("year")
+        month = action.parameters.get("month")
         if not isinstance(year, int) or isinstance(year, bool):
             raise DicValidationError("year must be an integer")
-        await self.select("balance.year", str(year))
-        await self.click("balance.correct")
+        if not isinstance(month, int) or isinstance(month, bool):
+            raise DicValidationError("month must be an integer")
         category = _parameter_text(action.parameters, "category", required=True)
+        previous_value = _parameter_text(action.parameters, "previous_value", required=True)
         amount = _parameter_text(action.parameters, "amount", required=True)
+        try:
+            expected_previous = canonical_decimal_text(previous_value)
+            canonical_amount = canonical_decimal_text(amount)
+        except ValueError as exc:
+            raise DicValidationError("balance values must be canonical decimals") from exc
+        if canonical_amount == expected_previous:
+            raise DicValidationError("balance correction would not change state")
+        state = await self.read_correction_state(action.employee_id, year, month, category or "")
+        if state.current_value != expected_previous:
+            raise DicValidationError("balance correction precondition changed")
+        await self.click("balance.correct")
+        await self.select("balance.correction_month", str(month))
         await self.fill("balance.category", category or "")
-        await self.fill("balance.amount", amount or "")
+        await self.fill("balance.amount", canonical_amount)
         await self.click("balance.save")
-        await self.confirm_if_present()
+        await self.confirm_if_present(
+            expected_identity=(action.employee_id, str(year), str(month), category or "")
+        )
 
 
 class EmployeePayrollsPage(BaseDicPage):
@@ -575,8 +953,15 @@ class EmployeePayrollsPage(BaseDicPage):
 class EmployeeDocumentsPage(BaseDicPage):
     route_template = "/it/app/employees/info/{employee_id}/documents/list"
 
+    async def _rows(self) -> LocatorLike:
+        if await self.locate("documents.container", required=False) is None:
+            raise DicUiChangedError("document list container is unavailable")
+        return await self.all_matches("documents.rows")
+
     async def _find_row(self, document_id: str) -> LocatorLike:
-        rows = await self.all_matches("documents.rows")
+        if _is_fallback_record_id(document_id, "DOC"):
+            raise DicValidationError("fallback document identifiers are not actionable")
+        rows = await self._rows()
         for index in range(await rows.count()):
             row = rows.nth(index)
             value = await self.read_attribute("document_row.id", "data-document-id", root=row)
@@ -592,7 +977,7 @@ class EmployeeDocumentsPage(BaseDicPage):
             await self.click("documents.pending")
         if query.query:
             await self.fill("documents.search", query.query)
-        rows = await self.all_matches("documents.rows")
+        rows = await self._rows()
         result: list[DocumentMetadata] = []
         for index in range(await rows.count()):
             row = rows.nth(index)
@@ -607,11 +992,16 @@ class EmployeeDocumentsPage(BaseDicPage):
             expiry_date = await self.read_text("document_row.expiry", root=row)
             uploaded_at = await self.read_text("document_row.uploaded_at", root=row)
             record_id = await self.read_attribute("document_row.id", "data-document-id", root=row)
+            stable_identifier = bool(record_id)
+            edit = await self.locate("documents.edit", root=row, required=False)
+            delete = await self.locate("documents.delete", root=row, required=False)
             result.append(
                 DocumentMetadata(
                     document_id=record_id
                     or _stable_record_id("DOC", category, expiry_date, uploaded_at, str(index)),
                     employee_id=employee_id,
+                    stable_identifier=stable_identifier,
+                    actionable=stable_identifier and edit is not None and delete is not None,
                     title_redacted="[REDACTED]" if title else "untitled [REDACTED]",
                     category=category,
                     expiry_date=expiry_date,
@@ -624,31 +1014,123 @@ class EmployeeDocumentsPage(BaseDicPage):
             )
         return tuple(result)
 
-    async def execute(self, action: PreparedAction) -> None:
+    async def stable_document_ids(self, employee_id: str) -> frozenset[str]:
+        """Return only stable DOM identifiers for an in-process upload baseline."""
+
+        await self.open(employee_id)
+        rows = await self._rows()
+        identifiers: set[str] = set()
+        for index in range(await rows.count()):
+            value = await self.read_attribute(
+                "document_row.id", "data-document-id", root=rows.nth(index)
+            )
+            if value:
+                identifiers.add(value)
+        return frozenset(identifiers)
+
+    async def verify_uploaded_document(
+        self,
+        employee_id: str,
+        baseline_ids: frozenset[str],
+        parameters: dict[str, JsonValue],
+    ) -> bool | None:
+        """Verify one new DOM-stable document and its raw expected metadata."""
+
+        await self.open(employee_id)
+        rows = await self._rows()
+        expected = {
+            key: value
+            for key, value in parameters.items()
+            if key in {"category", "expiry_date"} and isinstance(value, str)
+        }
+        if not expected:
+            return None
+        candidates: list[tuple[str, dict[str, str | None]]] = []
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            document_id = await self.read_attribute("document_row.id", "data-document-id", root=row)
+            if not document_id or document_id in baseline_ids:
+                continue
+            candidates.append(
+                (
+                    document_id,
+                    {
+                        "title": await self.read_text("document_row.title", root=row),
+                        "category": await self.read_text("document_row.category", root=row),
+                        "expiry_date": await self.read_text("document_row.expiry", root=row),
+                    },
+                )
+            )
+        if len(candidates) != 1:
+            return None
+        _document_id, observed = candidates[0]
+        return all(_expected_value_matches(observed[key], value) for key, value in expected.items())
+
+    async def verify_expected_metadata(
+        self,
+        employee_id: str,
+        document_id: str,
+        parameters: dict[str, JsonValue],
+    ) -> bool | None:
+        """Compare editable raw metadata for one DOM-stable document."""
+
+        if _is_fallback_record_id(document_id, "DOC"):
+            return None
+        await self.open(employee_id)
+        expected = {
+            key: value
+            for key, value in parameters.items()
+            if key in {"category", "expiry_date"} and isinstance(value, str)
+        }
+        if not expected:
+            return None
+        rows = await self._rows()
+        matches = 0
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            observed_id = await self.read_attribute("document_row.id", "data-document-id", root=row)
+            if observed_id != document_id:
+                continue
+            observed = {
+                "category": await self.read_text("document_row.category", root=row),
+                "expiry_date": await self.read_text("document_row.expiry", root=row),
+            }
+            if all(
+                _expected_value_matches(observed[key], value) for key, value in expected.items()
+            ):
+                matches += 1
+        return matches == 1
+
+    async def execute(
+        self, action: PreparedAction, *, verified_upload: VerifiedUploadPayload | None = None
+    ) -> None:
         if action.employee_id is None:
             raise DicValidationError("employee_id is required")
         await self.open(action.employee_id)
+        confirmation_identity: tuple[str, ...]
         if action.function_id is FunctionId.EMP_DOC_002:
-            safe_path = _parameter_text(action.parameters, "safe_local_path", required=True)
-            path = Path(safe_path or "")
-            if not path.is_absolute() or not await asyncio.to_thread(path.is_file):
-                raise DicValidationError("safe_local_path must be an existing absolute file")
+            if verified_upload is None:
+                raise DicValidationError("document upload requires a verified adapter payload")
+            if set(action.parameters).difference({"category", "expiry_date"}):
+                raise DicValidationError("document upload contains unsupported metadata")
+            category = _parameter_text(action.parameters, "category", required=True)
+            expiry = _parameter_text(action.parameters, "expiry_date")
             await self.click("documents.upload")
             file_input = await self.locate("documents.file")
             if file_input is None:
                 raise DicUiChangedError("document file input is unavailable")
-            await file_input.set_input_files(str(path))
-            title = _parameter_text(action.parameters, "title")
-            category = _parameter_text(action.parameters, "category")
-            expiry = _parameter_text(action.parameters, "expiry_date")
-            if title:
-                await self.fill("documents.title", title)
+            await file_input.set_input_files(verified_upload.as_playwright())
             if category:
                 await self.fill("documents.category", category)
             if expiry:
                 await self.fill("documents.expiry", expiry)
             await self.click("documents.save")
+            confirmation_identity = (action.employee_id, category or "")
         elif action.function_id is FunctionId.EMP_DOC_004:
+            if set(action.parameters).difference({"document_id", "category", "expiry_date"}):
+                raise DicValidationError("document update contains unsupported metadata")
+            if not ({"category", "expiry_date"} & set(action.parameters)):
+                raise DicValidationError("document update requires category or expiry_date")
             document_id = _parameter_text(action.parameters, "document_id", required=True)
             await self.click("documents.edit", root=await self._find_row(document_id or ""))
             category = _parameter_text(action.parameters, "category")
@@ -658,9 +1140,13 @@ class EmployeeDocumentsPage(BaseDicPage):
             if expiry:
                 await self.fill("documents.expiry", expiry)
             await self.click("documents.save")
+            confirmation_identity = (action.employee_id, document_id or "")
         elif action.function_id is FunctionId.EMP_DOC_005:
+            if set(action.parameters) != {"document_id"}:
+                raise DicValidationError("document delete requires only document_id")
             document_id = _parameter_text(action.parameters, "document_id", required=True)
             await self.click("documents.delete", root=await self._find_row(document_id or ""))
+            confirmation_identity = (action.employee_id, document_id or "")
         else:
             raise DicValidationError("function is not handled by documents page")
-        await self.confirm_if_present()
+        await self.confirm_if_present(expected_identity=confirmation_identity)

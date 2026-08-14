@@ -80,6 +80,23 @@ Lo script deve registrare i comandi soltanto in `DISCORD_GUILD_ID`, mai globalme
 implementata comprende `/bh ask`, `help`, `status`, `health`, `pending`, `approve`, `reject`,
 `upload`, `employee`, `contracts`, `documents` e `balances`.
 
+Le cinque azioni ad alta criticità escluse dal modello hanno route operatore esplicite:
+`/bh operator-balance-correction`, `/bh operator-rbac-update`,
+`/bh operator-document-download`, `/bh operator-employee-delete` e
+`/bh operator-contract-delete`. Questi comandi non invocano OpenAI: validano parametri e target,
+applicano scope/RBAC/feature flag, mostrano una preview redatta e passano dal normale workflow A2.
+Con i gate write predefiniti a `false` vengono rifiutati. Il download documentale
+(`EMP-DOC-003`) e l'eliminazione contratto (`EMP-CONTRACT-003`) sono inoltre `NOT_AVAILABLE`
+nell'adapter live. Anche reinvio invito, eliminazione documento ed export (`EMP-INVITE-001`,
+`EMP-DOC-005`, `EMP-EXPORT-001`) falliscono chiuso come `NOT_AVAILABLE` nel percorso live.
+`EMP-CREATE-001` accetta live soltanto il subset con postcondizione verificabile e rifiuta
+`birth_date`, `iban`, `phone`, `address` e `notes` prima della creazione del pending.
+
+Nel flusso `/bh upload`, dopo l'acquisizione dell'allegato il workflow inoltra alla write soltanto
+l'identificatore opaco necessario. Path locale e SHA-256 non sono mostrati in Discord o OpenAI e
+non entrano in eventi o log; lo SHA-256 resta visibile esclusivamente all'operatore locale
+attraverso i metadati file.
+
 Verificare nel solo guild previsto che i comandi compaiano. Non eseguire una richiesta DIC live
 come test di registrazione.
 

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
+from pydantic import JsonValue
+
 from bh_dic.dic.models import (
+    BalanceCorrectionState,
     BalanceResult,
     ContractRecord,
     DicCredentials,
@@ -14,8 +18,10 @@ from bh_dic.dic.models import (
     EmployeeListResult,
     EmployeeSummary,
     ExecutionResult,
+    FunctionId,
     HealthStatus,
     MaturationRecord,
+    OpaqueStateDigest,
     PayrollMetadata,
     PreparedAction,
     ReconciliationResult,
@@ -51,6 +57,10 @@ class DipendentiInCloudAdapter(Protocol):
 
     async def get_balance(self, employee_id: str, year: int) -> BalanceResult: ...
 
+    async def get_balance_correction_state(
+        self, employee_id: str, year: int, month: int, category: str
+    ) -> BalanceCorrectionState: ...
+
     async def get_payroll_metadata(
         self, employee_id: str, year: int | None = None
     ) -> tuple[PayrollMetadata, ...]: ...
@@ -58,6 +68,13 @@ class DipendentiInCloudAdapter(Protocol):
     async def get_document_metadata(
         self, employee_id: str, query: DocumentQuery
     ) -> tuple[DocumentMetadata, ...]: ...
+
+    async def get_state_digest(
+        self,
+        function_id: FunctionId,
+        employee_id: str | None,
+        parameters: Mapping[str, JsonValue],
+    ) -> OpaqueStateDigest: ...
 
     async def execute_prepared(self, action: PreparedAction) -> ExecutionResult: ...
 

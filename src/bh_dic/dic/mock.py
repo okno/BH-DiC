@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+from collections.abc import Mapping
 from typing import cast
 
 from pydantic import JsonValue
 
 from bh_dic.dic.catalog import FORBIDDEN_FUNCTIONS, MUTATING_FUNCTIONS
-from bh_dic.dic.errors import DicNotFoundError, DicValidationError
+from bh_dic.dic.errors import DicConfigurationError, DicNotFoundError, DicValidationError
 from bh_dic.dic.models import (
     AccountState,
+    BalanceCorrectionState,
     BalanceLine,
     BalanceResult,
     ContractRecord,
@@ -26,6 +31,7 @@ from bh_dic.dic.models import (
     FunctionId,
     HealthStatus,
     MaturationRecord,
+    OpaqueStateDigest,
     OperationStatus,
     PayrollMetadata,
     PreparedAction,
@@ -38,24 +44,81 @@ from bh_dic.dic.models import (
     SortDirection,
     TimeAccessResult,
 )
+from bh_dic.dic.values import canonical_decimal_text
+
+_MOCK_SUMMARY_STATE_FUNCTIONS = frozenset(
+    {
+        FunctionId.EMP_UPDATE_001,
+        FunctionId.EMP_CONNECT_001,
+        FunctionId.EMP_CONNECT_002,
+        FunctionId.EMP_INVITE_001,
+        FunctionId.EMP_INVITE_002,
+        FunctionId.EMP_STATUS_001,
+        FunctionId.EMP_STATUS_002,
+        FunctionId.EMP_DELETE_001,
+    }
+)
+_EMPLOYEE_FIELDS = frozenset(
+    {
+        "first_name",
+        "last_name",
+        "payroll_number",
+        "tax_code",
+        "birth_date",
+        "iban",
+        "job_title",
+        "phone",
+        "business_email",
+        "address",
+        "workplace",
+        "notes",
+    }
+)
+_CONTRACT_FIELDS = frozenset(
+    {
+        "schedule",
+        "flexibility",
+        "permanent",
+        "start_date",
+        "end_date",
+        "ccnl_level",
+        "work_regime",
+        "description",
+        "contract_type",
+    }
+)
+_UPLOAD_INTERNAL_FIELDS = frozenset(
+    {"safe_local_path", "safe_local_sha256", "safe_local_size", "detected_mime"}
+)
 
 
 class MockDicAdapter:
     """In-memory adapter containing no production identifiers or personal data."""
 
-    def __init__(self) -> None:
+    _SYNTHETIC_DIGEST_KEY = hashlib.sha256(b"BH-DiC mock state digest key").digest()
+
+    def __init__(self, *, state_digest_key: bytes | None = None) -> None:
+        if state_digest_key is not None and len(state_digest_key) < 32:
+            raise DicConfigurationError("DIC state digest key must contain at least 32 bytes")
+        self._state_digest_key = (
+            bytes(state_digest_key) if state_digest_key is not None else self._SYNTHETIC_DIGEST_KEY
+        )
         self._closed = False
         self._authenticated = True
         self._items: dict[str, EmployeeListItem] = {}
         self._summaries: dict[str, EmployeeSummary] = {}
+        self._raw_summaries: dict[str, dict[str, str]] = {}
         self._contracts: dict[str, list[ContractRecord]] = {}
         self._roles: dict[str, RolesResult] = {}
         self._time_access: dict[str, TimeAccessResult] = {}
         self._maturations: dict[str, list[MaturationRecord]] = {}
         self._balances: dict[tuple[str, int], BalanceResult] = {}
+        self._balance_corrections: dict[tuple[str, int, int, str], str] = {}
         self._payrolls: dict[str, list[PayrollMetadata]] = {}
         self._documents: dict[str, list[DocumentMetadata]] = {}
         self._executions: dict[str, ExecutionResult] = {}
+        self._effect_targets: dict[str, str] = {}
+        self._effect_events: set[str] = set()
         self._seed()
 
     def _seed(self) -> None:
@@ -92,10 +155,26 @@ class MockDicAdapter:
             notes_redacted="[REDACTED]",
             state=EmployeeState.ACTIVE,
         )
+        self._raw_summaries[employee_id] = {
+            "first_name": "Alice",
+            "last_name": "Example",
+            "payroll_number": "SYN-001",
+            "tax_code": "SYNTHETIC000X",
+            "birth_date": "2000-01-01",
+            "iban": "IT00SYNTHETIC0000000000000",
+            "job_title": "Synthetic tester",
+            "phone": "+390000000000",
+            "business_email": "alice@example.invalid",
+            "address": "Synthetic address",
+            "workplace": "Synthetic office",
+            "notes": "Synthetic notes",
+        }
         self._contracts[employee_id] = [
             ContractRecord(
                 contract_id="CON-SYNTH-001",
                 employee_id=employee_id,
+                stable_identifier=True,
+                actionable=True,
                 schedule="40h",
                 flexibility="none",
                 permanent=True,
@@ -145,6 +224,7 @@ class MockDicAdapter:
                 ),
             ),
         )
+        self._balance_corrections[(employee_id, 2026, 8, "ferie")] = "0"
         self._payrolls[employee_id] = [
             PayrollMetadata(
                 payroll_id="PAY-SYNTH-001",
@@ -159,6 +239,8 @@ class MockDicAdapter:
             DocumentMetadata(
                 document_id="DOC-SYNTH-001",
                 employee_id=employee_id,
+                stable_identifier=True,
+                actionable=True,
                 title_redacted="Documento sintetico [REDACTED]",
                 category="CV",
                 expiry_date=None,
@@ -261,6 +343,33 @@ class MockDicAdapter:
             (employee_id, year), BalanceResult(employee_id=employee_id, year=year, lines=())
         )
 
+    async def get_balance_correction_state(
+        self, employee_id: str, year: int, month: int, category: str
+    ) -> BalanceCorrectionState:
+        self._require_employee(employee_id)
+        if isinstance(month, bool) or month not in range(1, 13):
+            raise DicValidationError("month must be between 1 and 12")
+        normalized_category = category.strip().casefold()
+        matches = [
+            line
+            for line in (await self.get_balance(employee_id, year)).lines
+            if line.category.strip().casefold() == normalized_category
+        ]
+        if len(matches) != 1:
+            raise DicValidationError("balance category must identify exactly one row")
+        key = (employee_id, year, month, normalized_category)
+        try:
+            current = self._balance_corrections[key]
+        except KeyError as exc:
+            raise DicValidationError("balance month/category correction is unavailable") from exc
+        return BalanceCorrectionState(
+            employee_id=employee_id,
+            year=year,
+            month=month,
+            category=matches[0].category,
+            current_value=canonical_decimal_text(current),
+        )
+
     async def get_payroll_metadata(
         self, employee_id: str, year: int | None = None
     ) -> tuple[PayrollMetadata, ...]:
@@ -283,6 +392,139 @@ class MockDicAdapter:
                 continue
             result.append(document)
         return tuple(result)
+
+    async def get_state_digest(
+        self,
+        function_id: FunctionId,
+        employee_id: str | None,
+        parameters: Mapping[str, JsonValue],
+    ) -> OpaqueStateDigest:
+        """Key a canonical synthetic resource snapshot without exposing its material."""
+
+        execution_only = {
+            "safe_local_path",
+            "safe_local_sha256",
+            "safe_local_size",
+            "detected_mime",
+        }
+        clean_parameters = {
+            key: value for key, value in parameters.items() if key not in execution_only
+        }
+
+        if function_id in {FunctionId.EMP_CREATE_001, FunctionId.EMP_EXPORT_001}:
+            material: object = [
+                self._items[key].model_dump(mode="json") for key in sorted(self._items)
+            ]
+        else:
+            if employee_id is None:
+                raise DicValidationError("mutation state digest requires employee_id")
+            if function_id is FunctionId.EMP_DELETE_001 and employee_id not in self._items:
+                material = {"employee_id": employee_id, "state": "missing"}
+            elif function_id in _MOCK_SUMMARY_STATE_FUNCTIONS:
+                self._require_employee(employee_id)
+                if function_id is FunctionId.EMP_UPDATE_001:
+                    if not clean_parameters or set(clean_parameters).difference(_EMPLOYEE_FIELDS):
+                        raise DicValidationError("employee update state cannot be verified")
+                    if all(
+                        self._matches(self._raw_summaries[employee_id].get(key), value)
+                        for key, value in clean_parameters.items()
+                    ):
+                        raise DicValidationError("employee update would not change state")
+                material = {
+                    "item": self._items[employee_id].model_dump(mode="json"),
+                    "raw_summary": self._raw_summaries[employee_id],
+                    "summary": self._summaries[employee_id].model_dump(mode="json"),
+                }
+            elif function_id in {FunctionId.EMP_CONTRACT_002, FunctionId.EMP_CONTRACT_003}:
+                self._require_employee(employee_id)
+                contract_records = self._contracts.get(employee_id, ())
+                contract_id = clean_parameters.get("contract_id")
+                if isinstance(contract_id, str):
+                    contract_matches = [
+                        record for record in contract_records if record.contract_id == contract_id
+                    ]
+                    if (
+                        len(contract_matches) != 1
+                        or not contract_matches[0].stable_identifier
+                        or not contract_matches[0].actionable
+                    ):
+                        raise DicValidationError("contract target is not stable and actionable")
+                    if function_id is FunctionId.EMP_CONTRACT_002:
+                        expected = {
+                            key: value
+                            for key, value in clean_parameters.items()
+                            if key in _CONTRACT_FIELDS
+                        }
+                        if not expected:
+                            raise DicValidationError("contract update state cannot be verified")
+                        if all(
+                            self._matches(getattr(contract_matches[0], key), value)
+                            for key, value in expected.items()
+                        ):
+                            raise DicValidationError("contract update would not change state")
+                material = [record.model_dump(mode="json") for record in contract_records]
+            elif function_id is FunctionId.EMP_MAT_002:
+                self._require_employee(employee_id)
+                material = [
+                    record.model_dump(mode="json")
+                    for record in self._maturations.get(employee_id, ())
+                ]
+            elif function_id is FunctionId.EMP_BAL_002:
+                self._require_employee(employee_id)
+                material = {
+                    "balances": [
+                        value.model_dump(mode="json")
+                        for key, value in sorted(self._balances.items())
+                        if key[0] == employee_id
+                    ],
+                    "corrections": [
+                        [list(key[1:]), value]
+                        for key, value in sorted(self._balance_corrections.items())
+                        if key[0] == employee_id
+                    ],
+                }
+            elif function_id is FunctionId.EMP_RBAC_002:
+                self._require_employee(employee_id)
+                material = {
+                    "roles": self._roles[employee_id].model_dump(mode="json"),
+                    "time_access": self._time_access[employee_id].model_dump(mode="json"),
+                }
+            elif function_id in {
+                FunctionId.EMP_DOC_002,
+                FunctionId.EMP_DOC_003,
+                FunctionId.EMP_DOC_004,
+                FunctionId.EMP_DOC_005,
+            }:
+                self._require_employee(employee_id)
+                document_records = self._documents.get(employee_id, ())
+                document_id = clean_parameters.get("document_id")
+                if isinstance(document_id, str):
+                    document_matches = [
+                        record for record in document_records if record.document_id == document_id
+                    ]
+                    if (
+                        len(document_matches) != 1
+                        or not document_matches[0].stable_identifier
+                        or not document_matches[0].actionable
+                    ):
+                        raise DicValidationError("document target is not stable and actionable")
+                material = [record.model_dump(mode="json") for record in document_records]
+            else:
+                raise DicValidationError("function has no mutation state digest plan")
+
+        canonical = json.dumps(
+            {
+                "employee_id": employee_id,
+                "function_id": function_id.value,
+                "parameters": clean_parameters,
+                "schema": "bh-dic-mock-state-v1",
+                "state": material,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hmac.new(self._state_digest_key, canonical, hashlib.sha256).hexdigest()
 
     @staticmethod
     def _string_parameter(action: PreparedAction, key: str, *, required: bool = True) -> str | None:
@@ -310,32 +552,61 @@ class MockDicAdapter:
         )
 
     def _execute_employee_write(self, action: PreparedAction, employee_id: str) -> None:
+        parameterless = {
+            FunctionId.EMP_CONNECT_001,
+            FunctionId.EMP_CONNECT_002,
+            FunctionId.EMP_INVITE_001,
+            FunctionId.EMP_INVITE_002,
+            FunctionId.EMP_STATUS_001,
+            FunctionId.EMP_STATUS_002,
+            FunctionId.EMP_DELETE_001,
+        }
+        if action.function_id in parameterless and action.parameters:
+            raise DicValidationError("action does not accept parameters")
         if action.function_id is FunctionId.EMP_UPDATE_001:
-            summary = self._summaries[employee_id]
-            allowed = {
-                "payroll_number",
-                "job_title",
-                "workplace",
-                "first_name",
-                "last_name",
-            }
-            unknown = set(action.parameters).difference(allowed)
+            unknown = set(action.parameters).difference(_EMPLOYEE_FIELDS)
             if unknown:
                 raise DicValidationError(f"unsupported employee fields: {sorted(unknown)}")
-            updates: dict[str, JsonValue] = {}
-            for key in ("payroll_number", "job_title", "workplace"):
-                value = action.parameters.get(key)
-                if value is not None:
-                    updates[key] = value
-            for source, destination in (
-                ("first_name", "first_name_redacted"),
-                ("last_name", "last_name_redacted"),
-            ):
-                value = action.parameters.get(source)
-                if isinstance(value, str) and value:
-                    updates[destination] = f"{value[0].upper()}."
+            if not action.parameters:
+                raise DicValidationError("employee update requires at least one field")
+            raw = self._raw_summaries[employee_id]
+            if all(self._matches(raw.get(key), value) for key, value in action.parameters.items()):
+                raise DicValidationError("employee update would not change state")
+            for key, value in action.parameters.items():
+                if not isinstance(value, str) or not value.strip():
+                    raise DicValidationError(f"parameter {key!r} must be a non-empty string")
+                raw[key] = value.strip()
+            summary = self._summaries[employee_id]
+            updates: dict[str, JsonValue] = {
+                "first_name_redacted": f"{raw['first_name'][0].upper()}.",
+                "last_name_redacted": f"{raw['last_name'][0].upper()}.",
+                "payroll_number": raw["payroll_number"],
+                "tax_code_redacted": f"************{raw['tax_code'][-4:]}",
+                "birth_date_redacted": f"****-**-{raw['birth_date'][-2:]}",
+                "iban_redacted": f"**********************{raw['iban'][-4:]}",
+                "job_title": raw["job_title"],
+                "phone_redacted": f"********{raw['phone'][-4:]}",
+                "business_email_redacted": "***@example.invalid",
+                "address_redacted": "[REDACTED]",
+                "workplace": raw["workplace"],
+                "notes_redacted": "[REDACTED]",
+            }
             self._summaries[employee_id] = EmployeeSummary.model_validate(
                 {**summary.model_dump(), **updates}
+            )
+            item = self._items[employee_id]
+            self._items[employee_id] = EmployeeListItem.model_validate(
+                {
+                    **item.model_dump(),
+                    "display_name_redacted": (
+                        f"{raw['first_name'][0].upper()}. {raw['last_name'][0].upper()}."
+                    ),
+                    "email_redacted": "***@example.invalid",
+                    "tax_code_redacted": f"************{raw['tax_code'][-4:]}",
+                    "job_title": raw["job_title"],
+                    "payroll_number": raw["payroll_number"],
+                    "workplace": raw["workplace"],
+                }
             )
         elif action.function_id is FunctionId.EMP_CONNECT_001:
             self._set_account_state(employee_id, AccountState.CONNECTED)
@@ -343,6 +614,7 @@ class MockDicAdapter:
             self._set_account_state(employee_id, AccountState.NOT_CONNECTED)
         elif action.function_id is FunctionId.EMP_INVITE_001:
             self._set_account_state(employee_id, AccountState.INVITED)
+            self._effect_events.add(action.idempotency_key)
         elif action.function_id is FunctionId.EMP_INVITE_002:
             self._set_account_state(employee_id, AccountState.NOT_CONNECTED)
         elif action.function_id is FunctionId.EMP_STATUS_001:
@@ -350,38 +622,34 @@ class MockDicAdapter:
         elif action.function_id is FunctionId.EMP_STATUS_002:
             self._set_employee_state(employee_id, EmployeeState.ACTIVE)
         elif action.function_id is FunctionId.EMP_RBAC_002:
-            roles_value = action.parameters.get("roles", [])
-            if not isinstance(roles_value, list):
-                raise DicValidationError("roles must be a list of strings")
-            role_names = [value for value in roles_value if isinstance(value, str)]
-            if len(role_names) != len(roles_value):
-                raise DicValidationError("roles must be a list of strings")
+            if set(action.parameters) != {"role_name", "enabled"}:
+                raise DicValidationError("role update requires only role_name and enabled")
+            role_name = self._string_parameter(action, "role_name")
+            enabled = action.parameters.get("enabled")
+            if not isinstance(enabled, bool):
+                raise DicValidationError("enabled must be boolean")
+            current_roles = self._roles[employee_id]
+            matches = [
+                index
+                for index, role in enumerate(current_roles.roles)
+                if role.name.casefold() == (role_name or "").casefold()
+            ]
+            if len(matches) != 1:
+                raise DicValidationError("role_name must identify exactly one role")
+            roles = list(current_roles.roles)
+            if roles[matches[0]].enabled is enabled:
+                raise DicValidationError("role state already matches requested value")
+            roles[matches[0]] = RoleAssignment(name=roles[matches[0]].name, enabled=enabled)
             self._roles[employee_id] = RolesResult(
                 employee_id=employee_id,
-                roles=tuple(RoleAssignment(name=value, enabled=True) for value in role_names),
+                groups=current_roles.groups,
+                roles=tuple(roles),
             )
-            time_fields = {
-                "timestamping_enabled",
-                "attendance_sheet_access",
-                "shift_management",
-                "expense_access",
-            }
-            time_updates = {
-                key: value
-                for key, value in action.parameters.items()
-                if key in time_fields and isinstance(value, bool)
-            }
-            if time_updates:
-                current = self._time_access.get(
-                    employee_id, TimeAccessResult(employee_id=employee_id)
-                )
-                self._time_access[employee_id] = TimeAccessResult.model_validate(
-                    {**current.model_dump(), **time_updates}
-                )
         elif action.function_id is FunctionId.EMP_DELETE_001:
             for store in (
                 self._items,
                 self._summaries,
+                self._raw_summaries,
                 self._contracts,
                 self._roles,
                 self._time_access,
@@ -394,24 +662,59 @@ class MockDicAdapter:
                 balance_key for balance_key in self._balances if balance_key[0] == employee_id
             ]:
                 self._balances.pop(balance_key, None)
+            for correction_key in [
+                correction_key
+                for correction_key in self._balance_corrections
+                if correction_key[0] == employee_id
+            ]:
+                self._balance_corrections.pop(correction_key, None)
 
     def _execute_create(self, action: PreparedAction) -> str:
-        employee_id = self._string_parameter(action, "employee_id", required=False)
-        employee_id = employee_id or f"EMP-MOCK-{action.request_fingerprint[:8].upper()}"
+        allowed = _EMPLOYEE_FIELDS | {"creation_mode"}
+        unknown = set(action.parameters).difference(allowed)
+        if unknown:
+            raise DicValidationError(f"unsupported create fields: {sorted(unknown)}")
+        if action.parameters.get("creation_mode", "manual") != "manual":
+            raise DicValidationError("only deterministic manual creation is implemented")
+        first_name = self._string_parameter(action, "first_name")
+        last_name = self._string_parameter(action, "last_name")
+        employee_id = f"EMP-MOCK-{action.request_fingerprint[:8].upper()}"
         if employee_id in self._items:
             raise DicValidationError("employee already exists")
-        display_name = self._string_parameter(action, "display_name_redacted", required=False)
-        display_name = display_name or "N. E."
+        raw = {
+            key: self._string_parameter(action, key, required=False) or ""
+            for key in _EMPLOYEE_FIELDS
+        }
+        raw["first_name"] = cast(str, first_name)
+        raw["last_name"] = cast(str, last_name)
+        self._raw_summaries[employee_id] = raw
         self._items[employee_id] = EmployeeListItem(
             employee_id=employee_id,
-            display_name_redacted=display_name,
+            display_name_redacted=f"{raw['first_name'][0].upper()}. {raw['last_name'][0].upper()}.",
+            email_redacted="***@example.invalid" if raw["business_email"] else None,
+            tax_code_redacted=(f"************{raw['tax_code'][-4:]}" if raw["tax_code"] else None),
+            job_title=raw["job_title"] or None,
+            payroll_number=raw["payroll_number"] or None,
+            workplace=raw["workplace"] or None,
             employee_state=EmployeeState.ACTIVE,
             account_state=AccountState.NOT_CONNECTED,
         )
         self._summaries[employee_id] = EmployeeSummary(
             employee_id=employee_id,
-            first_name_redacted="N.",
-            last_name_redacted="E.",
+            first_name_redacted=f"{raw['first_name'][0].upper()}.",
+            last_name_redacted=f"{raw['last_name'][0].upper()}.",
+            payroll_number=raw["payroll_number"] or None,
+            tax_code_redacted=(f"************{raw['tax_code'][-4:]}" if raw["tax_code"] else None),
+            birth_date_redacted=(
+                f"****-**-{raw['birth_date'][-2:]}" if raw["birth_date"] else None
+            ),
+            iban_redacted=(f"**********************{raw['iban'][-4:]}" if raw["iban"] else None),
+            job_title=raw["job_title"] or None,
+            phone_redacted=(f"********{raw['phone'][-4:]}" if raw["phone"] else None),
+            business_email_redacted=("***@example.invalid" if raw["business_email"] else None),
+            address_redacted=("[REDACTED]" if raw["address"] else None),
+            workplace=raw["workplace"] or None,
+            notes_redacted=("[REDACTED]" if raw["notes"] else None),
             state=EmployeeState.ACTIVE,
         )
         return employee_id
@@ -419,25 +722,61 @@ class MockDicAdapter:
     def _execute_related_write(self, action: PreparedAction, employee_id: str) -> None:
         suffix = action.request_fingerprint[:12].upper()
         if action.function_id is FunctionId.EMP_CONTRACT_002:
+            unknown = set(action.parameters).difference(_CONTRACT_FIELDS | {"contract_id"})
+            if unknown:
+                raise DicValidationError(f"unsupported contract fields: {sorted(unknown)}")
             contract_id = self._string_parameter(action, "contract_id", required=False)
-            contract_record = ContractRecord(
-                contract_id=contract_id or f"CON-{suffix}",
-                employee_id=employee_id,
-                schedule=self._string_parameter(action, "schedule", required=False),
-                description=self._string_parameter(action, "description", required=False),
-                status="active",
-            )
             contracts = self._contracts.setdefault(employee_id, [])
-            if contract_id is None:
+            existing: ContractRecord | None = None
+            existing_index: int | None = None
+            if contract_id is not None:
+                matches = [
+                    (index, record)
+                    for index, record in enumerate(contracts)
+                    if record.contract_id == contract_id
+                ]
+                if len(matches) != 1 or not matches[0][1].actionable:
+                    raise DicNotFoundError("stable actionable contract not found")
+                existing_index, existing = matches[0]
+                contract_expected = {
+                    key: value
+                    for key, value in action.parameters.items()
+                    if key in _CONTRACT_FIELDS
+                }
+                if contract_expected and all(
+                    self._matches(getattr(existing, key), value)
+                    for key, value in contract_expected.items()
+                ):
+                    raise DicValidationError("contract update would not change state")
+            values: dict[str, object] = existing.model_dump() if existing is not None else {}
+            for field in _CONTRACT_FIELDS:
+                value = action.parameters.get(field)
+                if value is None:
+                    continue
+                if field == "permanent":
+                    if not isinstance(value, bool):
+                        raise DicValidationError("permanent must be boolean")
+                elif not isinstance(value, str) or not value.strip():
+                    raise DicValidationError(f"parameter {field!r} must be a non-empty string")
+                values[field] = value
+            contract_record = ContractRecord.model_validate(
+                {
+                    **values,
+                    "contract_id": contract_id or f"CON-{suffix}",
+                    "employee_id": employee_id,
+                    "stable_identifier": True,
+                    "actionable": True,
+                    "status": values.get("status", "active"),
+                }
+            )
+            if existing_index is None:
                 contracts.append(contract_record)
             else:
-                for index, existing in enumerate(contracts):
-                    if existing.contract_id == contract_id:
-                        contracts[index] = contract_record
-                        break
-                else:
-                    contracts.append(contract_record)
+                contracts[existing_index] = contract_record
+            self._effect_targets[action.idempotency_key] = contract_record.contract_id
         elif action.function_id is FunctionId.EMP_CONTRACT_003:
+            if set(action.parameters) != {"contract_id"}:
+                raise DicValidationError("contract delete requires only contract_id")
             contract_id = self._string_parameter(action, "contract_id")
             contracts = self._contracts.get(employee_id, [])
             remaining_contracts = [
@@ -447,52 +786,107 @@ class MockDicAdapter:
                 raise DicNotFoundError("contract not found")
             self._contracts[employee_id] = remaining_contracts
         elif action.function_id is FunctionId.EMP_MAT_002:
+            if set(action.parameters).difference({"category", "valid_from", "valid_to"}):
+                raise DicValidationError("maturation contains unsupported fields")
             category = self._string_parameter(action, "category")
-            self._maturations.setdefault(employee_id, []).append(
-                MaturationRecord(
-                    maturation_id=f"MAT-{suffix}",
-                    employee_id=employee_id,
-                    category=cast(str, category),
-                    valid_from=self._string_parameter(action, "valid_from", required=False),
-                    valid_to=self._string_parameter(action, "valid_to", required=False),
-                    status="valid",
-                )
+            maturation_record = MaturationRecord(
+                maturation_id=f"MAT-{suffix}",
+                employee_id=employee_id,
+                category=cast(str, category),
+                valid_from=self._string_parameter(action, "valid_from", required=False),
+                valid_to=self._string_parameter(action, "valid_to", required=False),
+                status="valid",
             )
+            self._maturations.setdefault(employee_id, []).append(maturation_record)
+            self._effect_targets[action.idempotency_key] = maturation_record.maturation_id
         elif action.function_id is FunctionId.EMP_DOC_002:
-            category = self._string_parameter(action, "category", required=False)
-            self._documents.setdefault(employee_id, []).append(
-                DocumentMetadata(
-                    document_id=f"DOC-{suffix}",
-                    employee_id=employee_id,
-                    title_redacted="Documento caricato [REDACTED]",
-                    category=category,
-                    state="uploaded",
-                )
-            )
-        elif action.function_id is FunctionId.EMP_BAL_002:
-            year = action.parameters.get("year")
+            allowed = {"upload_id", "category", "expiry_date"} | _UPLOAD_INTERNAL_FIELDS
+            if set(action.parameters).difference(allowed):
+                raise DicValidationError("document upload contains unsupported metadata")
             category = self._string_parameter(action, "category")
+            uploaded_document = DocumentMetadata(
+                document_id=f"DOC-{suffix}",
+                employee_id=employee_id,
+                stable_identifier=True,
+                actionable=True,
+                title_redacted="Documento caricato [REDACTED]",
+                category=category,
+                expiry_date=self._string_parameter(action, "expiry_date", required=False),
+                state="uploaded",
+            )
+            self._documents.setdefault(employee_id, []).append(uploaded_document)
+            self._effect_targets[action.idempotency_key] = uploaded_document.document_id
+        elif action.function_id is FunctionId.EMP_BAL_002:
+            if set(action.parameters) != {
+                "year",
+                "month",
+                "category",
+                "previous_value",
+                "amount",
+            }:
+                raise DicValidationError("balance correction parameter set is invalid")
+            year = action.parameters.get("year")
+            month = action.parameters.get("month")
+            category = self._string_parameter(action, "category")
+            previous_value = self._string_parameter(action, "previous_value")
             amount = self._string_parameter(action, "amount")
             if not isinstance(year, int) or isinstance(year, bool):
                 raise DicValidationError("year must be an integer")
+            if not isinstance(month, int) or isinstance(month, bool) or month not in range(1, 13):
+                raise DicValidationError("month must be between 1 and 12")
+            try:
+                expected = canonical_decimal_text(previous_value)
+                canonical_amount = canonical_decimal_text(amount)
+            except ValueError as exc:
+                raise DicValidationError("balance values must be canonical decimals") from exc
+            state = self._balance_corrections.get(
+                (employee_id, year, month, (category or "").casefold())
+            )
+            if state is None:
+                raise DicValidationError("balance correction target is unavailable")
+            if canonical_decimal_text(state) != expected:
+                raise DicValidationError("balance correction precondition changed")
             balance = self._balances.get(
                 (employee_id, year), BalanceResult(employee_id=employee_id, year=year, lines=())
             )
             lines = list(balance.lines)
-            for index, line in enumerate(lines):
-                if line.category == category:
-                    lines[index] = BalanceLine.model_validate(
-                        {**line.model_dump(), "corrections": amount}
-                    )
-                    break
-            else:
-                lines.append(BalanceLine(category=category or "unknown", corrections=amount))
+            matching_indexes = [
+                index
+                for index, line in enumerate(lines)
+                if line.category.casefold() == (category or "").casefold()
+            ]
+            if len(matching_indexes) != 1:
+                raise DicValidationError("balance category must identify exactly one row")
+            index = matching_indexes[0]
+            lines[index] = BalanceLine.model_validate(
+                {**lines[index].model_dump(), "corrections": canonical_amount}
+            )
             self._balances[(employee_id, year)] = BalanceResult(
                 employee_id=employee_id, year=year, lines=tuple(lines)
             )
+            self._balance_corrections[(employee_id, year, month, (category or "").casefold())] = (
+                canonical_amount
+            )
+        elif action.function_id is FunctionId.EMP_DOC_003:
+            if set(action.parameters) != {"document_id"}:
+                raise DicValidationError("document download requires only document_id")
+            document_id = self._string_parameter(action, "document_id")
+            download_matches = [
+                document
+                for document in self._documents.get(employee_id, ())
+                if document.document_id == document_id and document.actionable
+            ]
+            if len(download_matches) != 1:
+                raise DicNotFoundError("stable actionable document not found")
+            self._effect_events.add(action.idempotency_key)
         elif action.function_id is FunctionId.EMP_DOC_004:
+            if set(action.parameters).difference({"document_id", "category", "expiry_date"}):
+                raise DicValidationError("document update contains unsupported metadata")
+            if not ({"category", "expiry_date"} & set(action.parameters)):
+                raise DicValidationError("document update requires category or expiry_date")
             document_id = self._string_parameter(action, "document_id")
             category = self._string_parameter(action, "category", required=False)
+            expiry_date = self._string_parameter(action, "expiry_date", required=False)
             document_records = self._documents.get(employee_id, [])
             found = False
             for index, document_record in enumerate(document_records):
@@ -501,6 +895,7 @@ class MockDicAdapter:
                         {
                             **document_record.model_dump(),
                             "category": category or document_record.category,
+                            "expiry_date": expiry_date or document_record.expiry_date,
                         }
                     )
                     found = True
@@ -508,6 +903,8 @@ class MockDicAdapter:
             if not found:
                 raise DicNotFoundError("document not found")
         elif action.function_id is FunctionId.EMP_DOC_005:
+            if set(action.parameters) != {"document_id"}:
+                raise DicValidationError("document delete requires only document_id")
             document_id = self._string_parameter(action, "document_id")
             document_records = self._documents.get(employee_id, [])
             remaining = [
@@ -519,6 +916,186 @@ class MockDicAdapter:
                 raise DicNotFoundError("document not found")
             self._documents[employee_id] = remaining
 
+    @staticmethod
+    def _matches(actual: object, expected: object) -> bool:
+        if isinstance(actual, str) and isinstance(expected, str):
+            return actual.strip().casefold() == expected.strip().casefold()
+        return actual == expected
+
+    def _postcondition_applied(self, action: PreparedAction) -> bool:
+        employee_id = action.employee_id
+        if action.function_id is FunctionId.EMP_CREATE_001:
+            target = self._effect_targets.get(action.idempotency_key)
+            if target is None or target not in self._raw_summaries:
+                return False
+            raw = self._raw_summaries[target]
+            return all(
+                key == "creation_mode" or self._matches(raw.get(key), value)
+                for key, value in action.parameters.items()
+            )
+        if action.function_id is FunctionId.EMP_EXPORT_001:
+            return action.idempotency_key in self._effect_events
+        if employee_id is None:
+            return False
+        if action.function_id is FunctionId.EMP_DELETE_001:
+            return employee_id not in self._items
+        if employee_id not in self._items:
+            return False
+        if action.function_id is FunctionId.EMP_UPDATE_001:
+            raw = self._raw_summaries[employee_id]
+            return all(
+                self._matches(raw.get(key), value) for key, value in action.parameters.items()
+            )
+        account_states = {
+            FunctionId.EMP_CONNECT_001: AccountState.CONNECTED,
+            FunctionId.EMP_CONNECT_002: AccountState.NOT_CONNECTED,
+            FunctionId.EMP_INVITE_002: AccountState.NOT_CONNECTED,
+        }
+        if action.function_id in account_states:
+            return self._items[employee_id].account_state is account_states[action.function_id]
+        if action.function_id is FunctionId.EMP_INVITE_001:
+            return (
+                action.idempotency_key in self._effect_events
+                and self._items[employee_id].account_state is AccountState.INVITED
+            )
+        employee_states = {
+            FunctionId.EMP_STATUS_001: EmployeeState.INACTIVE,
+            FunctionId.EMP_STATUS_002: EmployeeState.ACTIVE,
+        }
+        if action.function_id in employee_states:
+            return self._items[employee_id].employee_state is employee_states[action.function_id]
+        if action.function_id is FunctionId.EMP_RBAC_002:
+            role_name = action.parameters.get("role_name")
+            enabled = action.parameters.get("enabled")
+            return (
+                isinstance(role_name, str)
+                and isinstance(enabled, bool)
+                and sum(
+                    role.name.casefold() == role_name.casefold() and role.enabled is enabled
+                    for role in self._roles[employee_id].roles
+                )
+                == 1
+            )
+        if action.function_id is FunctionId.EMP_CONTRACT_002:
+            contract_target = self._effect_targets.get(action.idempotency_key)
+            contract_matches = [
+                contract
+                for contract in self._contracts.get(employee_id, ())
+                if contract.contract_id == contract_target
+            ]
+            return len(contract_matches) == 1 and all(
+                key == "contract_id" or self._matches(getattr(contract_matches[0], key), value)
+                for key, value in action.parameters.items()
+            )
+        if action.function_id is FunctionId.EMP_CONTRACT_003:
+            deleted_contract_id = action.parameters.get("contract_id")
+            return all(
+                contract.contract_id != deleted_contract_id
+                for contract in self._contracts.get(employee_id, ())
+            )
+        if action.function_id is FunctionId.EMP_MAT_002:
+            maturation_target = self._effect_targets.get(action.idempotency_key)
+            maturation_matches = [
+                maturation
+                for maturation in self._maturations.get(employee_id, ())
+                if maturation.maturation_id == maturation_target
+            ]
+            return len(maturation_matches) == 1 and all(
+                self._matches(getattr(maturation_matches[0], key), value)
+                for key, value in action.parameters.items()
+            )
+        if action.function_id is FunctionId.EMP_BAL_002:
+            year = action.parameters.get("year")
+            month = action.parameters.get("month")
+            category = action.parameters.get("category")
+            amount = action.parameters.get("amount")
+            if (
+                not isinstance(year, int)
+                or isinstance(year, bool)
+                or not isinstance(month, int)
+                or isinstance(month, bool)
+                or not isinstance(category, str)
+            ):
+                return False
+            try:
+                expected = canonical_decimal_text(amount)
+            except ValueError:
+                return False
+            return (
+                self._balance_corrections.get((employee_id, year, month, category.casefold()))
+                == expected
+            )
+        if action.function_id is FunctionId.EMP_DOC_002:
+            uploaded_document_id = self._effect_targets.get(action.idempotency_key)
+            uploaded_matches = [
+                document
+                for document in self._documents.get(employee_id, ())
+                if document.document_id == uploaded_document_id
+            ]
+            return len(uploaded_matches) == 1 and all(
+                key in _UPLOAD_INTERNAL_FIELDS
+                or key == "upload_id"
+                or self._matches(getattr(uploaded_matches[0], key), value)
+                for key, value in action.parameters.items()
+            )
+        if action.function_id is FunctionId.EMP_DOC_003:
+            return action.idempotency_key in self._effect_events
+        if action.function_id is FunctionId.EMP_DOC_004:
+            updated_document_id = action.parameters.get("document_id")
+            updated_matches = [
+                document
+                for document in self._documents.get(employee_id, ())
+                if document.document_id == updated_document_id
+            ]
+            return len(updated_matches) == 1 and all(
+                key == "document_id" or self._matches(getattr(updated_matches[0], key), value)
+                for key, value in action.parameters.items()
+            )
+        if action.function_id is FunctionId.EMP_DOC_005:
+            deleted_document_id = action.parameters.get("document_id")
+            return all(
+                document.document_id != deleted_document_id
+                for document in self._documents.get(employee_id, ())
+            )
+        return False
+
+    def _state_marker(self) -> str:
+        """Canonical synthetic state marker used only to report whether state changed."""
+
+        return json.dumps(
+            {
+                "items": {
+                    key: value.model_dump(mode="json") for key, value in sorted(self._items.items())
+                },
+                "summaries": {
+                    key: value.model_dump(mode="json")
+                    for key, value in sorted(self._summaries.items())
+                },
+                "raw_summaries": self._raw_summaries,
+                "contracts": {
+                    key: [record.model_dump(mode="json") for record in value]
+                    for key, value in sorted(self._contracts.items())
+                },
+                "roles": {
+                    key: value.model_dump(mode="json") for key, value in sorted(self._roles.items())
+                },
+                "maturations": {
+                    key: [record.model_dump(mode="json") for record in value]
+                    for key, value in sorted(self._maturations.items())
+                },
+                "documents": {
+                    key: [record.model_dump(mode="json") for record in value]
+                    for key, value in sorted(self._documents.items())
+                },
+                "corrections": [
+                    [list(key), value] for key, value in sorted(self._balance_corrections.items())
+                ],
+                "events": sorted(self._effect_events),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
     async def execute_prepared(self, action: PreparedAction) -> ExecutionResult:
         self._require_open()
         existing = self._executions.get(action.idempotency_key)
@@ -526,11 +1103,17 @@ class MockDicAdapter:
             return existing
         if action.function_id not in MUTATING_FUNCTIONS | FORBIDDEN_FUNCTIONS:
             raise DicValidationError("read functions cannot be executed as prepared writes")
+        before_state = self._state_marker()
         employee_id = action.employee_id
         details: dict[str, JsonValue] = {}
         if action.function_id is FunctionId.EMP_CREATE_001:
-            details["employee_id"] = self._execute_create(action)
+            created_employee_id = self._execute_create(action)
+            self._effect_targets[action.idempotency_key] = created_employee_id
+            details["employee_id"] = created_employee_id
         elif action.function_id is FunctionId.EMP_EXPORT_001:
+            if set(action.parameters).difference({"scope", "year"}):
+                raise DicValidationError("export contains unsupported parameters")
+            self._effect_events.add(action.idempotency_key)
             details["artifact_id"] = f"EXPORT-{action.request_fingerprint[:12].upper()}"
         else:
             if employee_id is None:
@@ -540,7 +1123,9 @@ class MockDicAdapter:
             self._execute_related_write(action, employee_id)
             if action.function_id is FunctionId.EMP_DOC_003:
                 details["artifact_id"] = f"DOCUMENT-{action.request_fingerprint[:12].upper()}"
-        changed = action.function_id not in {
+        if not self._postcondition_applied(action):
+            raise DicValidationError("synthetic postcondition could not be verified")
+        changed = self._state_marker() != before_state and action.function_id not in {
             FunctionId.EMP_DOC_003,
             FunctionId.EMP_EXPORT_001,
         }
@@ -569,10 +1154,17 @@ class MockDicAdapter:
                 state=ReconciliationState.CONFIRMED_NOT_APPLIED,
                 detail="idempotency key has no synthetic execution",
             )
+        verified = self._postcondition_applied(action)
         return ReconciliationResult(
             action_id=action.action_id,
-            state=ReconciliationState.CONFIRMED_APPLIED,
-            detail="synthetic execution record and postcondition are present",
+            state=(
+                ReconciliationState.CONFIRMED_APPLIED if verified else ReconciliationState.UNKNOWN
+            ),
+            detail=(
+                "synthetic postcondition is currently present"
+                if verified
+                else "synthetic state no longer proves the recorded postcondition"
+            ),
         )
 
     async def close(self) -> None:

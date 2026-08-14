@@ -2,18 +2,45 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import re
 from collections.abc import Sequence
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Protocol, TypedDict
 from urllib.parse import urljoin, urlparse
 
 from bh_dic.dic.errors import DicConfigurationError, DicUiChangedError, DicValidationError
+from bh_dic.dic.models import OpaqueStateDigest
 from bh_dic.dic.selectors import (
     DEFAULT_SELECTORS,
     SelectorCandidate,
     SelectorKind,
     SelectorRegistry,
 )
+
+
+class PlaywrightFilePayload(TypedDict):
+    name: str
+    mimeType: str
+    buffer: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedUploadPayload:
+    """In-memory file capability; content is deliberately absent from repr."""
+
+    name: str
+    mime_type: str
+    buffer: bytes = field(repr=False)
+
+    def as_playwright(self) -> PlaywrightFilePayload:
+        return {
+            "name": self.name,
+            "mimeType": self.mime_type,
+            "buffer": self.buffer,
+        }
 
 
 class LocatorLike(Protocol):
@@ -40,6 +67,8 @@ class LocatorLike(Protocol):
 
     async def inner_text(self) -> str: ...
 
+    async def evaluate(self, expression: str) -> object: ...
+
     async def get_attribute(self, name: str) -> str | None: ...
 
     async def input_value(self) -> str: ...
@@ -56,7 +85,7 @@ class LocatorLike(Protocol):
 
     async def set_checked(self, checked: bool) -> None: ...
 
-    async def set_input_files(self, files: str | Sequence[str]) -> None: ...
+    async def set_input_files(self, files: str | Sequence[str] | PlaywrightFilePayload) -> None: ...
 
 
 class PageLike(LocatorLike, Protocol):
@@ -86,6 +115,38 @@ class BaseDicPage:
     """Base page that only navigates within the configured HTTPS origin."""
 
     route_template: str
+
+    _RAW_DOM_STATE_SCRIPT = """
+    element => {
+      const clean = value => (value || "").replace(/\\s+/g, " ").trim();
+      const nodes = Array.from(element.querySelectorAll("*"));
+      return nodes
+        .filter(node => !["SCRIPT", "STYLE", "NOSCRIPT"].includes(node.tagName))
+        .map(node => {
+          const tag = node.tagName.toLowerCase();
+          const leafText = node.children.length === 0 ? clean(node.textContent) : "";
+          const state = {tag};
+          if (leafText) state.text = leafText;
+          if (node instanceof HTMLInputElement) {
+            if (node.type !== "hidden") state.value = node.value;
+            if (["checkbox", "radio"].includes(node.type)) state.checked = node.checked;
+          } else if (node instanceof HTMLTextAreaElement) {
+            state.value = node.value;
+          } else if (node instanceof HTMLSelectElement) {
+            state.value = node.value;
+          }
+          for (const name of [
+            "data-employee-id", "data-contract-id", "data-maturation-id",
+            "data-document-id", "data-payroll-id", "href", "aria-checked",
+            "aria-disabled", "aria-selected"
+          ]) {
+            if (node.hasAttribute(name)) state[name] = node.getAttribute(name);
+          }
+          return state;
+        })
+        .filter(state => Object.keys(state).length > 1);
+    }
+    """
 
     def __init__(
         self,
@@ -132,6 +193,35 @@ class BaseDicPage:
             raise DicUiChangedError("navigation left the configured DIC origin")
         if current.path.rstrip("/") != path.rstrip("/"):
             raise DicUiChangedError("browser reached an unexpected DIC route")
+
+    async def opaque_state_digest(
+        self, state_digest_key: bytes, *, scope: str
+    ) -> OpaqueStateDigest:
+        """HMAC raw DOM state in-page and return no source values to callers."""
+
+        if len(state_digest_key) < 32:
+            raise DicConfigurationError("DIC state digest key must contain at least 32 bytes")
+        body = self.page.locator("body")
+        try:
+            if await body.count() != 1:
+                raise DicUiChangedError("DIC page body is unavailable for state digest")
+            raw_state = await body.evaluate(self._RAW_DOM_STATE_SCRIPT)
+            canonical = json.dumps(
+                {
+                    "schema": "bh-dic-dom-state-v1",
+                    "scope": scope,
+                    "route": urlparse(self.page.url).path,
+                    "state": raw_state,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        except DicUiChangedError:
+            raise
+        except Exception as exc:
+            raise DicUiChangedError("DIC raw state could not be digested safely") from exc
+        return hmac.new(state_digest_key, canonical, hashlib.sha256).hexdigest()
 
     @staticmethod
     def _candidate_locator(root: LocatorLike, candidate: SelectorCandidate) -> LocatorLike:
@@ -230,10 +320,38 @@ class BaseDicPage:
         except Exception:
             return None
 
-    async def confirm_if_present(self) -> None:
+    async def confirm_if_present(
+        self, *, expected_identity: str | Sequence[str] | None = None
+    ) -> None:
         confirmation = await self.locate("common.confirm", required=False)
-        if confirmation is not None and await confirmation.is_visible():
-            await confirmation.click()
+        if confirmation is None or not await confirmation.is_visible():
+            if expected_identity is not None:
+                raise DicUiChangedError("identity-bound confirmation dialog is unavailable")
+            return
+        if expected_identity is not None:
+            dialog = await self.locate("common.confirm_dialog", required=False)
+            if dialog is None or not await dialog.is_visible():
+                raise DicUiChangedError("identity-bound confirmation dialog is unavailable")
+            dialog_text = (await dialog.inner_text()).strip().casefold()
+            expected = (
+                (expected_identity,)
+                if isinstance(expected_identity, str)
+                else tuple(expected_identity)
+            )
+            if (
+                not expected
+                or any(not value.strip() for value in expected)
+                or any(
+                    re.search(
+                        rf"(?<![\w-]){re.escape(value.strip().casefold())}(?![\w-])",
+                        dialog_text,
+                    )
+                    is None
+                    for value in expected
+                )
+            ):
+                raise DicUiChangedError("confirmation dialog does not match the approved target")
+        await confirmation.click()
 
     @staticmethod
     def redact_name(value: str | None) -> str | None:

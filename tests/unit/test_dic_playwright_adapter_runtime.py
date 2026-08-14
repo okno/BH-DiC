@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,23 +9,28 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import JsonValue, SecretStr
 
+from bh_dic.dic.catalog import MUTATING_FUNCTIONS
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
     DicAuthenticationError,
     DicAuthorizationError,
+    DicConfigurationError,
     DicReconciliationRequiredError,
     DicValidationError,
     DicWriteDisabledError,
 )
 from bh_dic.dic.models import (
     AccountState,
+    BalanceCorrectionState,
     BalanceResult,
     ContractRecord,
     DicCredentials,
     DocumentMetadata,
     DocumentQuery,
+    EmployeeFilter,
     EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
@@ -35,12 +42,15 @@ from bh_dic.dic.models import (
     PreparedAction,
     ReconciliationResult,
     ReconciliationState,
+    RoleAssignment,
     RolesResult,
     SessionState,
     SessionStatus,
     TimeAccessResult,
 )
-from bh_dic.dic.playwright_adapter import PlaywrightDicAdapter
+from bh_dic.dic.pages import VerifiedUploadPayload
+from bh_dic.dic.playwright_adapter import PlaywrightDicAdapter, _WriteBaseline
+from bh_dic.logging import JsonFormatter
 
 
 class UnusedSyntheticPage:
@@ -105,6 +115,7 @@ def _adapter(
         expected_tenant_id="TENANT-SYNTH-001",
         quarantine_root=quarantine_root,
         live_writes_enabled=live_writes_enabled,
+        state_digest_key=b"s" * 32,
     )
     return adapter, direct
 
@@ -215,21 +226,28 @@ async def test_dispatch_write_routes_every_supported_family_and_blocks_artifacts
     adapter._balance = SimpleNamespace(execute=AsyncMock())
     adapter._roles = SimpleNamespace(execute=AsyncMock())
     adapter._documents = SimpleNamespace(execute=AsyncMock())
-    upload_validation = AsyncMock()
-    monkeypatch.setattr(adapter, "_validate_document_upload_path", upload_validation)
+    sanitized_upload = _action(
+        FunctionId.EMP_DOC_002,
+        {"category": "CV"},
+    )
+    upload_payload = VerifiedUploadPayload(
+        name="document-upload.pdf",
+        mime_type="application/pdf",
+        buffer=b"synthetic",
+    )
+    upload_validation = AsyncMock(return_value=(sanitized_upload, upload_payload))
+    monkeypatch.setattr(adapter, "_validated_document_upload_action", upload_validation)
 
     cases = (
         (FunctionId.EMP_CREATE_001, adapter._employees.create_employee),
         (FunctionId.EMP_UPDATE_001, adapter._summary.execute),
         (FunctionId.EMP_CONNECT_001, adapter._summary.execute),
         (FunctionId.EMP_CONTRACT_002, adapter._contracts.execute),
-        (FunctionId.EMP_CONTRACT_003, adapter._contracts.execute),
         (FunctionId.EMP_MAT_002, adapter._maturations.execute),
         (FunctionId.EMP_BAL_002, adapter._balance.execute),
         (FunctionId.EMP_RBAC_002, adapter._roles.execute),
         (FunctionId.EMP_DOC_002, adapter._documents.execute),
         (FunctionId.EMP_DOC_004, adapter._documents.execute),
-        (FunctionId.EMP_DOC_005, adapter._documents.execute),
     )
     for function_id, method in cases:
         action = _action(function_id)
@@ -237,43 +255,197 @@ async def test_dispatch_write_routes_every_supported_family_and_blocks_artifacts
         await adapter._dispatch_write(action)
         assert method.await_count == before + 1
     upload_validation.assert_awaited_once()
+    adapter._documents.execute.assert_any_await(
+        sanitized_upload,
+        verified_upload=upload_payload,
+    )
 
-    with pytest.raises(DicWriteDisabledError, match="download"):
-        await adapter._dispatch_write(_action(FunctionId.EMP_DOC_003))
-    with pytest.raises(DicWriteDisabledError, match="exports"):
-        await adapter._dispatch_write(_action(FunctionId.EMP_EXPORT_001, employee_id=None))
+    for unavailable in (
+        FunctionId.EMP_INVITE_001,
+        FunctionId.EMP_CONTRACT_003,
+        FunctionId.EMP_DOC_003,
+        FunctionId.EMP_DOC_005,
+        FunctionId.EMP_EXPORT_001,
+    ):
+        with pytest.raises(DicWriteDisabledError, match="no exhaustive observable"):
+            await adapter._dispatch_write(
+                _action(
+                    unavailable,
+                    employee_id=(
+                        None if unavailable is FunctionId.EMP_EXPORT_001 else "EMP-SYNTH-001"
+                    ),
+                )
+            )
     with pytest.raises(DicValidationError, match="no deterministic write plan"):
         await adapter._dispatch_write(_action(FunctionId.EMP_READ_001))
 
 
 @pytest.mark.asyncio
-async def test_document_upload_path_must_be_inside_configured_quarantine(tmp_path) -> None:
+async def test_document_upload_path_must_be_inside_configured_quarantine(
+    tmp_path, monkeypatch
+) -> None:
     quarantine = (tmp_path / "quarantine").resolve()
     quarantine.mkdir()
-    inside = quarantine / "synthetic.pdf"
+    inside = quarantine / "7e57d004-2b97-4b22-9e41-4d548c3c1122"
     inside.write_bytes(b"synthetic")
     adapter, _ = _adapter(quarantine_root=quarantine)
-    await adapter._validate_document_upload_path(
-        _action(FunctionId.EMP_DOC_002, {"safe_local_path": str(inside)})
+    digest = hashlib.sha256(inside.read_bytes()).hexdigest()
+    execution_parameters: dict[str, JsonValue] = {
+        "safe_local_path": str(inside),
+        "safe_local_sha256": digest,
+        "safe_local_size": inside.stat().st_size,
+        "detected_mime": "application/pdf",
+        "category": "CV",
+    }
+    sanitized, verified_upload = await adapter._validated_document_upload_action(
+        _action(FunctionId.EMP_DOC_002, execution_parameters)
     )
+    assert verified_upload.name == "document-upload.pdf"
+    assert verified_upload.mime_type == "application/pdf"
+    assert verified_upload.buffer == b"synthetic"
+    assert str(inside) not in repr(verified_upload)
+    assert b"synthetic".__repr__() not in repr(verified_upload)
+    assert sanitized.parameters == {"category": "CV"}
+    assert {
+        "safe_local_path",
+        "safe_local_sha256",
+        "safe_local_size",
+        "detected_mime",
+    }.isdisjoint(sanitized.parameters)
+    assert "safe_local_path" not in repr(sanitized)
+    assert str(inside) not in repr(sanitized)
 
     no_root, _ = _adapter()
     with pytest.raises(DicWriteDisabledError, match="quarantine root"):
-        await no_root._validate_document_upload_path(_action(FunctionId.EMP_DOC_002))
+        await no_root._validated_document_upload_action(_action(FunctionId.EMP_DOC_002))
     with pytest.raises(DicValidationError, match="quarantined local path"):
-        await adapter._validate_document_upload_path(
+        await adapter._validated_document_upload_action(
             _action(FunctionId.EMP_DOC_002, {"safe_local_path": 1})
         )
-    with pytest.raises(DicValidationError, match="unavailable"):
-        await adapter._validate_document_upload_path(
-            _action(FunctionId.EMP_DOC_002, {"safe_local_path": str(quarantine / "missing")})
+    missing = quarantine / "opaque-missing-upload"
+    with pytest.raises(DicValidationError, match="unavailable") as missing_error:
+        await adapter._validated_document_upload_action(
+            _action(
+                FunctionId.EMP_DOC_002,
+                {**execution_parameters, "safe_local_path": str(missing)},
+            )
         )
+    record = logging.LogRecord(
+        "bh_dic.browser",
+        logging.ERROR,
+        __file__,
+        1,
+        "upload failed",
+        (),
+        (DicValidationError, missing_error.value, missing_error.value.__traceback__),
+    )
+    rendered_error = JsonFormatter(timezone="UTC").format(record)
+    assert str(missing) not in rendered_error
+    assert "opaque-missing-upload" not in rendered_error
+
+    def fail_open(*args, **kwargs):
+        del args, kwargs
+        raise OSError(f"cannot open {inside}")
+
+    monkeypatch.setattr(adapter, "_load_verified_upload", fail_open)
+    with pytest.raises(DicValidationError, match="unavailable") as open_error:
+        await adapter._validated_document_upload_action(
+            _action(FunctionId.EMP_DOC_002, execution_parameters)
+        )
+    open_record = logging.LogRecord(
+        "bh_dic.browser",
+        logging.ERROR,
+        __file__,
+        1,
+        "upload failed",
+        (),
+        (DicValidationError, open_error.value, open_error.value.__traceback__),
+    )
+    rendered_open_error = JsonFormatter(timezone="UTC").format(open_record)
+    assert str(inside) not in rendered_open_error
+    assert inside.name not in rendered_open_error
+    monkeypatch.undo()
     outside = (tmp_path / "outside.pdf").resolve()
     outside.write_bytes(b"synthetic")
     with pytest.raises(DicValidationError, match="outside quarantine"):
-        await adapter._validate_document_upload_path(
-            _action(FunctionId.EMP_DOC_002, {"safe_local_path": str(outside)})
+        await adapter._validated_document_upload_action(
+            _action(
+                FunctionId.EMP_DOC_002, {**execution_parameters, "safe_local_path": str(outside)}
+            )
         )
+    with pytest.raises(DicValidationError, match="integrity changed"):
+        await adapter._validated_document_upload_action(
+            _action(
+                FunctionId.EMP_DOC_002,
+                {**execution_parameters, "safe_local_sha256": "0" * 64},
+            )
+        )
+    with pytest.raises(DicValidationError, match="integrity changed"):
+        await adapter._validated_document_upload_action(
+            _action(
+                FunctionId.EMP_DOC_002,
+                {**execution_parameters, "safe_local_size": inside.stat().st_size + 1},
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_capability_is_sanitized_before_pom_and_never_returned(
+    tmp_path, caplog
+) -> None:
+    quarantine = (tmp_path / "quarantine").resolve()
+    quarantine.mkdir()
+    claimed = quarantine / "claimed.pdf"
+    claimed.write_bytes(b"synthetic claimed document")
+    sha256 = hashlib.sha256(claimed.read_bytes()).hexdigest()
+    action = _action(
+        FunctionId.EMP_DOC_002,
+        {
+            "safe_local_path": str(claimed),
+            "safe_local_sha256": sha256,
+            "safe_local_size": claimed.stat().st_size,
+            "detected_mime": "application/pdf",
+            "category": "CV",
+        },
+    )
+    adapter, _ = _adapter(
+        quarantine_root=quarantine,
+        live_writes_enabled=True,
+    )
+    adapter._auth = _auth()
+    adapter._documents = SimpleNamespace(
+        stable_document_ids=AsyncMock(return_value=frozenset({"DOC-OLD-001"})),
+        execute=AsyncMock(),
+        verify_uploaded_document=AsyncMock(return_value=True),
+    )
+
+    result = await adapter.execute_prepared(action)
+
+    pom_action = adapter._documents.execute.await_args.args[0]
+    assert pom_action.parameters == {
+        "category": "CV",
+    }
+    verified_upload = adapter._documents.execute.await_args.kwargs["verified_upload"]
+    assert isinstance(verified_upload, VerifiedUploadPayload)
+    assert verified_upload.name == "document-upload.pdf"
+    assert verified_upload.mime_type == "application/pdf"
+    assert verified_upload.buffer == claimed.read_bytes()
+    assert action.request_fingerprint == "b" * 64
+    digest_scope = adapter._state_scope(action.function_id, action.employee_id, action.parameters)
+    rendered = " ".join((repr(pom_action), result.model_dump_json(), caplog.text))
+    for internal_name in (
+        "safe_local_path",
+        "safe_local_sha256",
+        "safe_local_size",
+        "detected_mime",
+    ):
+        assert internal_name not in rendered
+        assert internal_name not in digest_scope
+    assert str(claimed) not in rendered
+    assert str(claimed) not in digest_scope
+    assert sha256 not in rendered
+    assert sha256 not in digest_scope
+    assert result.details == {}
 
 
 @pytest.mark.asyncio
@@ -287,6 +459,7 @@ async def test_execute_prepared_handles_verified_and_ambiguous_outcomes(monkeypa
     adapter._auth = _auth()
     dispatch = AsyncMock()
     monkeypatch.setattr(adapter, "_dispatch_write", dispatch)
+    monkeypatch.setattr(adapter, "_capture_write_baseline", AsyncMock(return_value=None))
     action = _action(FunctionId.EMP_UPDATE_001, {"job_title": "Synthetic"})
     reconcile = AsyncMock(
         return_value=ReconciliationResult(
@@ -329,6 +502,191 @@ async def test_execute_prepared_handles_verified_and_ambiguous_outcomes(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "write_error",
+    [
+        None,
+        TimeoutError("synthetic ambiguous dispatch"),
+        PlaywrightTimeoutError("synthetic Playwright timeout after submit"),
+    ],
+)
+async def test_reconciliation_exception_after_possible_dispatch_is_always_unknown(
+    monkeypatch, write_error
+) -> None:
+    adapter, coordinator = _adapter(live_writes_enabled=True)
+    adapter._auth = _auth()
+    monkeypatch.setattr(adapter, "_dispatch_write", AsyncMock())
+    monkeypatch.setattr(adapter, "_capture_write_baseline", AsyncMock(return_value=None))
+    action = _action(FunctionId.EMP_UPDATE_001, {"job_title": "Synthetic"})
+    reconcile = AsyncMock(side_effect=RuntimeError("synthetic reconcile failure"))
+    monkeypatch.setattr(adapter, "reconcile", reconcile)
+    coordinator.write_error = write_error
+
+    with pytest.raises(DicReconciliationRequiredError, match="outcome is unknown") as caught:
+        await adapter.execute_prepared(action)
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    reconcile.assert_awaited_once_with(action)
+
+
+@pytest.mark.asyncio
+async def test_state_digest_routes_every_write_to_raw_pom_state() -> None:
+    adapter, _ = _adapter()
+    adapter._auth = _auth()
+    employee_id = "EMP-SYNTH-001"
+    digest = "d" * 64
+
+    def pom(**methods):
+        return SimpleNamespace(
+            opaque_state_digest=AsyncMock(return_value=digest),
+            **{name: AsyncMock(return_value=value) for name, value in methods.items()},
+        )
+
+    list_result = EmployeeListResult(items=(), page=1, page_size=100, total=0, has_next=False)
+    adapter._employees = pom(
+        list=list_result,
+        stable_employee_ids_for_create=frozenset(),
+    )
+    adapter._summary = pom(open=None, verify_expected=False)
+    adapter._contracts = pom(
+        read=(
+            ContractRecord(
+                contract_id="CON-SYNTH-001",
+                employee_id=employee_id,
+                stable_identifier=True,
+                actionable=True,
+            ),
+        ),
+        verify_expected=False,
+    )
+    adapter._maturations = pom(read=())
+    adapter._balance = pom(
+        read_correction_state=BalanceCorrectionState(
+            employee_id=employee_id,
+            year=2026,
+            month=8,
+            category="Ferie",
+            current_value="0",
+        )
+    )
+    adapter._roles = pom(
+        read_roles=RolesResult(
+            employee_id=employee_id,
+            roles=(RoleAssignment(name="Employee", enabled=True),),
+        ),
+        read_time_access=TimeAccessResult(employee_id=employee_id),
+    )
+    adapter._documents = pom(
+        read=(
+            DocumentMetadata(
+                document_id="DOC-SYNTH-001",
+                employee_id=employee_id,
+                stable_identifier=True,
+                actionable=True,
+                title_redacted="[REDACTED]",
+            ),
+        ),
+        verify_expected_metadata=False,
+    )
+    cases: dict[FunctionId, tuple[str | None, dict[str, JsonValue]]] = {
+        FunctionId.EMP_UPDATE_001: (employee_id, {"job_title": "Changed"}),
+        FunctionId.EMP_CREATE_001: (
+            None,
+            {"creation_mode": "manual", "first_name": "Alice", "last_name": "Example"},
+        ),
+        FunctionId.EMP_CONTRACT_002: (employee_id, {}),
+        FunctionId.EMP_CONTRACT_003: (
+            employee_id,
+            {"contract_id": "CON-SYNTH-001"},
+        ),
+        FunctionId.EMP_MAT_002: (
+            employee_id,
+            {"category": "Ferie", "valid_from": "2026-01-01"},
+        ),
+        FunctionId.EMP_BAL_002: (
+            employee_id,
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "0",
+                "amount": "1",
+            },
+        ),
+        FunctionId.EMP_CONNECT_001: (employee_id, {}),
+        FunctionId.EMP_CONNECT_002: (employee_id, {}),
+        FunctionId.EMP_INVITE_001: (employee_id, {}),
+        FunctionId.EMP_INVITE_002: (employee_id, {}),
+        FunctionId.EMP_RBAC_002: (
+            employee_id,
+            {"role_name": "Employee", "enabled": False},
+        ),
+        FunctionId.EMP_STATUS_001: (employee_id, {}),
+        FunctionId.EMP_STATUS_002: (employee_id, {}),
+        FunctionId.EMP_DOC_002: (employee_id, {"title": "Synthetic", "category": "CV"}),
+        FunctionId.EMP_DOC_003: (employee_id, {"document_id": "DOC-SYNTH-001"}),
+        FunctionId.EMP_DOC_004: (
+            employee_id,
+            {"document_id": "DOC-SYNTH-001", "category": "Changed"},
+        ),
+        FunctionId.EMP_DOC_005: (employee_id, {"document_id": "DOC-SYNTH-001"}),
+        FunctionId.EMP_DELETE_001: (employee_id, {}),
+        FunctionId.EMP_EXPORT_001: (None, {}),
+    }
+    assert frozenset(cases) == MUTATING_FUNCTIONS
+    for function_id, (target, parameters) in cases.items():
+        assert await adapter.get_state_digest(function_id, target, parameters) == digest
+
+    with pytest.raises(DicWriteDisabledError, match="cannot verify every requested field"):
+        await adapter.get_state_digest(
+            FunctionId.EMP_CREATE_001,
+            None,
+            {"first_name": "Alice", "last_name": "Example", "iban": "SYNTHETIC"},
+        )
+
+    all_summary_fields: dict[str, JsonValue] = {
+        "first_name": "Alice",
+        "last_name": "Example",
+        "payroll_number": "SYN-001",
+        "tax_code": "SYNTHETIC000X",
+        "birth_date": "2000-01-01",
+        "iban": "IT00SYNTHETIC0000000000000",
+        "job_title": "Synthetic tester",
+        "phone": "+390000000000",
+        "business_email": "alice@example.invalid",
+        "address": "Synthetic address",
+        "workplace": "Synthetic office",
+        "notes": "Synthetic notes",
+    }
+    adapter._summary.verify_expected.return_value = True
+    summary_digest_calls = adapter._summary.opaque_state_digest.await_count
+    with pytest.raises(DicValidationError, match="would not change"):
+        await adapter.get_state_digest(
+            FunctionId.EMP_UPDATE_001,
+            employee_id,
+            all_summary_fields,
+        )
+    adapter._summary.verify_expected.assert_awaited_with(employee_id, all_summary_fields)
+    assert adapter._summary.opaque_state_digest.await_count == summary_digest_calls
+    adapter._summary.verify_expected.return_value = False
+
+    adapter._contracts.verify_expected.return_value = True
+    contract_digest_calls = adapter._contracts.opaque_state_digest.await_count
+    with pytest.raises(DicValidationError, match="would not change"):
+        await adapter.get_state_digest(
+            FunctionId.EMP_CONTRACT_002,
+            employee_id,
+            {"contract_id": "CON-SYNTH-001", "description": "Same raw description"},
+        )
+    assert adapter._contracts.opaque_state_digest.await_count == contract_digest_calls
+    adapter._contracts.verify_expected.return_value = False
+
+    adapter._state_digest_key = None
+    with pytest.raises(DicConfigurationError, match="not configured"):
+        await adapter.get_state_digest(FunctionId.EMP_CREATE_001, None, {})
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> None:
     adapter, _ = _adapter()
     employee_id = "EMP-SYNTH-001"
@@ -342,7 +700,8 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
             return_value=EmployeeListResult(
                 items=(applied_item,), page=1, page_size=100, total=1, has_next=False
             )
-        )
+        ),
+        verify_created_employee=AsyncMock(return_value=True),
     )
     adapter._summary = SimpleNamespace(
         read=AsyncMock(
@@ -351,26 +710,49 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
                 job_title="Synthetic Lead",
                 state=EmployeeState.INACTIVE,
             )
-        )
+        ),
+        verify_expected=AsyncMock(return_value=True),
+        open=AsyncMock(),
+        opaque_state_digest=AsyncMock(return_value="b" * 64),
     )
     adapter._contracts = SimpleNamespace(
         read=AsyncMock(
-            return_value=(ContractRecord(contract_id="CON-SYNTH-001", employee_id=employee_id),)
-        )
+            return_value=(
+                ContractRecord(
+                    contract_id="CON-SYNTH-001",
+                    employee_id=employee_id,
+                    stable_identifier=True,
+                    actionable=True,
+                ),
+            )
+        ),
+        verify_expected=AsyncMock(return_value=True),
+        verify_created_contract=AsyncMock(return_value=True),
+        opaque_state_digest=AsyncMock(return_value="b" * 64),
     )
     adapter._maturations = SimpleNamespace(
         read=AsyncMock(
             return_value=(
                 MaturationRecord(
-                    maturation_id="MAT-SYNTH-001", employee_id=employee_id, category="Ferie"
+                    maturation_id="MAT-SYNTH-001",
+                    employee_id=employee_id,
+                    category="Ferie",
+                    valid_from="2026-01-01",
                 ),
             )
-        )
+        ),
+        verify_created_maturation=AsyncMock(return_value=True),
     )
     adapter._roles = SimpleNamespace(
+        read_roles=AsyncMock(
+            return_value=RolesResult(
+                employee_id=employee_id,
+                roles=(RoleAssignment(name="Employee", enabled=False),),
+            )
+        ),
         read_time_access=AsyncMock(
             return_value=TimeAccessResult(employee_id=employee_id, timestamping_enabled=True)
-        )
+        ),
     )
     adapter._documents = SimpleNamespace(
         read=AsyncMock(
@@ -378,8 +760,24 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
                 DocumentMetadata(
                     document_id="DOC-SYNTH-001",
                     employee_id=employee_id,
+                    stable_identifier=True,
+                    actionable=True,
                     title_redacted="[REDACTED]",
                 ),
+            )
+        ),
+        verify_expected_metadata=AsyncMock(return_value=True),
+        verify_uploaded_document=AsyncMock(return_value=True),
+        opaque_state_digest=AsyncMock(return_value="b" * 64),
+    )
+    adapter._balance = SimpleNamespace(
+        read_correction_state=AsyncMock(
+            return_value=BalanceCorrectionState(
+                employee_id=employee_id,
+                year=2026,
+                month=8,
+                category="Ferie",
+                current_value="1",
             )
         )
     )
@@ -391,9 +789,10 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
     create_applied = await adapter._reconcile_direct(
         _action(
             FunctionId.EMP_CREATE_001,
-            {"employee_id": employee_id},
+            {"creation_mode": "manual", "first_name": "Alice", "last_name": "Example"},
             employee_id=None,
-        )
+        ),
+        baseline=_WriteBaseline(stable_ids=frozenset()),
     )
     assert create_applied.state is ReconciliationState.CONFIRMED_APPLIED
     assert (
@@ -401,37 +800,155 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
     ).state is ReconciliationState.UNKNOWN
 
     assert (
-        await adapter._reconcile_direct(_action(FunctionId.EMP_STATUS_001))
-    ).state is ReconciliationState.CONFIRMED_APPLIED
-    assert (
         await adapter._reconcile_direct(
-            _action(FunctionId.EMP_UPDATE_001, {"job_title": " synthetic lead "})
+            _action(FunctionId.EMP_STATUS_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id}), digest="a" * 64),
         )
     ).state is ReconciliationState.CONFIRMED_APPLIED
     assert (
-        await adapter._reconcile_direct(_action(FunctionId.EMP_UPDATE_001, {"first_name": "Alice"}))
-    ).state is ReconciliationState.UNKNOWN
-    assert (
-        await adapter._reconcile_direct(_action(FunctionId.EMP_CONNECT_001))
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_UPDATE_001, {"job_title": " synthetic lead "}),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id}), digest="a" * 64),
+        )
     ).state is ReconciliationState.CONFIRMED_APPLIED
     assert (
-        await adapter._reconcile_direct(_action(FunctionId.EMP_DELETE_001))
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_UPDATE_001, {"first_name": "Alice"}),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id}), digest="a" * 64),
+        )
+    ).state is ReconciliationState.CONFIRMED_APPLIED
+    adapter._summary.opaque_state_digest.return_value = "a" * 64
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_UPDATE_001, {"first_name": "Alice"}),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id}), digest="a" * 64),
+        )
     ).state is ReconciliationState.UNKNOWN
+    adapter._summary.opaque_state_digest.return_value = "b" * 64
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_CONNECT_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id}), digest="a" * 64),
+        )
+    ).state is ReconciliationState.CONFIRMED_APPLIED
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_INVITE_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id}), digest="a" * 64),
+        )
+    ).state is ReconciliationState.UNKNOWN
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_DELETE_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id})),
+        )
+    ).state is ReconciliationState.CONFIRMED_NOT_APPLIED
+    adapter._employees.list.return_value = EmployeeListResult(
+        items=(), page=1, page_size=100, total=0, has_next=False
+    )
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_DELETE_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id})),
+        )
+    ).state is ReconciliationState.CONFIRMED_APPLIED
+    adapter._employees.list.return_value = EmployeeListResult(
+        items=(EmployeeListItem(employee_id="EMP-SYNTH-002", display_name_redacted="B. E."),),
+        page=1,
+        page_size=100,
+        total=1,
+        has_next=False,
+    )
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_DELETE_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id})),
+        )
+    ).state is ReconciliationState.CONFIRMED_APPLIED
+    adapter._employees.list.return_value = EmployeeListResult(
+        items=(), page=1, page_size=100, total=101, has_next=True
+    )
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_DELETE_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id})),
+        )
+    ).state is ReconciliationState.UNKNOWN
+    adapter._employees.list.side_effect = RuntimeError("synthetic list failure")
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_DELETE_001),
+            baseline=_WriteBaseline(stable_ids=frozenset({employee_id})),
+        )
+    ).state is ReconciliationState.UNKNOWN
+    adapter._employees.list.side_effect = None
+    adapter._employees.list.return_value = EmployeeListResult(
+        items=(applied_item,), page=1, page_size=100, total=1, has_next=False
+    )
+    delete_query = adapter._employees.list.await_args_list[-1].args[0]
+    assert delete_query.query == employee_id
+    assert delete_query.employee_filter is EmployeeFilter.ALL
+    assert delete_query.page_size == 100
 
     assert (
         await adapter._reconcile_direct(
-            _action(FunctionId.EMP_CONTRACT_002, {"contract_id": "CON-SYNTH-001"})
+            _action(
+                FunctionId.EMP_CONTRACT_002,
+                {"contract_id": "CON-SYNTH-001", "schedule": "40h"},
+            ),
+            baseline=_WriteBaseline(stable_ids=frozenset({"CON-SYNTH-001"}), digest="a" * 64),
         )
     ).state is ReconciliationState.CONFIRMED_APPLIED
+    adapter._contracts.verify_expected.return_value = None
+    adapter._contracts.verify_created_contract.return_value = None
     assert (
-        await adapter._reconcile_direct(_action(FunctionId.EMP_CONTRACT_002))
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_CONTRACT_002, {"schedule": "40h"}),
+            baseline=_WriteBaseline(stable_ids=frozenset({"CON-SYNTH-001"})),
+        )
+    ).state is ReconciliationState.UNKNOWN
+    adapter._contracts.verify_expected.return_value = True
+    adapter._contracts.verify_created_contract.return_value = True
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_CONTRACT_003, {"contract_id": "CON-SYNTH-001"}),
+            baseline=_WriteBaseline(stable_ids=frozenset({"CON-SYNTH-001"})),
+        )
+    ).state is ReconciliationState.CONFIRMED_NOT_APPLIED
+    adapter._contracts.read.return_value = (
+        ContractRecord(
+            contract_id="CON-SYNTH-OTHER",
+            employee_id=employee_id,
+            stable_identifier=True,
+            actionable=True,
+        ),
+    )
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_CONTRACT_003, {"contract_id": "CON-SYNTH-001"}),
+            baseline=_WriteBaseline(stable_ids=frozenset({"CON-SYNTH-001"})),
+        )
     ).state is ReconciliationState.UNKNOWN
     assert (
         await adapter._reconcile_direct(_action(FunctionId.EMP_MAT_002, {"category": "ferie"}))
+    ).state is ReconciliationState.UNKNOWN
+    assert (
+        await adapter._reconcile_direct(
+            _action(
+                FunctionId.EMP_MAT_002,
+                {"category": "ferie", "valid_from": "2026-01-01"},
+            ),
+            baseline=_WriteBaseline(stable_ids=frozenset()),
+        )
     ).state is ReconciliationState.CONFIRMED_APPLIED
     assert (
         await adapter._reconcile_direct(
             _action(FunctionId.EMP_RBAC_002, {"timestamping_enabled": True})
+        )
+    ).state is ReconciliationState.UNKNOWN
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_RBAC_002, {"role_name": "Employee", "enabled": False})
         )
     ).state is ReconciliationState.CONFIRMED_APPLIED
     assert (
@@ -439,12 +956,50 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
     ).state is ReconciliationState.UNKNOWN
     assert (
         await adapter._reconcile_direct(
-            _action(FunctionId.EMP_DOC_004, {"document_id": "DOC-SYNTH-001"})
+            _action(
+                FunctionId.EMP_DOC_004,
+                {"document_id": "DOC-SYNTH-001", "category": "CV"},
+            ),
+            baseline=_WriteBaseline(stable_ids=frozenset({"DOC-SYNTH-001"}), digest="a" * 64),
         )
     ).state is ReconciliationState.CONFIRMED_APPLIED
     assert (
         await adapter._reconcile_direct(
-            _action(FunctionId.EMP_DOC_005, {"document_id": "DOC-SYNTH-001"})
+            _action(
+                FunctionId.EMP_DOC_002,
+                {"category": "CV"},
+            ),
+            baseline=_WriteBaseline(stable_ids=frozenset({"DOC-SYNTH-001"})),
+        )
+    ).state is ReconciliationState.CONFIRMED_APPLIED
+    assert (
+        await adapter._reconcile_direct(
+            _action(
+                FunctionId.EMP_DOC_002,
+                {"category": "CV"},
+            )
+        )
+    ).state is ReconciliationState.UNKNOWN
+    assert (
+        await adapter._reconcile_direct(
+            _action(FunctionId.EMP_DOC_005, {"document_id": "DOC-SYNTH-001"}),
+            baseline=_WriteBaseline(stable_ids=frozenset({"DOC-SYNTH-001"})),
+        )
+    ).state is ReconciliationState.CONFIRMED_NOT_APPLIED
+    assert (
+        await adapter._reconcile_direct(
+            _action(
+                FunctionId.EMP_BAL_002,
+                {"year": 2026, "month": 8, "category": "Ferie", "amount": "1"},
+            )
+        )
+    ).state is ReconciliationState.CONFIRMED_APPLIED
+    assert (
+        await adapter._reconcile_direct(
+            _action(
+                FunctionId.EMP_BAL_002,
+                {"year": 2026, "month": 8, "category": "Ferie", "amount": "2"},
+            )
         )
     ).state is ReconciliationState.CONFIRMED_NOT_APPLIED
     assert (
@@ -452,6 +1007,6 @@ async def test_reconciliation_covers_safe_postconditions_and_unknown_cases() -> 
     ).state is ReconciliationState.UNKNOWN
 
     public = await adapter.reconcile(_action(FunctionId.EMP_STATUS_001))
-    assert public.state is ReconciliationState.CONFIRMED_APPLIED
+    assert public.state is ReconciliationState.UNKNOWN
     assert adapter._compare_expected(" Synthetic ", "synthetic") is True
     assert adapter._compare_expected(1, 1) is True

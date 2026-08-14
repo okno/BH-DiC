@@ -20,6 +20,7 @@ from pydantic import (
 
 EmployeeId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")]
 RecordId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$")]
+OpaqueStateDigest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NonEmptyText = Annotated[str, Field(min_length=1, max_length=512)]
 _PARAMETER_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -236,6 +237,8 @@ class TimeAccessResult(StrictModel):
 class ContractRecord(StrictModel):
     contract_id: RecordId
     employee_id: EmployeeId
+    stable_identifier: bool = False
+    actionable: bool = False
     schedule: str | None = Field(default=None, max_length=128)
     flexibility: str | None = Field(default=None, max_length=128)
     permanent: bool | None = None
@@ -247,6 +250,12 @@ class ContractRecord(StrictModel):
     contract_type: str | None = Field(default=None, max_length=128)
     status: str | None = Field(default=None, max_length=64)
     period: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_actionability(self) -> ContractRecord:
+        if self.actionable and not self.stable_identifier:
+            raise ValueError("an actionable contract requires a stable DOM identifier")
+        return self
 
 
 class MaturationRecord(StrictModel):
@@ -274,6 +283,14 @@ class BalanceResult(StrictModel):
     lines: tuple[BalanceLine, ...]
 
 
+class BalanceCorrectionState(StrictModel):
+    employee_id: EmployeeId
+    year: int = Field(ge=2000, le=2200)
+    month: int = Field(ge=1, le=12)
+    category: str = Field(min_length=1, max_length=128)
+    current_value: str = Field(min_length=1, max_length=64)
+
+
 class PayrollMetadata(StrictModel):
     payroll_id: RecordId
     employee_id: EmployeeId
@@ -286,12 +303,20 @@ class PayrollMetadata(StrictModel):
 class DocumentMetadata(StrictModel):
     document_id: RecordId
     employee_id: EmployeeId
+    stable_identifier: bool = False
+    actionable: bool = False
     title_redacted: str = Field(max_length=256)
     category: str | None = Field(default=None, max_length=128)
     expiry_date: str | None = Field(default=None, max_length=32)
     uploaded_at: str | None = Field(default=None, max_length=64)
     uploaded_by_redacted: str | None = Field(default=None, max_length=128)
     state: Literal["uploaded", "pending", "unknown"] = "unknown"
+
+    @model_validator(mode="after")
+    def validate_actionability(self) -> DocumentMetadata:
+        if self.actionable and not self.stable_identifier:
+            raise ValueError("an actionable document requires a stable DOM identifier")
+        return self
 
 
 class DocumentQuery(StrictModel):

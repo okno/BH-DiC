@@ -121,7 +121,7 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, browser, manager = await runtime_module._adapter(
-        _mock_settings(), force_mock_components=False
+        _mock_settings(), force_mock_components=False, state_digest_key=b"s" * 32
     )
     assert isinstance(adapter, MockDicAdapter)
     assert browser is None and manager is None
@@ -174,7 +174,7 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
 
     live_adapter, live_browser, live_manager = await runtime_module._adapter(
-        _live_settings(), force_mock_components=False
+        _live_settings(), force_mock_components=False, state_digest_key=b"s" * 32
     )
     assert type(cast(Any, live_adapter)) is FakeLiveAdapter
     assert isinstance(live_browser, FakeBrowser)
@@ -183,13 +183,17 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
 
     missing_key = _live_settings().model_copy(update={"dic_session_encryption_key": None})
     with pytest.raises(ValueError, match="DIC_SESSION_ENCRYPTION_KEY"):
-        await runtime_module._adapter(missing_key, force_mock_components=False)
+        await runtime_module._adapter(
+            missing_key, force_mock_components=False, state_digest_key=b"s" * 32
+        )
 
     missing_credentials = _live_settings().model_copy(
         update={"dic_username": None, "dic_password": None}
     )
     with pytest.raises(ValueError, match="DIC credentials"):
-        await runtime_module._adapter(missing_credentials, force_mock_components=False)
+        await runtime_module._adapter(
+            missing_credentials, force_mock_components=False, state_digest_key=b"s" * 32
+        )
     assert events[-1] == "browser-close"
 
 
@@ -230,9 +234,13 @@ async def test_build_runtime_live_requester_resolver_rechecks_member_roles(
     await mock_adapter.ensure_authenticated()
 
     async def fake_adapter(
-        _settings: AppSettings, *, force_mock_components: bool
+        _settings: AppSettings,
+        *,
+        force_mock_components: bool,
+        state_digest_key: bytes,
     ) -> tuple[DipendentiInCloudAdapter, None, None]:
         assert force_mock_components is False
+        assert len(state_digest_key) == 32
         return mock_adapter, None, None
 
     monkeypatch.setattr(runtime_module, "_adapter", fake_adapter)

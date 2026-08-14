@@ -12,6 +12,11 @@ from pydantic import ValidationError
 from bh_dic.openai.prompts import INTENT_ROUTER_PROMPT
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata, Sensitivity
 from bh_dic.openai.tools import build_openai_tools, tool_by_name
+from bh_dic.policies.catalog import (
+    FUNCTION_CATALOG,
+    WriteParameterValidationError,
+    validate_write_parameters,
+)
 
 
 class IntentProviderError(RuntimeError):
@@ -73,7 +78,11 @@ def envelope_from_call(
         spec = tool_by_name(name)
         if spec is None:
             raise IntentProviderError("provider selected an unknown tool")
-        expected_ids = set(spec.function_ids) & set(allowed_function_ids)
+        expected_ids = {
+            function_id
+            for function_id in set(spec.function_ids) & set(allowed_function_ids)
+            if FUNCTION_CATALOG[function_id].expose_to_model
+        }
         action_class = spec.action_class
         intent = spec.intent
 
@@ -88,6 +97,16 @@ def envelope_from_call(
     if isinstance(confidence, bool) or not isinstance(confidence, int | float):
         raise IntentProviderError("provider returned an invalid confidence")
 
+    parameters = _parse_parameters(payload.get("parameters_json"))
+    function_spec = FUNCTION_CATALOG.get(str(function_id))
+    if function_spec is not None and function_spec.is_write:
+        try:
+            parameters = validate_write_parameters(function_spec, parameters)
+        except WriteParameterValidationError as exc:
+            raise IntentProviderError(
+                "provider write parameters violate the local catalog"
+            ) from exc
+
     try:
         return IntentEnvelope(
             intent=intent,
@@ -95,7 +114,7 @@ def envelope_from_call(
             action_class=action_class,
             employee_id=payload.get("employee_id"),
             query=payload.get("query"),
-            parameters=_parse_parameters(payload.get("parameters_json")),
+            parameters=parameters,
             date_from=_parse_iso_date(payload.get("date_from")),
             date_to=_parse_iso_date(payload.get("date_to")),
             requires_clarification=payload.get("requires_clarification"),

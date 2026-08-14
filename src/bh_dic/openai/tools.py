@@ -200,13 +200,38 @@ def tool_by_name(name: str) -> IntentTool | None:
 
 def _parameters_schema(function_ids: list[str]) -> dict[str, Any]:
     nullable_string: dict[str, Any] = {"type": ["string", "null"]}
+    write_contracts: list[str] = []
+    for function_id in function_ids:
+        spec = FUNCTION_CATALOG.get(function_id)
+        if spec is None or not spec.is_write:
+            continue
+        fields = ", ".join(
+            f"{parameter.name}:{parameter.kind.value.lower()}{'!' if parameter.required else '?'}"
+            for parameter in spec.write_parameters
+        )
+        required_any = (
+            f"; at least one of {', '.join(sorted(spec.write_required_any))}"
+            if spec.write_required_any
+            else ""
+        )
+        write_contracts.append(f"{function_id} => {fields}{required_any}")
+    parameter_description = (
+        "Oggetto JSON con schema chiuso; ! obbligatorio, ? opzionale. "
+        + " | ".join(write_contracts)
+        if write_contracts
+        else "Oggetto JSON piccolo con soli parametri necessari alla lettura."
+    )
     return {
         "type": "object",
         "properties": {
             "function_id": {"type": "string", "enum": function_ids},
             "employee_id": {**nullable_string, "maxLength": 64},
             "query": {**nullable_string, "maxLength": 500},
-            "parameters_json": {**nullable_string, "maxLength": 4_000},
+            "parameters_json": {
+                **nullable_string,
+                "maxLength": 4_000,
+                "description": parameter_description,
+            },
             "date_from": {**nullable_string, "description": "Data ISO YYYY-MM-DD o null."},
             "date_to": {**nullable_string, "description": "Data ISO YYYY-MM-DD o null."},
             "requires_clarification": {"type": "boolean"},
@@ -233,7 +258,11 @@ def _parameters_schema(function_ids: list[str]) -> dict[str, Any]:
 def build_openai_tools(allowed_function_ids: Iterable[str]) -> list[dict[str, Any]]:
     """Return only tools whose individual function IDs are locally authorized."""
 
-    allowed = frozenset(allowed_function_ids)
+    allowed = frozenset(
+        function_id
+        for function_id in allowed_function_ids
+        if function_id in FUNCTION_CATALOG and FUNCTION_CATALOG[function_id].expose_to_model
+    )
     result: list[dict[str, Any]] = []
     for tool in TOOL_CATALOG:
         visible_ids = [item for item in tool.function_ids if item in allowed]

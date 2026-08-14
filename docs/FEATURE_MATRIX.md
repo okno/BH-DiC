@@ -7,13 +7,16 @@ non deve essere mantenuta come secondo catalogo runtime.
 
 - **32/32** Function ID hanno specifica policy e percorso mock sintetico testato.
 - **13 read**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `NEEDS_VALIDATION`.
-- **17 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
-  `DISABLED_BY_POLICY`; **2 operazioni artifact** (`EMP-EXPORT-001`, `EMP-DOC-003`) sono
-  `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`, con
-  adapter live `NOT_AVAILABLE`. I 19 flag sono disabilitati per default nella configurazione di
-  esempio.
-- Nessuna operazione live è stata eseguita; nessun bot è stato avviato localmente, mentre bot e
-  deployment sul target sono `UNVERIFIED`/`BLOCKED` per assenza dell'identità SSH.
+- **13 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+  `DISABLED_BY_POLICY`; **6 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
+  `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
+  limitato al subset verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`,
+  `EMP-DOC-003` e `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. I 19 Function ID write
+  sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
+  (globale più specifici) sono `false` nella configurazione di esempio.
+- Nessuna operazione live è stata eseguita durante questa sessione di Fase 2; nessun bot è stato
+  avviato localmente, mentre bot e deployment sul target sono `UNVERIFIED`/`BLOCKED` per assenza
+  dell'identità SSH.
 
 “Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
 Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il
@@ -46,24 +49,37 @@ richiedente. Il numero `0` non elimina preview, conferma, RBAC, idempotenza o po
 | Function ID | Funzione | Flag specifico | Appr. | Tool | Stato |
 |---|---|---|---:|---|---|
 | `EMP-UPDATE-001` | modifica dipendente | `ENABLE_EMPLOYEE_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
-| `EMP-CREATE-001` | creazione dipendente | `ENABLE_EMPLOYEE_CREATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CREATE-001` | creazione dipendente | `ENABLE_EMPLOYEE_CREATE` | 0 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live limitato al subset verificabile |
 | `EMP-CONTRACT-002` | crea/modifica contratto | `ENABLE_CONTRACT_WRITE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-MAT-002` | nuova maturazione | `ENABLE_MATURATION_WRITE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-BAL-002` | correzione bilancio | `ENABLE_BALANCE_CORRECTION` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-CONNECT-001` | collega account | `ENABLE_ACCOUNT_CONNECT` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-CONNECT-002` | scollega account | `ENABLE_ACCOUNT_DISCONNECT` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
-| `EMP-INVITE-001` | reinvia invito | `ENABLE_INVITE_ACTIONS` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-INVITE-001` | reinvia invito | `ENABLE_INVITE_ACTIONS` | 0 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 | `EMP-INVITE-002` | annulla invito | `ENABLE_INVITE_ACTIONS` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-RBAC-002` | modifica ruoli | `ENABLE_RBAC_WRITE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-STATUS-001` | disattiva dipendente | `ENABLE_STATUS_CHANGE` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-STATUS-002` | riattiva dipendente | `ENABLE_STATUS_CHANGE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-002` | upload documento | `ENABLE_DOCUMENT_UPLOAD` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-004` | metadati documento | `ENABLE_DOCUMENT_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
-| `EMP-DOC-005` | elimina documento | `ENABLE_DOCUMENT_DELETE` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-DOC-005` | elimina documento | `ENABLE_DOCUMENT_DELETE` | A2 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 | `EMP-EXPORT-001` | export locale protetto | `ENABLE_EXPORT` | 0 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 | `EMP-DOC-003` | download locale protetto | `ENABLE_DOCUMENT_DOWNLOAD` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 | `EMP-DELETE-001` | elimina dipendente | `ENABLE_EMPLOYEE_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
-| `EMP-CONTRACT-003` | elimina contratto | `ENABLE_CONTRACT_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-CONTRACT-003` | elimina contratto | `ENABLE_CONTRACT_DELETE` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
+
+“Mai” nella colonna Tool significa “mai esposto a OpenAI”, non “privo di route operatore”. I cinque
+ID esclusi dal modello sono collegati rispettivamente ai comandi deterministici
+`/bh operator-balance-correction`, `/bh operator-rbac-update`,
+`/bh operator-document-download`, `/bh operator-employee-delete` e
+`/bh operator-contract-delete`. Tutti conservano policy, preview, conferma e A2; il download
+documentale e l'eliminazione contratto restano `NOT_AVAILABLE` nel percorso live.
+
+Per `EMP-CREATE-001`, il mock copre lo schema completo. Il percorso live accetta soltanto
+`creation_mode=manual` e i campi con postcondizione verificabile: `first_name`, `last_name`,
+`payroll_number`, `tax_code`, `job_title`, `business_email` e `workplace`. I campi `birth_date`,
+`iban`, `phone`, `address` e `notes` sono rifiutati prima di creare il pending: non vengono quindi
+mostrati come supportati per una write live che non potrebbe essere riconciliata in sicurezza.
 
 ## Condizioni non rappresentate da una singola colonna
 

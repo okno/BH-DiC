@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -77,6 +78,58 @@ def test_service_refuses_credential_like_parameters() -> None:
     service = DicService(MockDicAdapter(), enabled_flags())
     with pytest.raises(DicValidationError, match="credential-like"):
         service.prepare_execution(pending_action(), {"password": "must-not-cross-boundary"})
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"job_title": "QA lead", "roles": ["Admin"]},
+        {},
+    ],
+)
+def test_service_reapplies_closed_catalog_to_internal_write_entry_points(
+    parameters: dict[str, object],
+) -> None:
+    service = DicService(MockDicAdapter(), enabled_flags())
+
+    with pytest.raises(DicValidationError, match="policy catalog"):
+        service.prepare_execution(pending_action(), parameters)
+
+
+def test_service_accepts_only_server_derived_document_execution_capability() -> None:
+    flags = RuntimeFeatureFlags(
+        baseline={
+            "ENABLE_WRITE_ACTIONS": True,
+            "ENABLE_DOCUMENT_UPLOAD": True,
+        }
+    )
+    service = DicService(MockDicAdapter(), flags, capabilities=frozenset({"clamav"}))
+    pending = replace(
+        pending_action(),
+        function_id="EMP-DOC-002",
+        redacted_diff={"category": {"before": "[NOT_SET]", "after": "CV"}},
+    )
+    execution_parameters: dict[str, object] = {
+        "category": "CV",
+        "safe_local_path": "C:/synthetic/claimed-upload",
+        "safe_local_sha256": "a" * 64,
+        "safe_local_size": 4,
+        "detected_mime": "application/pdf",
+    }
+
+    prepared = service.prepare_execution(pending, execution_parameters)
+
+    assert prepared.parameters == execution_parameters
+    assert "upload_id" not in prepared.parameters
+
+    for invalid in (
+        {**execution_parameters, "title": "must-not-be-invented"},
+        {**execution_parameters, "upload_id": "0" * 32},
+        {key: value for key, value in execution_parameters.items() if key != "detected_mime"},
+        {**execution_parameters, "safe_local_sha256": "not-a-digest"},
+    ):
+        with pytest.raises(DicValidationError, match="document execution"):
+            service.prepare_execution(pending, invalid)
 
 
 @pytest.mark.asyncio

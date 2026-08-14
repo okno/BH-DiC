@@ -29,6 +29,7 @@ from bh_dic.dic.pages import (
     EmployeesListPage,
     EmployeeSummaryPage,
     TimestampEmployeesPage,
+    VerifiedUploadPayload,
 )
 from bh_dic.dic.selectors import DEFAULT_SELECTORS, SelectorKind
 
@@ -70,7 +71,7 @@ class SyntheticNode:
         self.clicks = 0
         self.filled: list[str] = []
         self.selected: list[str] = []
-        self.uploaded_files: list[str] = []
+        self.uploaded_files: list[object] = []
 
     def add(self, key: str, *nodes: SyntheticNode) -> None:
         self.children.setdefault(key, []).extend(nodes)
@@ -123,6 +124,23 @@ class SyntheticLocator:
     async def inner_text(self) -> str:
         return self._one().text
 
+    async def evaluate(self, expression: str) -> object:
+        del expression
+
+        def snapshot(node: SyntheticNode) -> dict[str, object]:
+            return {
+                "attributes": dict(sorted(node.attributes.items())),
+                "checked": node.checked,
+                "children": {
+                    key: [snapshot(child) for child in children]
+                    for key, children in sorted(node.children.items())
+                },
+                "text": node.text,
+                "value": node.value,
+            }
+
+        return [snapshot(node) for node in self.nodes]
+
     async def get_attribute(self, name: str) -> str | None:
         return self._one().attributes.get(name)
 
@@ -160,9 +178,12 @@ class SyntheticLocator:
     async def set_checked(self, checked: bool) -> None:
         self._one().checked = checked
 
-    async def set_input_files(self, files: str | Sequence[str]) -> None:
+    async def set_input_files(self, files: str | Sequence[str] | dict[str, object]) -> None:
         node = self._one()
-        node.uploaded_files.extend([files] if isinstance(files, str) else files)
+        if isinstance(files, (str, dict)):
+            node.uploaded_files.append(files)
+        else:
+            node.uploaded_files.extend(files)
 
 
 class SyntheticPage:
@@ -173,6 +194,14 @@ class SyntheticPage:
         self.visited: list[str] = []
 
     def add(self, key: str, *nodes: SyntheticNode) -> None:
+        container_key = {
+            "employees.rows": "employees.container",
+            "contracts.rows": "contracts.container",
+            "maturations.rows": "maturations.container",
+            "documents.rows": "documents.container",
+        }.get(key)
+        if container_key is not None and container_key not in self.root.children:
+            self.root.add(container_key, SyntheticNode())
         self.root.add(key, *nodes)
 
     @property
@@ -187,6 +216,8 @@ class SyntheticPage:
         return self._root_locator.nth(index)
 
     def locator(self, selector: str) -> SyntheticLocator:
+        if selector == "body":
+            return self._root_locator
         return self._root_locator.locator(selector)
 
     def get_by_role(
@@ -288,6 +319,15 @@ def _control_page(*keys: str, confirmation: bool = True) -> SyntheticPage:
         page.add(key, SyntheticNode())
     if confirmation:
         page.add("common.confirm", SyntheticNode(visible=True))
+        page.add(
+            "common.confirm_dialog",
+            SyntheticNode(
+                text=(
+                    "Alice Example EMP-SYNTH-001 CON-SYNTH-001 DOC-SYNTH-001 "
+                    "Viewer Employee Ferie CV 2026 8"
+                )
+            ),
+        )
     return page
 
 
@@ -368,6 +408,8 @@ async def test_employee_list_reads_redacted_synthetic_dom_and_paginates() -> Non
 @pytest.mark.asyncio
 async def test_employee_list_applies_descending_sort_to_an_unsorted_column() -> None:
     page = _control_page("employees.filter.active")
+    page.add("employees.container", SyntheticNode())
+    page.add("employees.total", SyntheticNode(text="Totale 0"))
 
     def advance_sort(node: SyntheticNode) -> None:
         current = node.attributes.get("aria-sort")
@@ -435,6 +477,36 @@ async def test_employee_create_fills_only_allowlisted_fields_and_rejects_unsafe_
 
 
 @pytest.mark.asyncio
+async def test_employee_create_baseline_requires_one_new_stable_exact_match() -> None:
+    page = _control_page("employees.search", "employees.filter.all", confirmation=False)
+    page.add("employees.sort.name", SyntheticNode(attributes={"aria-sort": "ascending"}))
+    page.add("employees.total", SyntheticNode(text="Totale 1"))
+    existing = _row(
+        {"row.employee_id": "", "row.name": "Alice Example"},
+        attributes={"data-employee-id": "EMP-SYNTH-OLD"},
+    )
+    page.add("employees.rows", existing)
+    employee_page = EmployeesListPage(page, "https://secure.dipendentincloud.it")
+    parameters = {"first_name": "Alice", "last_name": "Example", "job_title": "Tester"}
+    baseline = await employee_page.stable_employee_ids_for_create(parameters)
+    assert baseline == frozenset({"EMP-SYNTH-OLD"})
+
+    created = _row(
+        {
+            "row.employee_id": "",
+            "row.name": "Alice Example",
+            "row.job_title": "Tester",
+        },
+        attributes={"data-employee-id": "EMP-SYNTH-NEW"},
+    )
+    page.add("employees.rows", created)
+    page.root.children["employees.total"][0].text = "Totale 2"
+    assert await employee_page.verify_created_employee(baseline, parameters) is True
+    created.children["row.job_title"][0].text = "Wrong"
+    assert await employee_page.verify_created_employee(baseline, parameters) is False
+
+
+@pytest.mark.asyncio
 async def test_summary_read_redacts_fields_and_executes_allowlisted_controls() -> None:
     page = _control_page(
         "summary.first_name",
@@ -478,6 +550,26 @@ async def test_summary_read_redacts_fields_and_executes_allowlisted_controls() -
     assert summary.notes_redacted == "[REDACTED]"
     assert summary.state is EmployeeState.ACTIVE
 
+    expected_raw = {
+        "first_name": "Alice",
+        "last_name": "Example",
+        "payroll_number": "M-001",
+        "tax_code": "SYNTHETIC1234",
+        "birth_date": "2000-01-02",
+        "iban": "CH0000000000000000000",
+        "job_title": "Tester",
+        "phone": "+41000000000",
+        "business_email": "alice@example.invalid",
+        "address": "Synthetic street",
+        "workplace": "Lab",
+        "notes": "Synthetic note",
+    }
+    assert await summary_page.verify_expected("EMP-SYNTH-001", expected_raw) is True
+    assert (
+        await summary_page.verify_expected("EMP-SYNTH-001", {**expected_raw, "tax_code": "WRONG"})
+        is False
+    )
+
     await summary_page.execute(
         _prepared(FunctionId.EMP_UPDATE_001, {"job_title": "Synthetic lead"})
     )
@@ -517,12 +609,19 @@ async def test_roles_and_timestamp_pages_cover_native_and_aria_checkbox_states()
     await roles_page.execute(
         _prepared(
             FunctionId.EMP_RBAC_002,
-            {"timestamping_enabled": False, "shift_management": True},
+            {"role_name": "Viewer", "enabled": True},
         )
     )
-    assert page.root.children["roles.time.timestamping"][0].checked is False
-    assert page.root.children["roles.time.shifts"][0].checked is True
-    with pytest.raises(DicValidationError, match="must be boolean"):
+    assert page.root.children["roles.items"][1].checked is True
+    with pytest.raises(DicValidationError, match="already matches"):
+        await roles_page.execute(
+            _prepared(FunctionId.EMP_RBAC_002, {"role_name": "viewer", "enabled": True})
+        )
+    with pytest.raises(DicValidationError, match="exactly one role"):
+        await roles_page.execute(
+            _prepared(FunctionId.EMP_RBAC_002, {"role_name": "Missing", "enabled": True})
+        )
+    with pytest.raises(DicValidationError, match="requires only"):
         await roles_page.execute(_prepared(FunctionId.EMP_RBAC_002, {"expense_access": "yes"}))
 
     timestamps_page = SyntheticPage()
@@ -540,6 +639,18 @@ async def test_roles_and_timestamp_pages_cover_native_and_aria_checkbox_states()
         timestamps_page, "https://secure.dipendentincloud.it"
     ).read_enabled("EMP-SYNTH-001")
     assert enabled is True
+
+
+@pytest.mark.asyncio
+async def test_identity_bound_confirmation_refuses_wrong_modal_target() -> None:
+    page = _control_page("summary.deactivate")
+    page.root.children["common.confirm_dialog"][0].text = "EMP-SYNTH-OTHER"
+    summary_page = EmployeeSummaryPage(page, "https://secure.dipendentincloud.it")
+
+    with pytest.raises(DicUiChangedError, match="approved target"):
+        await summary_page.execute(_prepared(FunctionId.EMP_STATUS_001, {}))
+
+    assert page.root.children["common.confirm"][0].clicks == 0
 
 
 @pytest.mark.asyncio
@@ -578,11 +689,57 @@ async def test_contract_page_reads_rows_and_executes_create_and_delete() -> None
     )
     row.add("contracts.edit", page.root.children["contracts.edit"][0])
     row.add("contracts.delete", page.root.children["contracts.delete"][0])
-    page.add("contracts.rows", row)
+    fallback_row = _row(
+        {
+            "contract_row.start_date": "2025-01-01",
+            "contract_row.type": "Determinato",
+            "contract_row.period": "2025",
+        }
+    )
+    page.add("contracts.rows", row, fallback_row)
     contract_page = EmployeeContractsPage(page, "https://secure.dipendentincloud.it")
     records = await contract_page.read("EMP-SYNTH-001")
     assert records[0].permanent is True
     assert records[0].description == "[REDACTED]"
+    assert records[0].stable_identifier is True
+    assert records[0].actionable is True
+    assert records[1].contract_id.startswith("CON-")
+    assert records[1].stable_identifier is False
+    assert records[1].actionable is False
+    assert (
+        await contract_page.verify_expected(
+            "EMP-SYNTH-001",
+            "CON-SYNTH-001",
+            {
+                "contract_id": "CON-SYNTH-001",
+                "schedule": " 40H ",
+                "description": "Synthetic description",
+            },
+        )
+        is True
+    )
+    assert (
+        await contract_page.verify_expected(
+            "EMP-SYNTH-001",
+            "CON-SYNTH-001",
+            {"contract_id": "CON-SYNTH-001", "schedule": "36h"},
+        )
+        is False
+    )
+    assert (
+        await contract_page.verify_expected(
+            "EMP-SYNTH-001",
+            "CON-0123456789abcdef",
+            {"contract_id": "CON-0123456789abcdef", "schedule": "40h"},
+        )
+        is None
+    )
+    assert (
+        await contract_page.verify_created_contract(
+            "EMP-SYNTH-001", frozenset(), {"schedule": "40h", "permanent": True}
+        )
+        is True
+    )
 
     await contract_page.execute(
         _prepared(
@@ -601,6 +758,13 @@ async def test_contract_page_reads_rows_and_executes_create_and_delete() -> None
         await contract_page.execute(
             _prepared(FunctionId.EMP_CONTRACT_003, {"contract_id": "CON-MISSING"})
         )
+    with pytest.raises(DicValidationError, match="fallback contract"):
+        await contract_page.execute(
+            _prepared(
+                FunctionId.EMP_CONTRACT_003,
+                {"contract_id": "CON-0123456789abcdef"},
+            )
+        )
     with pytest.raises(DicValidationError, match="permanent must be boolean"):
         await contract_page.execute(_prepared(FunctionId.EMP_CONTRACT_002, {"permanent": "yes"}))
 
@@ -618,16 +782,24 @@ async def test_maturation_balance_and_payroll_pages_read_and_validate_writes() -
         "maturations.rows",
         _row(
             {
+                "maturation_row.id": "",
                 "maturation_row.category": "ROL",
                 "maturation_row.valid_from": "2026-01-01",
                 "maturation_row.valid_to": "2026-12-31",
                 "maturation_row.status": "Valida",
-            }
+            },
+            attributes={"data-maturation-id": "MAT-SYNTH-NEW"},
         ),
     )
     maturation_page = EmployeeMaturationsPage(maturation_dom, "https://secure.dipendentincloud.it")
     maturations = await maturation_page.read("EMP-SYNTH-001")
     assert maturations[0].maturation_id.startswith("MAT-")
+    assert (
+        await maturation_page.verify_created_maturation(
+            "EMP-SYNTH-001", frozenset(), {"category": "ROL"}
+        )
+        is True
+    )
     await maturation_page.execute(
         _prepared(
             FunctionId.EMP_MAT_002,
@@ -639,7 +811,9 @@ async def test_maturation_balance_and_payroll_pages_read_and_validate_writes() -
 
     balance_dom = _control_page(
         "balance.year",
+        "balance.month",
         "balance.correct",
+        "balance.correction_month",
         "balance.category",
         "balance.amount",
         "balance.save",
@@ -664,14 +838,39 @@ async def test_maturation_balance_and_payroll_pages_read_and_validate_writes() -
     await balance_page.execute(
         _prepared(
             FunctionId.EMP_BAL_002,
-            {"year": 2026, "category": "Ferie", "amount": "1"},
+            {
+                "year": 2026,
+                "month": 8,
+                "category": "Ferie",
+                "previous_value": "0",
+                "amount": "1",
+            },
         )
     )
+    with pytest.raises(DicValidationError, match="precondition changed"):
+        await balance_page.execute(
+            _prepared(
+                FunctionId.EMP_BAL_002,
+                {
+                    "year": 2026,
+                    "month": 8,
+                    "category": "Ferie",
+                    "previous_value": "9",
+                    "amount": "1",
+                },
+            )
+        )
     with pytest.raises(DicValidationError, match="year must be an integer"):
         await balance_page.execute(
             _prepared(
                 FunctionId.EMP_BAL_002,
-                {"year": True, "category": "Ferie", "amount": "1"},
+                {
+                    "year": True,
+                    "month": 8,
+                    "category": "Ferie",
+                    "previous_value": "0",
+                    "amount": "1",
+                },
             )
         )
 
@@ -739,6 +938,53 @@ async def test_document_page_reads_filtered_metadata_and_executes_file_workflows
     assert documents[0].title_redacted == "[REDACTED]"
     assert documents[0].uploaded_by_redacted == "A. E."
     assert documents[0].state == "pending"
+    assert documents[0].stable_identifier is True
+    assert documents[0].actionable is True
+    all_documents = await documents_page.read("EMP-SYNTH-001", DocumentQuery())
+    fallback = next(record for record in all_documents if record.document_id != "DOC-SYNTH-001")
+    assert fallback.stable_identifier is False
+    assert fallback.actionable is False
+    assert await documents_page.stable_document_ids("EMP-SYNTH-001") == frozenset({"DOC-SYNTH-001"})
+    assert (
+        await documents_page.verify_expected_metadata(
+            "EMP-SYNTH-001",
+            "DOC-SYNTH-001",
+            {"document_id": "DOC-SYNTH-001", "category": "cv"},
+        )
+        is True
+    )
+    assert (
+        await documents_page.verify_expected_metadata(
+            "EMP-SYNTH-001",
+            "DOC-SYNTH-001",
+            {"document_id": "DOC-SYNTH-001", "expiry_date": "2030-01-01"},
+        )
+        is False
+    )
+    assert (
+        await documents_page.verify_uploaded_document(
+            "EMP-SYNTH-001",
+            frozenset(),
+            {"category": "CV"},
+        )
+        is True
+    )
+    assert (
+        await documents_page.verify_uploaded_document(
+            "EMP-SYNTH-001",
+            frozenset({"DOC-SYNTH-001"}),
+            {"category": "CV"},
+        )
+        is None
+    )
+
+    first_digest = await documents_page.opaque_state_digest(b"k" * 32, scope="documents")
+    second_digest = await documents_page.opaque_state_digest(b"k" * 32, scope="documents")
+    assert first_digest == second_digest
+    assert len(first_digest) == 64
+    assert "Synthetic" not in first_digest
+    matching.children["document_row.title"][0].text = "Changed raw title"
+    assert await documents_page.opaque_state_digest(b"k" * 32, scope="documents") != first_digest
 
     upload = (tmp_path / "synthetic.pdf").resolve()
     upload.write_bytes(b"%PDF-synthetic")
@@ -746,14 +992,23 @@ async def test_document_page_reads_filtered_metadata_and_executes_file_workflows
         _prepared(
             FunctionId.EMP_DOC_002,
             {
-                "safe_local_path": str(upload),
-                "title": "Synthetic",
                 "category": "CV",
                 "expiry_date": "2027-01-01",
             },
-        )
+        ),
+        verified_upload=VerifiedUploadPayload(
+            name="document-upload.pdf",
+            mime_type="application/pdf",
+            buffer=upload.read_bytes(),
+        ),
     )
-    assert page.root.children["documents.file"][0].uploaded_files == [str(upload)]
+    assert page.root.children["documents.file"][0].uploaded_files == [
+        {
+            "name": "document-upload.pdf",
+            "mimeType": "application/pdf",
+            "buffer": b"%PDF-synthetic",
+        }
+    ]
     await documents_page.execute(
         _prepared(
             FunctionId.EMP_DOC_004,
@@ -765,10 +1020,15 @@ async def test_document_page_reads_filtered_metadata_and_executes_file_workflows
     )
     assert page.root.children["documents.edit"][0].clicks == 1
     assert page.root.children["documents.delete"][0].clicks == 1
+    with pytest.raises(DicValidationError, match="fallback document"):
+        await documents_page.execute(
+            _prepared(
+                FunctionId.EMP_DOC_005,
+                {"document_id": "DOC-0123456789abcdef"},
+            )
+        )
 
     with pytest.raises(DicValidationError, match="not handled"):
         await documents_page.execute(_prepared(FunctionId.EMP_UPDATE_001, {}))
-    with pytest.raises(DicValidationError, match="existing absolute file"):
-        await documents_page.execute(
-            _prepared(FunctionId.EMP_DOC_002, {"safe_local_path": "relative.pdf"})
-        )
+    with pytest.raises(DicValidationError, match="verified adapter payload"):
+        await documents_page.execute(_prepared(FunctionId.EMP_DOC_002, {}))

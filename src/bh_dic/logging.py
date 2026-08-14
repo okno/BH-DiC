@@ -30,7 +30,10 @@ _CONTEXT: dict[str, contextvars.ContextVar[str | None]] = {
 
 _SENSITIVE_KEY = re.compile(
     r"(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key|totp|"
-    r"storage[_-]?state|confirmation[_-]?code|iban|codice[_-]?fiscale|file[_-]?content)"
+    r"storage[_-]?state|confirmation[_-]?code|iban|codice[_-]?fiscale|"
+    r"(?:business[_-]?)?email|phone|address|notes?|first[_-]?name|last[_-]?name|"
+    r"full[_-]?name|birth[_-]?date|payroll[_-]?number|"
+    r"file[_-]?(?:content|name|path)|safe[_-]?local)"
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _PROVIDER_KEY = re.compile(
@@ -38,6 +41,8 @@ _PROVIDER_KEY = re.compile(
 )
 _IBAN = re.compile(r"(?i)\bIT\d{2}[A-Z]\d{10}[A-Z0-9]{12}\b")
 _ITALIAN_TAX_ID = re.compile(r"(?i)\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b")
+_EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+_PHONE = re.compile(r"(?<!\w)(?:\+?39[ .-]?)?(?:0\d{1,3}|3\d{2})[ .-]?\d(?:[ .-]?\d){5,9}(?!\w)")
 _TARGET_PSEUDONYM = re.compile(r"^emp_[a-f0-9]{8,64}$")
 _STANDARD_RECORD_KEYS = set(stdlib_logging.makeLogRecord({}).__dict__)
 
@@ -58,6 +63,8 @@ def redact(value: Any, *, key: str | None = None) -> Any:
         result = _PROVIDER_KEY.sub("[REDACTED]", result)
         result = _IBAN.sub("[REDACTED_IBAN]", result)
         result = _ITALIAN_TAX_ID.sub("[REDACTED_TAX_ID]", result)
+        result = _EMAIL.sub("[REDACTED_EMAIL]", result)
+        result = _PHONE.sub("[REDACTED_PHONE]", result)
         return result
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value

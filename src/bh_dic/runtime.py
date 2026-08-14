@@ -140,9 +140,10 @@ async def _adapter(
     settings: AppSettings,
     *,
     force_mock_components: bool,
+    state_digest_key: bytes,
 ) -> tuple[DipendentiInCloudAdapter, AsyncChromiumSession | None, DicSessionManager | None]:
     if settings.mock_mode or force_mock_components:
-        mock_adapter = MockDicAdapter()
+        mock_adapter = MockDicAdapter(state_digest_key=state_digest_key)
         await mock_adapter.ensure_authenticated()
         return mock_adapter, None, None
 
@@ -176,6 +177,7 @@ async def _adapter(
             expected_tenant_id=settings.dic_expected_tenant_id,
             quarantine_root=(settings.data_dir / "uploads").resolve(),
             live_writes_enabled=settings.enable_write_actions,
+            state_digest_key=state_digest_key,
         )
         username = settings.dic_username
         password = settings.dic_password
@@ -243,8 +245,11 @@ async def build_runtime(
         default_ttl=timedelta(minutes=settings.pending_action_ttl_minutes),
     )
     capabilities = frozenset({"clamav"}) if settings.clamav_socket else frozenset()
+    state_digest_key = hmac.new(audit_material, b"bh-dic:state-digest:v1", hashlib.sha256).digest()
     adapter, browser_session, session_manager = await _adapter(
-        settings, force_mock_components=force_mock_components
+        settings,
+        force_mock_components=force_mock_components,
+        state_digest_key=state_digest_key,
     )
     dic_service = DicService(adapter, flags, capabilities=capabilities)
     file_store = QuarantineStore((settings.data_dir / "uploads").resolve())
@@ -294,6 +299,7 @@ async def build_runtime(
                 {settings.dic_expected_tenant_id or "TENANT-SYNTHETIC-MOCK"}
             ),
             capabilities=capabilities,
+            mock_mode=settings.mock_mode or force_mock_components,
         ),
         audit=AuditService(database, audit_material),
         approvals=approval_service,
