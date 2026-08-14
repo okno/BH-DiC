@@ -125,9 +125,10 @@ PostgreSQL.
 - MFA/CAPTCHA e funzionalità TeamSystem non documentate possono bloccare flussi;
 - rotazione log e Wazuh non installati/testati sul target;
 - restore drill e backup server non eseguiti;
-- GitHub Advanced Security/secret scanning non disponibili sul piano corrente: CodeQL esegue
-  l'analisi in workflow con upload SARIF disabilitato; Bandit, dependency audit e gitleaks restano
-  i gate registrati.
+- GitHub Advanced Security, secret/push scanning e branch protection non sono disponibili sul piano
+  privato corrente: CodeQL esegue l'analisi in workflow con upload SARIF disabilitato; Bandit,
+  dependency audit, gitleaks, required review tramite processo operativo e i gate CI restano i
+  controlli applicabili.
 
 Non inserire in versioni successive password, token, API key, cookie, TOTP, PII o contenuti di
 documenti.
