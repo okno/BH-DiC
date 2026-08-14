@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -103,24 +102,8 @@ def test_status_and_stop_manage_only_the_synthetic_owned_process(lifecycle_root:
         assert not lock_file.exists()
         return
 
-    worker_path = lifecycle_root / "bh_dic_synthetic_worker.sh"
-    worker_path.write_text(
-        """#!/usr/bin/env bash
-set -Eeuo pipefail
-umask 077
-fixture_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-pid_file="${fixture_root}/var/run/bh-dic.pid"
-mkdir -p -- "$(dirname -- "${pid_file}")"
-printf '%s\n' "$$" >"${pid_file}"
-trap 'exit 0' TERM INT
-while :; do sleep 0.2; done
-""",
-        encoding="utf-8",
-        newline="\n",
-    )
-    worker_path.chmod(0o700)
     worker = subprocess.Popen(  # noqa: S603 - the worker is created by this isolated test
-        [bash, str(worker_path)],
+        [bash, "-c", "exec -a bh_dic-synthetic-worker sleep 300"],
         cwd=lifecycle_root,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -128,14 +111,10 @@ while :; do sleep 0.2; done
     )
     pid_file = lifecycle_root / "var" / "run" / "bh-dic.pid"
     try:
-        deadline = time.monotonic() + 5
-        while not pid_file.is_file() and time.monotonic() < deadline:
-            if worker.poll() is not None:
-                stdout, stderr = worker.communicate()
-                pytest.fail(f"synthetic worker exited early: {stdout} {stderr}")
-            time.sleep(0.05)
-        assert pid_file.is_file()
-        synthetic_pid = pid_file.read_text(encoding="utf-8").strip()
+        assert worker.poll() is None
+        synthetic_pid = str(worker.pid)
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(f"{synthetic_pid}\n", encoding="utf-8", newline="\n")
 
         status = _run(bash, lifecycle_root, "status.sh")
         assert status.returncode == 0, status.stderr

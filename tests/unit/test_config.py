@@ -27,7 +27,12 @@ def valid_runtime_values() -> dict[str, object]:
 
 def test_missing_runtime_configuration_is_rejected() -> None:
     with pytest.raises(ValidationError, match="Missing required runtime configuration"):
-        AppSettings(_env_file=None)
+        AppSettings(
+            app_env="production",
+            mock_mode=False,
+            discord_guild_id=None,
+            _env_file=None,
+        )
 
 
 def test_non_production_environment_does_not_bypass_required_secrets() -> None:
