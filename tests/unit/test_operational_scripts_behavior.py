@@ -121,10 +121,19 @@ def test_status_and_stop_manage_only_the_synthetic_owned_process(lifecycle_root:
         assert "status: running" in status.stdout
         assert f"PID: {synthetic_pid}" in status.stdout
 
-        stopped = _run(bash, lifecycle_root, "stop.sh", "--timeout", "10")
-        assert stopped.returncode == 0, stopped.stderr
-        assert "stopped cleanly" in stopped.stdout
+        stop_process = subprocess.Popen(  # noqa: S603 - trusted fixture script
+            [bash, str(lifecycle_root / "scripts" / "stop.sh"), "--timeout", "10"],
+            cwd=lifecycle_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        # Reap the owned child while stop.sh polls it; otherwise a POSIX zombie
+        # remains visible to kill -0 until this test calls wait().
         worker.wait(timeout=5)
+        stop_stdout, stop_stderr = stop_process.communicate(timeout=15)
+        assert stop_process.returncode == 0, stop_stderr
+        assert "stopped cleanly" in stop_stdout
         assert not pid_file.exists()
     finally:
         if worker.poll() is None:
