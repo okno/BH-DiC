@@ -41,3 +41,6 @@ jobs:
         uses: github/codeql-action/analyze@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
         with:
           category: /language:python
+          # The current private-repository plan has no code-scanning API. Run the
+          # analysis without a SARIF upload; remove this only after GHAS is enabled.
+          upload: never
