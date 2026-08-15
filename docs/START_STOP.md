@@ -10,12 +10,21 @@
 cd /opt/bh-dic
 test -x ./scripts/start.sh
 ./scripts/doctor.sh
+.venv/bin/python -m bh_dic model-check
 ./scripts/status.sh
 ```
 
 `doctor.sh` deve terminare con exit code 0; `.env` deve essere `0600`, la configurazione valida,
 il database migrato, Chromium presente e ClamAV disponibile quando richiesto. Mantenere
-`ENABLE_WRITE_ACTIONS=false` e `OPENAI_STORE=false`.
+`ENABLE_WRITE_ACTIONS=false` e `MODEL_STORE=false`.
+
+## Un solo gestore di processo
+
+Scegliere **systemd** oppure gli script PID. L'unit di esempio usa
+`scripts/run-foreground.sh`; in quella modalità avvio, stato, log, restart e stop si eseguono con
+`systemctl` e `journalctl`. Non affiancare `start.sh`/`stop.sh` a un servizio systemd attivo.
+Questa pagina descrive sotto la modalità script PID; per l'installazione systemd vedere la
+[guida end-to-end](INSTALLATION.md#9-scegliere-un-solo-gestore-di-processo).
 
 ## Avvio background
 
@@ -112,6 +121,8 @@ cp -n .env.example .env
 chmod 600 .env
 nano .env
 ./scripts/doctor.sh
+./scripts/doctor.sh --online
+.venv/bin/python -m bh_dic model-check --live
 ./scripts/register-commands.sh
 ./scripts/start.sh
 ./scripts/status.sh
@@ -119,7 +130,11 @@ nano .env
 ./scripts/stop.sh
 ```
 
-Al 14 agosto 2026 questa sequenza non è stata eseguita: SSH user/key mancanti, stato bot target
+I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. Il model-check live
+fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
+l'avvio e non attesta il tenant DIC.
+
+Al 15 agosto 2026 questa sequenza non è stata eseguita: SSH user/key mancanti, stato bot target
 `UNVERIFIED`, nessun read/write live.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

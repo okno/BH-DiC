@@ -27,6 +27,7 @@ from bh_dic.discord.views import (
     PaginationView,
     RejectReasonModal,
 )
+from bh_dic.language import BotLanguageProfile
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 
 ACTION_ID = "12345678-1234-4234-9234-123456789abc"
@@ -235,7 +236,9 @@ async def test_selection_and_pagination_views_dispatch_without_network() -> None
 
 
 @pytest.mark.asyncio
-async def test_command_send_success_action_denial_rate_limit_and_failure() -> None:
+async def test_command_send_success_action_denial_rate_limit_and_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     coordinator, _raw_coordinator = _coordinator()
     group = BHCommandGroup(gate=_gate(), coordinator=coordinator)
     interaction, raw = _interaction()
@@ -275,11 +278,35 @@ async def test_command_send_success_action_denial_rate_limit_and_failure() -> No
 
     failing_group = BHCommandGroup(gate=_gate(), coordinator=coordinator)
     failed, failed_raw = _interaction()
-    await failing_group._send(failed, AsyncMock(side_effect=RuntimeError("synthetic")))
+    private_detail = "EMP-SYNTH-001 Mario Rossi must stay private"
+    await failing_group._send(failed, AsyncMock(side_effect=RuntimeError(private_detail)))
     assert "correlation ID" in cast(str, failed_raw.followup.sent[0][0][0])
+    assert private_detail not in caplog.text
 
     with pytest.raises(ValueError, match="positive"):
         BHCommandGroup(gate=_gate(), coordinator=coordinator, upload_max_bytes=0)
+
+
+@pytest.mark.asyncio
+async def test_command_transport_applies_only_the_validated_local_profile() -> None:
+    coordinator, _ = _coordinator(InteractionResult("Titolo", "Risultato", success=True))
+    group = BHCommandGroup(
+        gate=_gate(),
+        coordinator=coordinator,
+        language_profile=BotLanguageProfile(
+            display_name="Assistente HR",
+            opening="Ecco il risultato autorizzato.",
+            closing="Operazione conclusa.",
+            emoji_mode="status",
+        ),
+    )
+    interaction, raw = _interaction()
+    await group._send(interaction, AsyncMock(return_value=InteractionResult("Titolo", "Risultato")))
+
+    embed = cast(discord.Embed, raw.followup.sent[0][1]["embed"])
+    assert embed.author.name == "✅ Assistente HR"
+    assert embed.description is not None and embed.description.startswith("Ecco il risultato")
+    assert embed.footer.text == "Operazione conclusa."
 
 
 async def _invoke(
@@ -452,6 +479,7 @@ async def test_operator_slash_routes_are_explicit_and_catalog_deterministic() ->
 @pytest.mark.asyncio
 async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     coordinator, raw_coordinator = _coordinator(
         InteractionResult(
@@ -494,6 +522,21 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     sensitive_message = FakeMessage()
     await sensitive_bot.on_message(cast(discord.Message, sensitive_message))
     assert "ephemeral" in cast(str, sensitive_message.replies[0][0][0])
+
+    failing_coordinator, failing_raw = _coordinator()
+    private_detail = "EMP-SYNTH-001 Mario Rossi must stay private"
+    failing_raw.ask.side_effect = RuntimeError(private_detail)
+    failing_bot = BHDiCBot(
+        application_id=105,
+        guild_id=10,
+        gate=_gate(),
+        coordinator=failing_coordinator,
+        interaction_mode="channel",
+    )
+    failed_message = FakeMessage()
+    await failing_bot.on_message(cast(discord.Message, failed_message))
+    assert "non completata" in cast(str, failed_message.replies[0][0][0])
+    assert private_detail not in caplog.text
 
     denied = FakeMessage(author=FakeUser(roles=(FakeRole(999),)))
     await bot.on_message(cast(discord.Message, denied))
@@ -551,5 +594,5 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     thread_message.channel = FakeThread()
     await bot.on_message(cast(discord.Message, thread_message))
 
-    for client in (bot, sensitive_bot, limited_bot, slash_bot, mention_bot):
+    for client in (bot, sensitive_bot, failing_bot, limited_bot, slash_bot, mention_bot):
         await client.close()

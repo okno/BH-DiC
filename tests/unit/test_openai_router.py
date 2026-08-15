@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from bh_dic.language import BotLanguageProfile
 from bh_dic.openai.client import IntentProviderError, ResponsesIntentClient, envelope_from_call
 from bh_dic.openai.intent_router import MockIntentRouter, OpenAIIntentRouter
 from bh_dic.openai.redaction import UnsafePromptError, prepare_provider_input, redact_structure
@@ -70,9 +71,14 @@ def test_model_hidden_operator_ids_are_filtered_even_if_a_caller_passes_them() -
 
 
 def test_redaction_and_prompt_injection_rejection() -> None:
-    prepared = prepare_provider_input("cerca mario.rossi@example.test codice RSSMRA80A01H501U")
+    groq_key = "gsk_" + "syntheticvalue123456"
+    prepared = prepare_provider_input(
+        f"cerca mario.rossi@example.test codice RSSMRA80A01H501U api_key={groq_key}"
+    )
     assert "example.test" not in prepared
     assert "RSSMRA" not in prepared
+    assert groq_key not in prepared
+    assert "[SECRET_REDACTED]" in prepared
     nested = redact_structure({"email": "mario@example.test"})
     assert nested == {"email": "[EMAIL_REDACTED]"}
     with pytest.raises(UnsafePromptError):
@@ -96,6 +102,23 @@ async def test_mock_router_does_not_route_unexposed_write() -> None:
         "disattiva dipendente id 123", frozenset({"EMP-READ-001"})
     )
     assert routed.envelope.function_id == "UNSUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_mock_router_uses_only_the_closed_language_profile_for_questions() -> None:
+    polite = await MockIntentRouter(BotLanguageProfile(address_style="lei")).route(
+        "disattiva dipendente",
+        frozenset({"EMP-STATUS-001"}),
+    )
+    english = await MockIntentRouter(BotLanguageProfile(language="en")).route(
+        "richiesta fuori catalogo",
+        frozenset(),
+    )
+
+    assert polite.envelope.clarification_question == "Indichi l'Employee ID esatto."
+    assert english.envelope.clarification_question == (
+        "The request does not match an authorized function."
+    )
 
 
 def test_envelope_from_call_rejects_non_exposed_id() -> None:

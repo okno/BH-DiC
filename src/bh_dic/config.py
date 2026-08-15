@@ -12,6 +12,22 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
+from bh_dic.language import (
+    AddressStyle,
+    BotLanguageProfile,
+    EmojiMode,
+    Language,
+    Tone,
+    Verbosity,
+)
+from bh_dic.openai.providers import (
+    DEFAULT_GROQ_MODEL,
+    DEFAULT_LLAMA_BASE_URL,
+    ModelProvider,
+    llama_endpoint_is_loopback,
+    validate_llama_base_url,
+)
+
 EnvironmentName = Literal["production", "development", "test", "mock"]
 LogFormat = Literal["json", "text"]
 InteractionMode = Literal["slash", "mention", "channel"]
@@ -46,6 +62,15 @@ class AppSettings(BaseSettings):
     audit_hmac_key: SecretStr | None = None
     encryption_key: SecretStr | None = None
 
+    bot_language: Language = "it"
+    bot_tone: Tone = "professional"
+    bot_address_style: AddressStyle = "neutral"
+    bot_verbosity: Verbosity = "standard"
+    bot_emoji_mode: EmojiMode = "off"
+    bot_display_name: str | None = Field(default=None, max_length=48)
+    bot_opening: str | None = Field(default=None, max_length=120)
+    bot_closing: str | None = Field(default=None, max_length=120)
+
     discord_bot_token: SecretStr | None = None
     discord_application_id: int | None = Field(default=None, gt=0, le=2**64 - 1)
     discord_guild_id: int | None = Field(default=None, gt=0, le=2**64 - 1)
@@ -62,14 +87,31 @@ class AppSettings(BaseSettings):
     discord_security_admin_role_ids: tuple[int, ...] = ()
     discord_system_admin_role_ids: tuple[int, ...] = ()
 
+    model_provider: ModelProvider = "openai"
+    model_store: bool = False
+    model_timeout_seconds: float = Field(default=60, ge=1, le=300)
+    model_max_retries: int = Field(default=2, ge=0, le=5)
+    model_max_output_tokens: int = Field(default=1200, ge=64, le=8192)
+    model_result_rendering: Literal["deterministic"] = "deterministic"
+    model_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"
+
     openai_api_key: SecretStr | None = None
     openai_model: str | None = Field(default=None, min_length=1, max_length=120)
+    # Backward-compatible aliases. The model validator mirrors these to the generic
+    # settings and rejects conflicting explicit values.
     openai_store: bool = False
     openai_timeout_seconds: float = Field(default=60, ge=1, le=300)
     openai_max_retries: int = Field(default=2, ge=0, le=5)
     openai_max_output_tokens: int = Field(default=1200, ge=64, le=8192)
     openai_result_rendering: Literal["deterministic"] = "deterministic"
     openai_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"
+
+    groq_api_key: SecretStr | None = None
+    groq_model: str = Field(default=DEFAULT_GROQ_MODEL, min_length=1, max_length=120)
+
+    llama_base_url: str = DEFAULT_LLAMA_BASE_URL
+    llama_model: str | None = Field(default=None, min_length=1, max_length=120)
+    llama_api_key: SecretStr | None = None
 
     dic_base_url: str = "https://secure.dipendentincloud.it"
     dic_username: str | None = Field(default=None, max_length=320)
@@ -154,6 +196,40 @@ class AppSettings(BaseSettings):
         "enable_employee_delete",
     )
 
+    MODEL_TUNING_ALIASES: ClassVar[tuple[tuple[str, str, str, str], ...]] = (
+        ("model_store", "openai_store", "MODEL_STORE", "OPENAI_STORE"),
+        (
+            "model_timeout_seconds",
+            "openai_timeout_seconds",
+            "MODEL_TIMEOUT_SECONDS",
+            "OPENAI_TIMEOUT_SECONDS",
+        ),
+        (
+            "model_max_retries",
+            "openai_max_retries",
+            "MODEL_MAX_RETRIES",
+            "OPENAI_MAX_RETRIES",
+        ),
+        (
+            "model_max_output_tokens",
+            "openai_max_output_tokens",
+            "MODEL_MAX_OUTPUT_TOKENS",
+            "OPENAI_MAX_OUTPUT_TOKENS",
+        ),
+        (
+            "model_result_rendering",
+            "openai_result_rendering",
+            "MODEL_RESULT_RENDERING",
+            "OPENAI_RESULT_RENDERING",
+        ),
+        (
+            "model_reasoning_effort",
+            "openai_reasoning_effort",
+            "MODEL_REASONING_EFFORT",
+            "OPENAI_REASONING_EFFORT",
+        ),
+    )
+
     @field_validator(
         "discord_readonly_role_ids",
         "discord_hr_read_role_ids",
@@ -201,6 +277,11 @@ class AppSettings(BaseSettings):
             raise ValueError(f"Unknown IANA timezone: {value}") from exc
         return value
 
+    @field_validator("llama_base_url")
+    @classmethod
+    def validate_local_model_base_url(cls, value: str) -> str:
+        return validate_llama_base_url(value)
+
     @field_validator("database_url")
     @classmethod
     def validate_async_database_url(cls, value: str) -> str:
@@ -231,10 +312,21 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_security_invariants(self) -> AppSettings:
-        if self.openai_store:
+        self._synchronize_model_tuning_aliases()
+        # Constructing the closed profile validates free-form decorations before
+        # any provider, Discord client, or log boundary is created.
+        _ = self.language_profile
+        if self.model_store:
             raise ValueError(
-                "OPENAI_STORE=true is forbidden; provider storage must remain disabled"
+                "MODEL_STORE=true or OPENAI_STORE=true is forbidden; "
+                "provider storage must remain disabled"
             )
+        if (
+            self.model_provider == "llama"
+            and not llama_endpoint_is_loopback(self.llama_base_url)
+            and self._is_missing(self.llama_api_key)
+        ):
+            raise ValueError("LLAMA_API_KEY is required for a remote LLAMA_BASE_URL")
 
         if self.mock_mode and self.app_env not in {"test", "development", "mock"}:
             raise ValueError("MOCK_MODE may only be used with APP_ENV=test, development, or mock")
@@ -275,6 +367,19 @@ class AppSettings(BaseSettings):
             self._validate_secret_strength()
         return self
 
+    def _synchronize_model_tuning_aliases(self) -> None:
+        explicitly_set = self.model_fields_set
+        for generic, legacy, generic_env, legacy_env in self.MODEL_TUNING_ALIASES:
+            generic_value = getattr(self, generic)
+            legacy_value = getattr(self, legacy)
+            generic_set = generic in explicitly_set
+            legacy_set = legacy in explicitly_set
+            if generic_set and legacy_set and generic_value != legacy_value:
+                raise ValueError(f"Conflicting {generic_env} and legacy {legacy_env} values")
+            effective = generic_value if generic_set or not legacy_set else legacy_value
+            object.__setattr__(self, generic, effective)
+            object.__setattr__(self, legacy, effective)
+
     def _missing_runtime_values(self) -> list[str]:
         required: dict[str, object | None] = {
             "AUDIT_HMAC_KEY": self.audit_hmac_key,
@@ -283,13 +388,29 @@ class AppSettings(BaseSettings):
             "DISCORD_APPLICATION_ID": self.discord_application_id,
             "DISCORD_GUILD_ID": self.discord_guild_id,
             "DISCORD_CHANNEL_ID": self.discord_channel_id,
-            "OPENAI_API_KEY": self.openai_api_key,
-            "OPENAI_MODEL": self.openai_model,
             "DIC_USERNAME": self.dic_username,
             "DIC_PASSWORD": self.dic_password,
             "DIC_SESSION_ENCRYPTION_KEY": self.dic_session_encryption_key,
             "DIC_EXPECTED_TENANT_ID": self.dic_expected_tenant_id,
         }
+        if self.model_provider == "openai":
+            required.update(
+                {
+                    "OPENAI_API_KEY": self.openai_api_key,
+                    "OPENAI_MODEL": self.openai_model,
+                }
+            )
+        elif self.model_provider == "groq":
+            required.update(
+                {
+                    "GROQ_API_KEY": self.groq_api_key,
+                    "GROQ_MODEL": self.groq_model,
+                }
+            )
+        else:
+            required["LLAMA_MODEL"] = self.llama_model
+            if not llama_endpoint_is_loopback(self.llama_base_url):
+                required["LLAMA_API_KEY"] = self.llama_api_key
         return sorted(name for name, value in required.items() if self._is_missing(value))
 
     @staticmethod
@@ -318,6 +439,11 @@ class AppSettings(BaseSettings):
             "ENCRYPTION_KEY": self.encryption_key,
             "DISCORD_BOT_TOKEN": self.discord_bot_token,
             "OPENAI_API_KEY": self.openai_api_key,
+            "OPENAI_MODEL": self.openai_model,
+            "GROQ_API_KEY": self.groq_api_key,
+            "GROQ_MODEL": self.groq_model,
+            "LLAMA_API_KEY": self.llama_api_key,
+            "LLAMA_MODEL": self.llama_model,
             "DIC_USERNAME": self.dic_username,
             "DIC_PASSWORD": self.dic_password,
             "DIC_SESSION_ENCRYPTION_KEY": self.dic_session_encryption_key,
@@ -337,6 +463,21 @@ class AppSettings(BaseSettings):
 
         return {name: bool(getattr(self, name)) for name in self.WRITE_FLAG_FIELDS}
 
+    @property
+    def language_profile(self) -> BotLanguageProfile:
+        """Return the validated, closed presentation profile without provider I/O."""
+
+        return BotLanguageProfile(
+            language=self.bot_language,
+            tone=self.bot_tone,
+            address_style=self.bot_address_style,
+            verbosity=self.bot_verbosity,
+            emoji_mode=self.bot_emoji_mode,
+            display_name=self.bot_display_name,
+            opening=self.bot_opening,
+            closing=self.bot_closing,
+        )
+
     def safe_summary(self) -> dict[str, object]:
         """Return operator-safe configuration metadata."""
 
@@ -347,6 +488,17 @@ class AppSettings(BaseSettings):
             "database_driver": make_url(self.database_url).drivername,
             "discord_guild_configured": self.discord_guild_id is not None,
             "discord_channel_configured": self.discord_channel_id is not None,
+            "bot_language": self.bot_language,
+            "bot_tone": self.bot_tone,
+            "bot_address_style": self.bot_address_style,
+            "bot_verbosity": self.bot_verbosity,
+            "bot_emoji_mode": self.bot_emoji_mode,
+            "bot_display_name_configured": self.bot_display_name is not None,
+            "bot_opening_configured": self.bot_opening is not None,
+            "bot_closing_configured": self.bot_closing is not None,
+            "model_provider": self.model_provider,
+            "model_configured": self.selected_model is not None,
+            "model_store": self.model_store,
             "openai_model_configured": bool(self.openai_model),
             "openai_store": self.openai_store,
             "dic_expected_tenant_configured": bool(self.dic_expected_tenant_id),
@@ -356,6 +508,16 @@ class AppSettings(BaseSettings):
                 name for name, enabled in self.write_flags.items() if enabled
             ),
         }
+
+    @property
+    def selected_model(self) -> str | None:
+        """Return only the selected non-secret model identifier."""
+
+        if self.model_provider == "openai":
+            return self.openai_model
+        if self.model_provider == "groq":
+            return self.groq_model
+        return self.llama_model
 
 
 Settings = AppSettings

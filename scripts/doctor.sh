@@ -23,6 +23,8 @@ done
 failures=0
 pass() { info "PASS: $*"; }
 fail() { warn "FAIL: $*"; failures=$((failures + 1)); }
+python_bin=""
+runtime_config_valid=false
 
 if [[ "$(uname -s)" == "Linux" ]]; then pass "Linux operating system"; else fail "Linux is required for deployment"; fi
 if command -v git >/dev/null 2>&1; then pass "git available"; else fail "git unavailable"; fi
@@ -36,12 +38,17 @@ if venv_python >/dev/null 2>&1; then
   fi
   if "${python_bin}" -m pip check >/dev/null 2>&1; then pass "Python dependencies consistent"; else fail "Python dependency check failed"; fi
   database_url="$(read_env_value DATABASE_URL 'sqlite+aiosqlite:///./var/db/bh_dic.sqlite3')"
-  if DATABASE_URL="${database_url}" "${python_bin}" -m alembic \
-    -c "${PROJECT_ROOT}/migrations/alembic.ini" current --check-heads >/dev/null 2>&1; then
-    pass "database migration is at the current head"
-  else
-    fail "database migration is missing or not at the current head"
-  fi
+  case "${database_url}" in
+    sqlite+aiosqlite:///*)
+      if DATABASE_URL="${database_url}" "${python_bin}" -m alembic \
+        -c "${PROJECT_ROOT}/migrations/alembic.ini" current --check-heads >/dev/null 2>&1; then
+        pass "database migration is at the current head"
+      else
+        fail "database migration is missing or not at the current head"
+      fi
+      ;;
+    *) info "non-SQLite database migration state is UNVERIFIED; doctor performs no database network I/O" ;;
+  esac
   if "${python_bin}" -c 'from pathlib import Path; from playwright.sync_api import sync_playwright; p=sync_playwright().start(); path=Path(p.chromium.executable_path); p.stop(); raise SystemExit(not path.is_file())' >/dev/null 2>&1; then
     pass "Playwright Chromium installed"
   else
@@ -53,7 +60,12 @@ fi
 
 if [[ -f "${ENV_FILE}" ]]; then
   if [[ "$(env_file_mode)" == "600" ]]; then pass ".env mode is 0600"; else fail ".env mode is not 0600"; fi
-  if validate_runtime_config >/dev/null 2>&1; then pass "runtime configuration valid"; else fail "runtime configuration incomplete or unsafe"; fi
+  if validate_runtime_config >/dev/null 2>&1; then
+    runtime_config_valid=true
+    pass "runtime configuration valid"
+  else
+    fail "runtime configuration incomplete or unsafe"
+  fi
 else
   fail ".env missing"
 fi
@@ -101,17 +113,51 @@ else
   pass "write-action master switch is disabled"
 fi
 
-if [[ "${online}" == "true" ]]; then
+if [[ "${online}" == "true" && "${runtime_config_valid}" != "true" ]]; then
+  fail "online checks skipped because runtime configuration is invalid"
+elif [[ "${online}" == "true" ]]; then
   require_command getent
   require_command curl
-  for host in discord.com api.openai.com secure.dipendentincloud.it; do
+  provider_metadata="$("${python_bin}" -c '
+from urllib.parse import urlsplit
+from bh_dic.config import AppSettings
+from bh_dic.openai.providers import GROQ_OPENAI_BASE_URL, OPENAI_RESPONSES_BASE_URL
+
+settings = AppSettings()
+provider_url = {
+    "openai": OPENAI_RESPONSES_BASE_URL,
+    "groq": GROQ_OPENAI_BASE_URL,
+    "llama": settings.llama_base_url,
+}[settings.model_provider]
+parsed = urlsplit(provider_url)
+print(settings.model_provider)
+print(parsed.scheme)
+print(parsed.hostname or "")
+print(provider_url)
+' 2>/dev/null)" || die "validated model provider metadata could not be loaded"
+  mapfile -t provider_parts <<<"${provider_metadata}"
+  model_provider="${provider_parts[0]-}"
+  provider_scheme="${provider_parts[1]-}"
+  provider_host="${provider_parts[2]-}"
+  provider_url="${provider_parts[3]-}"
+  if [[ -z "${model_provider}" || -z "${provider_scheme}" || -z "${provider_host}" || -z "${provider_url}" ]]; then
+    die "validated model provider metadata is incomplete"
+  fi
+  for host in discord.com "${provider_host}" secure.dipendentincloud.it; do
     if getent ahosts "${host}" >/dev/null 2>&1; then pass "DNS resolves ${host}"; else fail "DNS failed for ${host}"; fi
   done
-  for url in https://discord.com https://api.openai.com https://secure.dipendentincloud.it; do
-    if curl --fail --silent --show-error --head --max-time 10 --proto '=https' --tlsv1.2 "${url}" >/dev/null 2>&1; then
-      pass "HTTPS reachable: ${url}"
+  for entry in \
+    "Discord|https|https://discord.com" \
+    "selected model provider|${provider_scheme}|${provider_url}" \
+    "Dipendenti in Cloud|https|https://secure.dipendentincloud.it"; do
+    IFS='|' read -r label scheme url <<<"${entry}"
+    curl_args=(--silent --show-error --head --max-time 10 --proto "=${scheme}")
+    if [[ "${scheme}" == "https" ]]; then curl_args+=(--tlsv1.2); fi
+    if http_code="$(curl "${curl_args[@]}" --output /dev/null --write-out '%{http_code}' "${url}" 2>/dev/null)" && \
+      [[ "${http_code}" =~ ^[1-5][0-9][0-9]$ ]]; then
+      pass "HTTP endpoint reachable: ${label}"
     else
-      fail "HTTPS check failed: ${url}"
+      fail "HTTP connectivity check failed: ${label}"
     fi
   done
 else

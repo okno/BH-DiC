@@ -1,6 +1,6 @@
 # Implementation report
 
-Snapshot di verità: **14 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
+Snapshot documentale: **15 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
 un commit non può auto-referenziare il proprio hash. Aggiornare questo file dopo il deployment senza
 sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 
@@ -43,7 +43,10 @@ Completati nel codice e testati con risorse sintetiche:
 
 - configurazione Pydantic fail-closed, logging redatto, DB async e Alembic;
 - Discord gate/command group e runtime composition senza gateway live;
-- Responses intent router strict con `store=false` e tool exposure filtrata;
+- intent router strict multi-provider: Responses per OpenAI/Groq e chat-compatible per llama,
+  con storage applicativo disabilitato e tool exposure filtrata;
+- persona configurabile e confinata alla presentazione, senza effetto su policy/RBAC;
+- `model-check` offline per default e probe live provider sintetico/chiuso, esplicitamente opt-in;
 - catalogo/policy/RBAC/flag per 32 Function ID;
 - approval state machine, A1/A2, TTL, conferma hashata monouso, CAS/idempotenza, payload cifrati;
 - audit append-only HMAC e verifica catena;
@@ -68,33 +71,37 @@ Stato funzionale:
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate osservati
+## Test e gate osservati — release 0.2.0
 
-La tabella seguente riporta il gate completo eseguito sul worktree finale della consegna.
+I risultati seguenti sono stati osservati il 15 agosto 2026 sul worktree finale 0.2.0, senza
+avviare bot/browser e senza chiamare Discord, DIC o provider. Provano soltanto i confini coperti da
+fixture sintetiche; non trasformano alcuna integrazione in `LIVE_VERIFIED`.
 
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS: 175 file già formattati |
+| `ruff format --check .` | PASS: 182 file già formattati |
 | `ruff check .` | PASS: zero issue |
-| `mypy src` | PASS: 104 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 411 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 411 test |
-| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (7.550 statement, 2.266 branch), soglia 80% |
+| `mypy src` | PASS: 107 source file, zero issue |
+| `pytest` (pytest 9.0.3) | PASS: 481 test, 1 warning esterno `discord.py/audioop` |
+| `coverage run --branch -m pytest` | PASS: 481 test |
+| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (7.922 statement, 2.398 branch), soglia 80% |
 | `bandit -q -r src` | PASS: nessun issue riportato |
-| `python -m pip_audit --skip-editable` | PASS: nessuna vulnerabilità nota; distribuzione editable locale esclusa |
-| `gitleaks detect --source . --no-banner --redact` + staged-diff scan | PASS: gitleaks 8.30.1, nessun finding |
+| `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS: nessuna vulnerabilità nota nel lock |
+| `gitleaks dir <snapshot-sorgenti> --redact --no-banner` | PASS: gitleaks 8.30.1, 222 file tracciati/non ignorati, nessun finding |
 | parsing YAML/XML docs/security | PASS |
 | scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
 | 22 script `bash -n` + contratti/lifecycle ops | PASS: 31 casi; start fail-closed e status/stop sintetici inclusi |
 
-I gate Python, coverage, lint, typing, Bandit, dependency audit e secret scan della history Git
-sono verdi. Il deployment e le verifiche live non sono invece deducibili da questi risultati e
-restano bloccati/non disponibili come indicato sotto.
+La scansione della cronologia Git e i workflow del nuovo commit restano gate di consegna da
+eseguire dopo il commit. Deployment, provider live e DIC live non sono deducibili da alcun gate
+locale e restano bloccati/non verificati come indicato sotto.
 
 ## Operatività
 
 ```text
 Configurazione  ./scripts/init-config.sh && ./scripts/doctor.sh
+Provider offline .venv/bin/python -m bh_dic model-check
+Provider live   .venv/bin/python -m bh_dic model-check --live  # solo se autorizzato
 Avvio           ./scripts/start.sh
 Foreground debug ./scripts/run-foreground.sh
 Status          ./scripts/status.sh
@@ -114,19 +121,19 @@ PostgreSQL.
 ## Sicurezza
 
 - nessun segreto o dato personale intenzionalmente inserito nei file documentali;
-- OpenAI `store=false`; provider senza browser, file, segreti o decisione policy;
+- `MODEL_STORE=false`; provider senza browser, file, segreti o decisione policy;
 - scope guild/canale/tenant, RBAC e rate limit fail-closed;
 - write globalmente e specificamente disabilitate;
 - A2 richiede identità distinta e kill switch ricontrollato all'esecuzione;
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
-  Discord o OpenAI, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
+  Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
 - nessuna write/read live eseguita in questa sessione di Fase 2 e nessun processo bot locale.
 
 ## Problemi residui
 
 - credenziali SSH mancanti: deployment bloccato;
-- configurazione reale Discord/OpenAI/DIC non fornita e connessioni non verificate;
+- configurazione reale Discord/provider/DIC non fornita e connessioni non verificate;
 - selettori e route Playwright non validati live; UI drift possibile;
 - form write, delete/export/download e postcondizioni non verificati live;
 - MFA/CAPTCHA e funzionalità TeamSystem non documentate possono bloccare flussi;

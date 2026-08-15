@@ -10,7 +10,7 @@ from bh_dic.logging import JsonFormatter, pseudonymize_identifier, redact
 
 
 def test_package_exposes_semantic_version() -> None:
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.2.0"
 
 
 def test_public_error_does_not_include_internal_exception() -> None:
@@ -65,8 +65,9 @@ def test_json_formatter_emits_structured_redacted_event() -> None:
 def test_json_formatter_redacts_email_and_phone_from_message_and_exception() -> None:
     email = "alice@example.invalid"
     phone = "+39 333 1234567"
+    groq_key = "gsk_" + "syntheticvalue123456"
     try:
-        raise RuntimeError(f"provider failure for {email} at {phone}")
+        raise RuntimeError(f"provider failure for {email} at {phone} with api_key={groq_key}")
     except RuntimeError:
         exception_info = sys.exc_info()
     record = logging.LogRecord(
@@ -83,8 +84,10 @@ def test_json_formatter_redacts_email_and_phone_from_message_and_exception() -> 
 
     assert email not in rendered
     assert phone not in rendered
+    assert groq_key not in rendered
     assert "[REDACTED_EMAIL]" in rendered
     assert "[REDACTED_PHONE]" in rendered
+    assert "[REDACTED_SECRET]" in rendered
 
 
 def test_identifier_pseudonym_is_stable_and_keyed() -> None:

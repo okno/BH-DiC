@@ -116,6 +116,33 @@ def test_router_uses_mock_offline_and_requires_live_openai_configuration() -> No
     assert isinstance(runtime_module._router(missing, force_mock_components=True), MockIntentRouter)
 
 
+def test_router_uses_closed_language_profile_without_sending_decorations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_client(_settings: AppSettings, *, developer_prompt: str) -> object:
+        captured["prompt"] = developer_prompt
+        return object()
+
+    monkeypatch.setattr(runtime_module, "build_intent_client", fake_client)
+    settings = _live_settings().model_copy(
+        update={
+            "bot_tone": "friendly",
+            "bot_address_style": "lei",
+            "bot_opening": "Buongiorno dal team HR",
+        }
+    )
+
+    assert isinstance(
+        runtime_module._router(settings, force_mock_components=False), OpenAIIntentRouter
+    )
+    assert "tono cordiale" in captured["prompt"]
+    assert "forma di cortesia" in captured["prompt"]
+    assert "Buongiorno dal team HR" not in captured["prompt"]
+    assert "PRIORITA ASSOLUTA" in captured["prompt"]
+
+
 @pytest.mark.asyncio
 async def test_adapter_mock_and_live_composition_never_start_real_browser(
     monkeypatch: pytest.MonkeyPatch,

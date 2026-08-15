@@ -10,7 +10,7 @@ BH-DiC applies data protection by design through:
 
 - purpose limitation to authorized employee workflows in one configured DIC tenant;
 - data minimization rather than a local replica of the employee registry;
-- deterministic output and redaction before Discord, OpenAI, logs and audit;
+- deterministic output and redaction before Discord, the selected model provider, logs and audit;
 - default-disabled writes, document transfer and exports;
 - short-lived pending actions and attachment retention;
 - encryption of pending parameters and browser session state;
@@ -28,16 +28,18 @@ BH-DiC applies data protection by design through:
 | Approval decisions | Discord | persistent workflow/audit metadata | none |
 | Browser cookies/storage state | DIC | encrypted session vault only | DIC browser context |
 | Attachment content | Discord | bounded quarantine/clean/processed area | DIC upload workflow only when enabled |
-| Original attachment filename | Discord | protected metadata; never a path or ordinary log field | not sent to OpenAI |
-| OpenAI intent input | Discord | minimized and redacted; no persistent conversation | OpenAI Responses API with `store=false` |
+| Original attachment filename | Discord | protected metadata; never a path or ordinary log field | not sent to a model provider |
+| Model intent input | Discord | minimized and redacted; no persistent conversation | selected provider with `MODEL_STORE=false` |
+| Persona decorations | local configuration | bounded and validated; values omitted from safe summary/logs | configured Discord embed only; not sent to provider |
 | Audit/log metadata | application | redacted JSON and HMAC chain | optional Wazuh ingestion |
 
 The local database must not become a durable copy of IBANs, full tax codes, complete notes,
 documents, payrolls, passwords, plaintext cookies or full HR prompts.
 
-## OpenAI privacy boundary
+## Model-provider privacy boundary
 
-OpenAI is used only to classify Italian requests, normalize parameters and request clarification.
+OpenAI, Groq or the configured llama endpoint is used only to classify supported requests,
+normalize parameters and request clarification.
 The following are forbidden provider inputs:
 
 - credentials, tokens, cookies, TOTP secrets and browser storage state;
@@ -46,13 +48,16 @@ The following are forbidden provider inputs:
 - health, family or other special-category data;
 - unredacted DIC result pages.
 
-All Responses API calls must use `store=false`. Persistent Conversations and HR use of
-`previous_response_id` are prohibited. The default `deterministic` rendering mode constructs DIC
-results locally. Any future `redacted_ai` mode requires a separate privacy review and may receive
-only data already redacted by deterministic code.
+`MODEL_STORE=false` is mandatory. OpenAI/Groq requests apply the supported storage control; the
+llama chat-compatible request omits unsupported storage and conversation-state parameters.
+Persistent conversations and HR use of provider-side conversation identifiers are prohibited.
+The `deterministic` rendering mode constructs DIC results locally. Any future `redacted_ai` mode
+requires a separate privacy review and may receive only data already redacted by deterministic
+code.
 
-The controller must assess the provider contract, subprocessor list, processing region,
-international-transfer mechanism and configured retention independently of this application.
+For an external provider, the controller must assess contract, subprocessor list, processing
+region, international-transfer mechanism and configured retention independently of this
+application. A local llama endpoint still requires host, access, model and log-retention review.
 
 ## Discord disclosure rules
 
@@ -106,7 +111,8 @@ On suspected disclosure or credential/session compromise:
 1. set `ENABLE_WRITE_ACTIONS=false` through the approved runtime mechanism;
 2. stop the bot if confidentiality is at risk;
 3. preserve redacted logs and verify the audit chain;
-4. invalidate the DIC session and rotate affected Discord/OpenAI/DIC/encryption credentials;
+4. invalidate the DIC session and rotate affected Discord, model-provider, DIC and encryption
+   credentials;
 5. isolate and hash relevant files without opening them;
 6. determine affected people, data, duration and recipients;
 7. follow the controller's breach assessment and notification timetable;
@@ -127,7 +133,8 @@ Do not copy sensitive evidence into tickets, chat or this repository.
 - [ ] Controller, processor roles and authorized purposes are recorded.
 - [ ] Lawful basis and any required DPIA have been approved.
 - [ ] Discord membership/roles and channel retention are reviewed.
-- [ ] OpenAI contractual, transfer and retention settings are reviewed.
+- [ ] Contractual, transfer and retention settings of the selected external provider, or the
+      controls of the local llama host, are reviewed.
 - [ ] DIC account has least privilege and a documented MFA process.
 - [ ] Log, audit, attachment, trace and backup retention periods are configured.
 - [ ] Data-subject and breach procedures name responsible contacts.

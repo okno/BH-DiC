@@ -12,12 +12,14 @@ runner = CliRunner()
 def test_cli_version_and_mock_config_are_operational() -> None:
     version = runner.invoke(app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.1.0"
+    assert version.stdout.strip() == "0.2.0"
 
     config = runner.invoke(app, ["validate-config", "--mock"])
     assert config.exit_code == 0
     summary = json.loads(config.stdout)
     assert summary["mock_mode"] is True
+    assert summary["model_provider"] == "openai"
+    assert summary["model_store"] is False
     assert summary["openai_store"] is False
     assert summary["write_actions"] is False
 

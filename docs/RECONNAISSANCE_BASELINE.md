@@ -80,7 +80,7 @@ da e Azioni. Le categorie osservate includevano CV, documento d'identità, paten
 passaporto e tessera sanitaria. Non sono stati verificati limiti dimensionali,
 formati, versionamento, firma, sostituzione, notifiche, antivirus o comportamento
 effettivo dell'upload. Il contenuto dei documenti non è parte della baseline e non
-deve essere pubblicato su Discord o inviato a OpenAI.
+deve essere pubblicato su Discord o inviato al provider di modello.
 
 ## Elementi ancora da scoprire
 

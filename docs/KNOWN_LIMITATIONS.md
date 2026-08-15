@@ -57,7 +57,8 @@
   rifiutati prima della creazione del pending.
 - L'upload documenti richiede un file risolto sotto la root controllata e la capability ClamAV.
   Il pending conserva soltanto l'`upload_id`: path locale e SHA-256 non entrano in eventi, log,
-  Discord o OpenAI. Lo SHA-256 è visibile esclusivamente all'operatore locale nei metadati file.
+  Discord o al provider di modello. Lo SHA-256 è visibile esclusivamente all'operatore locale nei
+  metadati file.
   Dimensioni/formati effettivi, validazioni del form, versionamento, firma, sostituzione e
   notifiche del sito restano ignoti.
 - Le write create/update possono non restituire un ID stabile. Senza ID o
@@ -77,6 +78,18 @@ configurazione completa timbrature, gestione/upload buste paga, azioni massive,
 filtri avanzati, importazione, duplicazione e archiviazione. Non esporre tool
 operativi per questi workflow finché una ricognizione mirata non ne determina
 semantica, permessi e postcondizioni.
+
+## Provider di modello e persona
+
+- Il router supporta configurazione OpenAI, Groq e llama/OpenAI-compatible, ma autenticazione,
+  disponibilità modello, quota, latenza e conformità degli output non sono state verificate live
+  per alcun provider in questa consegna.
+- Groq usa una base URL fissa e il modello predefinito documentato; ciò non garantisce che il
+  modello sia abilitato nell'account. Il runtime llama locale, il modello e la protezione della
+  porta sono responsabilità dell'operatore e non vengono installati da BH-DiC.
+- La lingua della persona riguarda chiarimenti e decorazioni; dati/output operativi restano in
+  italiano. Il profilo non migliora l'autorizzazione, non sostituisce la validazione deterministica
+  e non rende BH-DiC un assistente generalista o un bot di moderazione Discord.
 
 ## Operatività e scala
 

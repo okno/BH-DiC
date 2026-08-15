@@ -14,7 +14,7 @@ APP_ENV=development
 MOCK_MODE=true
 LOG_LEVEL=DEBUG
 ENABLE_WRITE_ACTIONS=false
-OPENAI_STORE=false
+MODEL_STORE=false
 ```
 
 Avviare in foreground soltanto quando lo script e la CLI risultano disponibili:
@@ -70,10 +70,16 @@ Non usare employee ID reale come chiave di ricerca nei log.
 - eseguire `./scripts/register-commands.sh` nel solo guild;
 - controllare che la modalità slash non richieda Message Content Intent.
 
-### Errori OpenAI
+### Errori del provider di modello
 
-- verificare `OPENAI_STORE=false`, modello, timeout e quota;
-- usare `doctor.sh --online` solo se autorizzato;
+- verificare `MODEL_PROVIDER`, `MODEL_STORE=false`, credenziale/modello specifici, timeout e quota;
+- per Groq non introdurre una base URL configurabile: deve restare
+  `https://api.groq.com/openai/v1`;
+- per llama verificare servizio loopback, `LLAMA_BASE_URL` e `LLAMA_MODEL` senza pubblicare
+  prompt o output;
+- usare prima `.venv/bin/python -m bh_dic model-check`, che è offline;
+- usare `doctor.sh --online` e `model-check --live` solo se rete/costo sono autorizzati; il primo
+  non autentica, il secondo fa una sola richiesta sintetica chiusa e non esegue tool;
 - correlare request ID redatto senza loggare prompt o risposta completa;
 - un errore provider deve fallire chiuso, non bypassare il router.
 

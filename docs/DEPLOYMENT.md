@@ -48,6 +48,7 @@ chmod 600 .env
 nano .env
 ./scripts/install.sh
 ./scripts/doctor.sh
+.venv/bin/python -m bh_dic model-check
 ./scripts/status.sh
 ```
 
@@ -57,7 +58,7 @@ privata va clonata con una credenziale a privilegi minimi che non compaia nel re
 La configurazione deve mantenere:
 
 ```dotenv
-OPENAI_STORE=false
+MODEL_STORE=false
 ENABLE_WRITE_ACTIONS=false
 ENABLE_LIVE_WRITE_TESTS=false
 ```
@@ -66,12 +67,18 @@ Non registrare slash command e non eseguire `start.sh` durante la sola preparazi
 seguenti appartengono alla successiva attivazione, che richiede autorizzazione distinta:
 
 ```bash
+./scripts/doctor.sh --online
+.venv/bin/python -m bh_dic model-check --live
 ./scripts/register-commands.sh
 ./scripts/start.sh
 ./scripts/status.sh
 ./scripts/logs.sh all --follow
 ./scripts/stop.sh
 ```
+
+I due comandi online richiedono autorizzazione esplicita a rete/costo. Il doctor verifica solo
+DNS/HTTP; il model-check effettua una singola richiesta sintetica chiusa al provider e non tocca
+DIC/Discord/browser. Ometterli se tale autorizzazione non è presente e mantenere il bot fermo.
 
 ## Stato di consegna atteso
 
@@ -86,7 +93,10 @@ seguenti appartengono alla successiva attivazione, che richiede autorizzazione d
 - report senza token, PII, cookie o contenuti HR.
 
 Un file systemd di esempio può essere revisionato, ma non va installato né abilitato senza una
-richiesta successiva.
+richiesta successiva. Se viene scelto systemd, usare esclusivamente `systemctl`/`journalctl` per
+il lifecycle; non mescolare l'unit con gli script PID `start.sh`, `stop.sh` o `restart.sh`. La
+procedura completa Debian, provider, Discord e prima verifica read-only è in
+[Installazione e runbook](INSTALLATION.md).
 
 ## Rollback
 

@@ -30,8 +30,9 @@ from bh_dic.files.mime import ContentMimeDetector
 from bh_dic.files.quarantine import QuarantineStore
 from bh_dic.files.repository import SqlAlchemyUploadRepository
 from bh_dic.files.service import FileService
-from bh_dic.openai.client import ResponsesIntentClient
+from bh_dic.openai.factory import build_intent_client
 from bh_dic.openai.intent_router import IntentRouter, MockIntentRouter, OpenAIIntentRouter
+from bh_dic.openai.prompts import build_intent_router_prompt
 from bh_dic.policies.engine import PolicyEngine
 from bh_dic.policies.feature_flags import DEFAULT_FEATURE_FLAGS, RuntimeFeatureFlags
 from bh_dic.policies.roles import LogicalRole
@@ -199,17 +200,11 @@ async def _adapter(
 
 def _router(settings: AppSettings, *, force_mock_components: bool) -> IntentRouter:
     if settings.mock_mode or force_mock_components:
-        return MockIntentRouter()
-    if settings.openai_api_key is None or settings.openai_model is None:
-        raise ValueError("OpenAI configuration is required")
+        return MockIntentRouter(settings.language_profile)
     return OpenAIIntentRouter(
-        ResponsesIntentClient(
-            api_key=settings.openai_api_key.get_secret_value(),
-            model=settings.openai_model,
-            timeout_seconds=settings.openai_timeout_seconds,
-            max_retries=settings.openai_max_retries,
-            max_output_tokens=settings.openai_max_output_tokens,
-            reasoning_effort=settings.openai_reasoning_effort,
+        build_intent_client(
+            settings,
+            developer_prompt=build_intent_router_prompt(settings.language_profile),
         )
     )
 
@@ -325,6 +320,7 @@ async def build_runtime(
         interaction_mode=settings.discord_interaction_mode,
         upload_max_bytes=settings.upload_max_mb * 1024 * 1024,
         pending_view_source=RepositoryPendingViewSource(approval_repository),
+        language_profile=settings.language_profile,
     )
     bot_holder["bot"] = bot
     return ApplicationRuntime(

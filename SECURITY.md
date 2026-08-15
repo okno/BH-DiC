@@ -21,10 +21,14 @@ security fixes.
 For suspected compromise:
 
 1. Set `ENABLE_WRITE_ACTIONS=false` and stop the bot.
-2. Revoke Discord, OpenAI, and Dipendenti in Cloud credentials and invalidate browser sessions.
+2. Revoke `DISCORD_BOT_TOKEN`, the selected provider credential (`OPENAI_API_KEY`,
+   `GROQ_API_KEY`, or optional `LLAMA_API_KEY`), and Dipendenti in Cloud credentials; invalidate
+   browser sessions.
 3. Preserve database and audit files read-only; do not rewrite the audit chain.
 4. Review security logs using correlation IDs and verify the complete audit chain.
 5. Restore only from a verified backup, rotate the HMAC and encryption keys under a documented
    key-transition procedure, and re-enable reads before considering writes.
 
-Never paste secrets into commands, commit history, tickets, or diagnostic output.
+Never paste these credentials into Discord, any chat, commands, commit history, tickets, logs, or
+diagnostic output. Rotate and revoke them at their issuing service, update only the protected local
+`.env`, run the offline gates, and restart only after authorization.

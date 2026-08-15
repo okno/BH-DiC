@@ -16,12 +16,13 @@ assente; sul target il suo stato è `UNVERIFIED` e il deployment è `BLOCKED`.
 |---|---|---|
 | `bh-dic`/CLI non disponibile | `.venv/bin/python -m bh_dic --help` | reinstallare editable; non creare wrapper improvvisati |
 | configurazione rifiutata | `doctor.sh`, `safe_summary()` | completare valori mancanti; non usare mock in production |
-| `OPENAI_STORE=true` rifiutato | `.env` locale | riportare a `false`; non cambiare il validatore |
+| `MODEL_STORE=true` rifiutato | `.env` locale | riportare a `false`; non cambiare il validatore |
 | bot non parte | PID/lock, config, DB, log | rimuovere stale file solo se nessun processo BH-DiC esiste |
 | bot già attivo | `status.sh`, `ps` | non avviare una seconda istanza |
 | slash command assenti | guild/application ID e scope | `register-commands.sh` nel solo guild |
 | access denied Discord | guild/channel/ruolo/thread | correggere mapping autorizzato, non allargare RBAC |
-| OpenAI timeout/quota | log `openai`, doctor online autorizzato | retry limitato del routing; mai bypassare intent validation |
+| timeout/quota provider | log router, account provider, `model-check` offline/live autorizzato | verificare `MODEL_PROVIDER`, modello e chiave; retry limitato, mai bypassare intent validation |
+| llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
 | login DIC fallisce | URL, clock, sessione, MFA/CAPTCHA | invalidare sessione; escalation umana per MFA/CAPTCHA |
 | UI drift/selettore rotto | route/page object, trace protetto | smoke read-only e patch testata; nessuna write live |

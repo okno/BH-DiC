@@ -3,8 +3,8 @@
 ## Security contract
 
 Attachment handling is disabled by default. When enabled, an attachment is untrusted until all
-quarantine checks complete. It must never be sent to OpenAI, rendered in Discord, automatically
-opened, executed or used as a shell/URL argument.
+quarantine checks complete. It must never be sent to a model provider, rendered in Discord,
+automatically opened, executed or used as a shell/URL argument.
 
 Relevant controls:
 
@@ -97,6 +97,9 @@ Metadata may include opaque upload ID, normalized original name, claimed/detecte
 SHA-256, antivirus state, lifecycle state and timestamps. Do not log the original name, full local
 path or file content. Security events use the opaque ID and rejection reason.
 
+The SHA-256 is visible only to an authorized local operator through file metadata. It must never
+appear in events, logs, Discord responses or model-provider requests.
+
 Discord receives status and opaque ID only. A local export/download, if separately enabled and
 approved, remains in the protected area and is never attached back to Discord.
 
@@ -147,5 +150,5 @@ Do not upload a suspicious sample to a third-party service without controller au
 - [ ] Size, traversal, MIME mismatch, extension mismatch and dedup tests pass.
 - [ ] Clean, infected, unavailable and error antivirus paths are tested.
 - [ ] Expired byte deletion and metadata event are verified.
-- [ ] No attachment bytes or original filenames appear in OpenAI/log payloads.
+- [ ] No attachment bytes or original filenames appear in model-provider/log payloads.
 - [ ] No file is posted back to Discord.

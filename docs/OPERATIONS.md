@@ -12,6 +12,9 @@ I 22 script Bash richiesti sono presenti e il gate locale ha verificato parsing 
 statici di contratto e 2 casi comportamentali (31 totali). Restano non eseguiti sul target Linux:
 un test locale non equivale a un comando riuscito sul server.
 
+Il gate release 0.2.0 del 15 agosto 2026 ha rieseguito tutti i 31 casi sul worktree finale. Non sono
+stati eseguiti comandi sul target Debian.
+
 ## Runbook giornaliero
 
 ### Configurazione
@@ -47,6 +50,26 @@ Sono modalità alternative. Dettagli in [Start/stop](START_STOP.md).
 Il primo healthcheck controlla soltanto identità/processo. Quello completo richiede configurazione
 e DB; se l'interfaccia CLI/script non coincide, trattarlo come `BLOCKED` e non sostituirlo con una
 chiamata live improvvisata.
+
+### Provider di modello
+
+Il gate predefinito è offline:
+
+```bash
+.venv/bin/python -m bh_dic model-check
+```
+
+Mostra provider, modello e scope senza rete. Dopo doctor e soltanto con autorizzazione esplicita a
+rete/costo, prima dell'avvio:
+
+```bash
+./scripts/doctor.sh --online
+.venv/bin/python -m bh_dic model-check --live
+```
+
+Il doctor online prova DNS/HTTP senza autenticazione. Il model-check live esegue una singola
+richiesta sintetica con zero Function ID ammessi, non costruisce DIC/Discord/browser e non esegue
+tool. Il suo `LIVE_VERIFIED` non attesta DIC o deployment.
 
 ### Log
 
@@ -128,8 +151,9 @@ Invalidare una sessione cifrata dopo rotazione credenziali o sospetto compromess
 ./scripts/doctor.sh
 ```
 
-Per Discord/OpenAI/DIC: revocare lato provider, aggiornare `.env` con `0600`, invalidare la
-sessione DIC quando pertinente, verificare audit/doctor e avviare soltanto dopo autorizzazione.
+Per Discord/provider di modello/DIC: revocare lato provider, aggiornare `.env` con `0600`,
+invalidare la sessione DIC quando pertinente, verificare audit/doctor e avviare soltanto dopo
+autorizzazione.
 
 ## Incident response minima
 

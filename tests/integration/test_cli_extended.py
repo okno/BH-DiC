@@ -84,6 +84,89 @@ def test_config_failure_and_both_init_db_modes(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_model_check_uses_only_the_closed_synthetic_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, frozenset[str]]] = []
+
+    class FakeClient:
+        async def route(
+            self, request: str, allowed_function_ids: frozenset[str]
+        ) -> SimpleNamespace:
+            calls.append((request, allowed_function_ids))
+            return SimpleNamespace(
+                envelope=SimpleNamespace(function_id="UNSUPPORTED"),
+                metadata=SimpleNamespace(
+                    provider="groq",
+                    model="openai/gpt-oss-120b",
+                    tool_name="unsupported_request",
+                ),
+            )
+
+    settings = _settings().model_copy(update={"mock_mode": False, "model_provider": "groq"})
+    monkeypatch.setattr(cli, "build_intent_client", lambda *_args, **_kwargs: FakeClient())
+    result = await cli._model_check_live(settings)
+
+    assert calls and calls[0][1] == frozenset()
+    assert "dati personali" in calls[0][0]
+    assert result == {
+        "status": "LIVE_VERIFIED",
+        "live_contacted": True,
+        "provider": "groq",
+        "model": "openai/gpt-oss-120b",
+        "tool": "unsupported_request",
+        "store": False,
+        "tool_execution": False,
+    }
+
+
+def test_model_check_cli_is_offline_by_default_and_live_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings().model_copy(
+        update={"model_provider": "groq", "groq_model": "openai/gpt-oss-120b"}
+    )
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
+
+    offline = runner.invoke(cli.app, ["model-check"])
+    assert offline.exit_code == 0, offline.output
+    payload = json.loads(offline.stdout)
+    assert payload["status"] == "UNVERIFIED_OFFLINE"
+    assert payload["provider"] == "groq"
+    assert payload["model"] == "openai/gpt-oss-120b"
+    assert payload["live_contacted"] is False
+
+    rejected = runner.invoke(cli.app, ["model-check", "--live"])
+    assert rejected.exit_code == 2
+    assert "MOCK_MODE" in rejected.output
+
+    live_settings = settings.model_copy(update={"mock_mode": False})
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: live_settings)
+    monkeypatch.setattr(
+        cli,
+        "_model_check_live",
+        AsyncMock(
+            return_value={
+                "status": "LIVE_VERIFIED",
+                "live_contacted": True,
+                "provider": "groq",
+            }
+        ),
+    )
+    verified = runner.invoke(cli.app, ["model-check", "--live"])
+    assert verified.exit_code == 0, verified.output
+    assert json.loads(verified.stdout)["status"] == "LIVE_VERIFIED"
+
+    monkeypatch.setattr(
+        cli, "_model_check_live", AsyncMock(side_effect=RuntimeError("private detail"))
+    )
+    failed = runner.invoke(cli.app, ["model-check", "--live"])
+    assert failed.exit_code == 1
+    assert "RuntimeError" in failed.output
+    assert "private detail" not in failed.output
+
+
+@pytest.mark.asyncio
 async def test_mock_smoke_failure_guards_always_close_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -11,6 +11,7 @@ import tempfile
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Never
+from urllib.parse import SplitResult, urlsplit
 
 import typer
 
@@ -28,6 +29,14 @@ from bh_dic.files.repository import SqlAlchemyUploadRepository
 from bh_dic.files.retention import FileRetentionService
 from bh_dic.health import HealthChecker
 from bh_dic.logging import configure_logging
+from bh_dic.openai.factory import build_intent_client
+from bh_dic.openai.intent_router import OpenAIIntentRouter
+from bh_dic.openai.prompts import build_intent_router_prompt
+from bh_dic.openai.providers import (
+    GROQ_OPENAI_BASE_URL,
+    OPENAI_RESPONSES_BASE_URL,
+    llama_endpoint_is_loopback,
+)
 from bh_dic.policies.roles import LogicalRole
 from bh_dic.runtime import build_runtime
 
@@ -134,7 +143,7 @@ def _settings(*, mock: bool = False, data_dir: Path | None = None) -> AppSetting
     overrides: dict[str, Any] = {
         "app_env": "mock",
         "mock_mode": True,
-        "openai_store": False,
+        "model_store": False,
         "enable_write_actions": False,
         "enable_live_write_tests": False,
         "discord_application_id": 10_000_003,
@@ -157,6 +166,58 @@ def _settings(*, mock: bool = False, data_dir: Path | None = None) -> AppSetting
             }
         )
     return AppSettings(**overrides)
+
+
+def _provider_endpoint(settings: AppSettings) -> SplitResult:
+    if settings.model_provider == "openai":
+        return urlsplit(OPENAI_RESPONSES_BASE_URL)
+    if settings.model_provider == "groq":
+        return urlsplit(GROQ_OPENAI_BASE_URL)
+    return urlsplit(settings.llama_base_url)
+
+
+def _model_check_offline(settings: AppSettings) -> dict[str, object]:
+    endpoint_scope = "official_cloud"
+    if settings.model_provider == "llama":
+        endpoint_scope = (
+            "loopback" if llama_endpoint_is_loopback(settings.llama_base_url) else "remote_https"
+        )
+    return {
+        "status": "UNVERIFIED_OFFLINE",
+        "live_contacted": False,
+        "provider": settings.model_provider,
+        "model": settings.selected_model,
+        "endpoint_scope": endpoint_scope,
+        "store": False,
+        "tool_execution": False,
+    }
+
+
+async def _model_check_live(settings: AppSettings) -> dict[str, object]:
+    """Verify authentication, model availability, and one closed synthetic tool call."""
+
+    client = build_intent_client(
+        settings,
+        developer_prompt=build_intent_router_prompt(settings.language_profile),
+    )
+    routed = await OpenAIIntentRouter(client).route(
+        "Verifica sintetica del router senza dati personali e senza azioni operative.",
+        frozenset(),
+    )
+    if (
+        routed.envelope.function_id != "UNSUPPORTED"
+        or routed.metadata.tool_name != "unsupported_request"
+    ):
+        raise RuntimeError("provider did not honor the closed synthetic tool contract")
+    return {
+        "status": "LIVE_VERIFIED",
+        "live_contacted": True,
+        "provider": routed.metadata.provider,
+        "model": routed.metadata.model,
+        "tool": routed.metadata.tool_name,
+        "store": False,
+        "tool_execution": False,
+    }
 
 
 async def _with_database[T](
@@ -213,6 +274,29 @@ def validate_config(mock: bool = typer.Option(False, help="Validate safe mock de
 
     settings = _settings(mock=mock)
     _emit(settings.safe_summary())
+
+
+@app.command("model-check")
+def model_check(
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Contact only the selected model provider with one synthetic closed tool call.",
+    ),
+) -> None:
+    """Inspect provider readiness; network and billing are opt-in with ``--live``."""
+
+    settings = _settings()
+    if not live:
+        _emit(_model_check_offline(settings))
+        return
+    if settings.mock_mode:
+        _fail("--live non e disponibile con MOCK_MODE=true.", code=2)
+    try:
+        result = _run(_model_check_live(settings))
+    except Exception as exc:
+        _fail(f"Verifica provider fallita ({type(exc).__name__}).")
+    _emit(result)
 
 
 @app.command("init-db")
@@ -350,11 +434,22 @@ def doctor_command(
         "online_checks_requested": online,
     }
     if online:
-        hosts = ("discord.com", "api.openai.com", "secure.dipendentincloud.it")
+        provider_endpoint = _provider_endpoint(settings)
+        provider_host = provider_endpoint.hostname
+        if provider_host is None:
+            _fail("Endpoint provider non valido.")
+        provider_port = provider_endpoint.port or (
+            443 if provider_endpoint.scheme == "https" else 80
+        )
+        targets = (
+            ("discord.com", 443),
+            (provider_host, provider_port),
+            ("secure.dipendentincloud.it", 443),
+        )
         dns: dict[str, bool] = {}
-        for host in hosts:
+        for host, port in dict.fromkeys(targets):
             try:
-                socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+                socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
             except OSError:
                 dns[host] = False
             else:

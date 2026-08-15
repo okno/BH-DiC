@@ -36,8 +36,10 @@ _SENSITIVE_KEY = re.compile(
     r"file[_-]?(?:content|name|path)|safe[_-]?local)"
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_LABELED_SECRET = re.compile(r"(?i)\b(?:token|password|secret|cookie|api[\s_-]?key)\s*[:=]\s*\S+")
 _PROVIDER_KEY = re.compile(
-    r"\b(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,})\b"
+    r"\b(?:sk-[A-Za-z0-9_-]{12,}|gsk_[A-Za-z0-9_-]{12,}|"
+    r"ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,})\b"
 )
 _IBAN = re.compile(r"(?i)\bIT\d{2}[A-Z]\d{10}[A-Z0-9]{12}\b")
 _ITALIAN_TAX_ID = re.compile(r"(?i)\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b")
@@ -59,7 +61,8 @@ def redact(value: Any, *, key: str | None = None) -> Any:
     if isinstance(value, bytes):
         return "[REDACTED_BINARY]"
     if isinstance(value, str):
-        result = _BEARER.sub("Bearer [REDACTED]", value)
+        result = _LABELED_SECRET.sub("[REDACTED_SECRET]", value)
+        result = _BEARER.sub("Bearer [REDACTED]", result)
         result = _PROVIDER_KEY.sub("[REDACTED]", result)
         result = _IBAN.sub("[REDACTED_IBAN]", result)
         result = _ITALIAN_TAX_ID.sub("[REDACTED_TAX_ID]", result)

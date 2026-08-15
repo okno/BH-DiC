@@ -1,116 +1,478 @@
-# Installazione
+# Installazione, attivazione e runbook Debian
 
-Questa procedura descrive l'installazione prevista su Linux. **Non è stata eseguita sul server**:
-il collegamento SSH è bloccato finché non vengono forniti `DEPLOY_SSH_USER` e una chiave o un
-agent autorizzato. L'installazione non avvia il bot.
+Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, configurare Discord
+e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
+specialistici collegati approfondiscono i singoli controlli.
 
-## Prerequisiti
+> Stato della consegna: deployment, provider live e Dipendenti in Cloud live non sono stati
+> verificati. Il bot non è stato avviato dal workspace locale e lo stato del target è
+> `UNVERIFIED`. Tutte le write devono restare `DISABLED_BY_POLICY`; questa guida non è
+> un'autorizzazione a collegarsi al tenant o ad avviare il servizio.
 
-- accesso alla repository privata;
-- Linux x86_64 o ARM64 supportato dai pacchetti scelti;
-- Python 3.12+, `venv`, Git e certificati CA;
-- Bash, spazio disco sufficiente e, per gli upload, ClamAV;
-- eventuale `sudo` limitato all'installazione dei pacchetti necessari;
-- fingerprint SSH del server verificata fuori banda.
+## 1. Decisioni prima dell'installazione
 
-Il target preferito è `/opt/bh-dic`, eseguito dall'utente non privilegiato `bh-dic`. Senza
-`sudo`, usare `$HOME/BH-DiC`. Permessi attesi: applicazione `0750`, dati `0700`, `.env` `0600`,
-upload `0600`, log `0640` o più restrittivi.
+Registrare in un change ticket approvato, senza segreti:
 
-## Checkout privato
+- commit e branch da distribuire dalla repository privata `okno/BH-DiC`;
+- amministratore responsabile, finestra e piano di rollback;
+- host, filesystem cifrato, backup e retention;
+- guild Discord `1303955635984924722`, Channel ID copiato da `#mng-ai` e Role ID approvati;
+- provider `openai`, `groq` o `llama`, modello e budget/limiti;
+- tenant DIC atteso e identità di servizio a privilegi minimi;
+- gestore processo scelto: **systemd** oppure **script PID**, mai entrambi.
 
-Eseguire sul server con credenziali Git già configurate e senza token nell'URL:
+Non usare dati HR reali per installazione o smoke test. Verificare la fingerprint SSH dell'host
+fuori banda e non disabilitare host-key checking.
+
+## 2. Sistema operativo e Python
+
+BH-DiC richiede Python 3.12 o successivo. Debian 13 è il percorso di riferimento: installare i
+pacchetti mantenuti dalla distribuzione e verificare comunque la versione effettiva.
 
 ```bash
-umask 077
-install -d -m 0750 /opt/bh-dic
-git clone <PRIVATE_REPOSITORY_URL> /opt/bh-dic
-cd /opt/bh-dic
-git remote -v
+sudo apt-get update
+sudo apt-get install --yes \
+  bash ca-certificates git openssh-client tar curl acl util-linux \
+  python3 python3-venv python3-dev \
+  libmagic1 clamav clamav-daemon clamav-freshclam
+python3 --version
+python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'
 ```
 
-Se `/opt/bh-dic` richiede privilegi, l'amministratore deve creare e assegnare la directory
-prima del clone. Non eseguire il bot come `root`.
-
-## Installazione automatizzata
-
-L'interfaccia operativa prevista è:
+Debian 12 stock fornisce Python 3.11, quindi `apt install python3` **non è sufficiente**. Prima di
+proseguire, l'amministratore deve rendere disponibile un CPython 3.12+ mantenuto e approvato
+dall'organizzazione, inclusi `venv` e i componenti di compilazione necessari. Non sostituire il
+Python di sistema, non aggiungere repository Ubuntu/deadsnakes e non usare installer
+`curl | bash`. Il gate deve riuscire con il binario approvato, per esempio:
 
 ```bash
-cd /opt/bh-dic
-./scripts/install.sh
+python3.12 --version
+python3.12 -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'
 ```
 
-Lo script è presente e ha superato parsing/test di contratto locali; prima dell'uso verificare che
-sia eseguibile nel commit distribuito. Deve
-rilevare distribuzione/architettura/Python, creare `.venv`, installare dipendenze e Chromium,
-verificare ClamAV, creare `var/` con permessi stretti ed eseguire le migrazioni. Non deve creare
-segreti né avviare processi persistenti.
+Se nessuno tra `python3.14`, `python3.13`, `python3.12` o `python3` supera il gate, interrompere
+l'installazione. `scripts/install.sh` ripete questa ricerca e fallisce chiuso.
 
-## Installazione manuale di sviluppo
+Mantenere Debian, Python, ClamAV e librerie Chromium aggiornati tramite il processo patching
+aziendale. Non disabilitare TLS o verifica delle firme per risolvere un errore di pacchetto.
 
-Questa è una procedura di fallback per una macchina isolata, non un'attestazione di deployment:
+## 3. Utente e directory dedicati
+
+Creare un account senza login e directory separate per home e codice:
 
 ```bash
-cd /opt/bh-dic
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install --requirement requirements.lock
-python -m pip install --editable .
-python -m playwright install chromium
-install -d -m 0700 var/db var/run var/log var/audit var/session var/uploads
-python -m alembic -c migrations/alembic.ini upgrade head
+sudo adduser --system --group --home /var/lib/bh-dic \
+  --shell /usr/sbin/nologin bh-dic
+sudo install -d -o bh-dic -g bh-dic -m 0700 /var/lib/bh-dic
+sudo install -d -o bh-dic -g bh-dic -m 0750 /opt/bh-dic
 ```
 
-L'installazione di librerie di sistema per Chromium o ClamAV dipende dalla distribuzione e deve
-essere revisionata dall'amministratore; non usare opzioni che disabilitano TLS o verifiche delle
-firme.
+Non eseguire il bot come `root`. Target attesi: applicazione `0750`, directory dati `0700`,
+`.env` e backup `0600`, log `0640` o più restrittivi. La home separata evita di mescolare cache
+runtime e working tree.
 
-## Configurazione iniziale
+## 4. Clone privato verificato
+
+Configurare per `bh-dic` una deploy key read-only o un credential helper approvato. Verificare
+prima la host key GitHub e non inserire token nell'URL. Quindi:
+
+```bash
+sudo -u bh-dic -H git clone git@github.com:okno/BH-DiC.git /opt/bh-dic
+cd /opt/bh-dic
+sudo -u bh-dic -H git remote -v
+sudo -u bh-dic -H git status --short --branch
+sudo -u bh-dic -H git rev-parse HEAD
+```
+
+Confrontare lo SHA con quello approvato. Il remote non deve contenere credenziali. Conservare la
+repository privata e non copiare deploy key o output sensibile nel report.
+
+## 5. Dipendenze Python, Playwright e ClamAV
+
+Creare ambiente e dipendenze senza avviare il bot. Il primo passaggio omette solo il browser:
+
+```bash
+sudo -u bh-dic -H /bin/bash -c \
+  'cd /opt/bh-dic && ./scripts/install.sh --skip-browser'
+```
+
+Installare come amministratore le librerie native richieste da Chromium, poi il browser nella
+cache dell'utente di servizio:
+
+```bash
+sudo /opt/bh-dic/.venv/bin/python -m playwright install-deps chromium
+sudo -u bh-dic -H /opt/bh-dic/scripts/browser-install.sh
+```
+
+Non eseguire `playwright install` come root: il binario finirebbe nella cache dell'utente errato.
+`browser-install.sh --with-deps` è utile soltanto su un host dove l'utente che lo invoca è
+autorizzato anche a installare pacchetti OS; la sequenza separata sopra rende esplicita la
+divisione dei privilegi.
+
+Abilitare il daemon antivirus e consentire all'account di servizio l'accesso al socket secondo il
+packaging Debian:
+
+```bash
+sudo systemctl enable --now clamav-freshclam.service clamav-daemon.service
+sudo usermod --append --groups clamav bh-dic
+sudo -u bh-dic -H clamdscan --version
+```
+
+Verificare sul target il path e i permessi del socket; valorizzare `CLAMAV_SOCKET` solo se il
+default non viene rilevato. Se ClamAV o il socket non sono disponibili, mantenere
+`ENABLE_DOCUMENT_UPLOAD=false`: con `CLAMAV_REQUIRED=true` l'upload fallisce chiuso.
+
+## 6. Creare `.env` senza segreti nella cronologia
 
 ```bash
 cd /opt/bh-dic
-cp -n .env.example .env
-chmod 600 .env
-${EDITOR:-nano} .env
+sudo -u bh-dic -H ./scripts/init-config.sh
+sudo chmod 600 .env
+sudo -u bh-dic -H ${EDITOR:-nano} .env
+```
+
+`init-config.sh` rifiuta di sovrascrivere un file esistente. Compilare `.env` localmente da una
+console amministrativa protetta. Non usare `export SECRET=...`, argomenti CLI o heredoc registrati
+nella history.
+
+Baseline obbligatoria per prima attivazione:
+
+```dotenv
+APP_ENV=production
+MOCK_MODE=false
+MODEL_STORE=false
+MODEL_RESULT_RENDERING=deterministic
+DISCORD_GUILD_ID=1303955635984924722
+DISCORD_CHANNEL_ID=<ID_COPIATO_DA_MNG_AI>
+DISCORD_INTERACTION_MODE=slash
+DISCORD_ALLOW_DMS=false
+ENABLE_READ_ACTIONS=true
+ENABLE_WRITE_ACTIONS=false
+ENABLE_LIVE_WRITE_TESTS=false
+REQUIRE_TWO_PERSON_APPROVAL=true
+CLAMAV_REQUIRED=true
+SAVE_FAILURE_SCREENSHOTS=false
+PLAYWRIGHT_TRACE_MODE=off
+```
+
+Tutti i flag `ENABLE_*` specifici di write devono rimanere `false`. Vedere
+[Configuration](CONFIGURATION.md) per ruoli, chiavi di almeno 32 byte, database, DIC e persona.
+
+### Scegliere un provider
+
+OpenAI:
+
+```dotenv
+MODEL_PROVIDER=openai
+OPENAI_API_KEY=<SEGRETO_LOCALE>
+OPENAI_MODEL=<MODELLO_APPROVATO>
+```
+
+Groq:
+
+```dotenv
+MODEL_PROVIDER=groq
+GROQ_API_KEY=<SEGRETO_LOCALE>
+GROQ_MODEL=openai/gpt-oss-120b
+```
+
+llama locale OpenAI-compatible:
+
+```dotenv
+MODEL_PROVIDER=llama
+LLAMA_BASE_URL=http://127.0.0.1:11434/v1
+LLAMA_MODEL=<MODELLO_LOCALE_INSTALLATO>
+# LLAMA_API_KEY=<SEGRETO_OPZIONALE>
+```
+
+Parametri comuni:
+
+```dotenv
+MODEL_TIMEOUT_SECONDS=60
+MODEL_MAX_RETRIES=2
+MODEL_MAX_OUTPUT_TOKENS=1200
+MODEL_REASONING_EFFORT=low
+MODEL_STORE=false
+MODEL_RESULT_RENDERING=deterministic
+```
+
+Le base URL OpenAI e Groq sono fisse nel codice a `https://api.openai.com/v1` e
+`https://api.groq.com/openai/v1`. L'URL llama HTTP è ammessa soltanto su loopback, con path `/v1`;
+un endpoint HTTPS remoto richiede `LLAMA_API_KEY`. Configurazione, criteri e fonti ufficiali sono in
+[Provider di modello](OPENAI_SETUP.md).
+
+### Configurare la persona
+
+```dotenv
+BOT_LANGUAGE=it
+BOT_TONE=professional
+BOT_ADDRESS_STYLE=lei
+BOT_VERBOSITY=standard
+BOT_EMOJI_MODE=off
+BOT_DISPLAY_NAME=BH-DiC
+BOT_OPENING=
+BOT_CLOSING=
+```
+
+La persona cambia soltanto chiarimenti e decorazioni; dati/output operativi restano in italiano.
+Non amplia tool, ruoli o azioni e non trasforma BH-DiC in un bot generalista o di moderazione.
+
+## 7. Discord e registrazione guild-scoped
+
+Nel Discord Developer Portal creare app e bot, lasciare disabilitati gli intent privilegiati e
+installare nel solo guild `1303955635984924722` con gli scope `applications.commands` e `bot`.
+Usare i permessi minimi View Channel, Send Messages ed Embed Links (`19456`). Copiare il Channel
+ID da `#mng-ai` con Developer Mode; il nome del canale non è un ID.
+
+La procedura esatta, l'install URL guild-locked e la mappa RBAC sono in
+[Configurazione Discord](DISCORD_SETUP.md). Con configurazione completa e bot fermo:
+
+```bash
+cd /opt/bh-dic
+sudo -u bh-dic -H ./scripts/doctor.sh
+sudo -u bh-dic -H ./scripts/status.sh
+sudo -u bh-dic -H ./scripts/register-commands.sh
+sudo -u bh-dic -H ./scripts/status.sh
+```
+
+La registrazione non deve avviare il gateway e non deve eseguire richieste DIC.
+
+## 8. Gate offline e smoke mock
+
+Prima di qualsiasi rete applicativa:
+
+```bash
+cd /opt/bh-dic
+sudo -u bh-dic -H ./scripts/doctor.sh
+sudo -u bh-dic -H ./scripts/audit-verify.sh
+sudo -u bh-dic -H ./scripts/status.sh
+sudo -u bh-dic -H .venv/bin/python -m bh_dic run --mock --check-only
+sudo -u bh-dic -H .venv/bin/python -m bh_dic model-check
+```
+
+Il check mock costruisce la slice locale, non apre Discord/DIC e non autorizza write. Conservare
+exit code, timestamp, commit e safe summary; non conservare `.env`, prompt o risposte complete.
+`model-check` senza `--live` non usa rete e riporta provider/modello/scope con stato
+`UNVERIFIED_OFFLINE`.
+
+Soltanto dopo autorizzazione esplicita a connettività e costo provider:
+
+```bash
+sudo -u bh-dic -H ./scripts/doctor.sh --online
+sudo -u bh-dic -H .venv/bin/python -m bh_dic model-check --live
+```
+
+Il doctor online seleziona l'host OpenAI/Groq/llama configurato ma prova soltanto DNS/HTTP, non
+l'autenticazione. `model-check --live` invia una sola richiesta sintetica senza PII, espone zero
+Function ID e accetta soltanto `unsupported_request`; non costruisce Discord, DIC o browser e non
+esegue tool. `LIVE_VERIFIED` vale esclusivamente per il provider/modello in quel momento. Nessuno
+dei due comandi prova login DIC, selettori live o deployment completo.
+
+## 9. Scegliere un solo gestore di processo
+
+### Opzione A: systemd, raccomandata per il server
+
+Revisionare l'unit di esempio, mantenendo `User=bh-dic`, hardening e path `/opt/bh-dic`:
+
+```bash
+sudo install -o root -g root -m 0644 \
+  /opt/bh-dic/infrastructure/systemd/bh-dic.service.example \
+  /etc/systemd/system/bh-dic.service
+sudo systemd-analyze verify /etc/systemd/system/bh-dic.service
+sudo systemctl daemon-reload
+```
+
+La preparazione termina qui con il servizio disabled/stopped. Dopo autorizzazione distinta:
+
+```bash
+sudo systemctl start bh-dic.service
+sudo systemctl status bh-dic.service --no-pager
+sudo journalctl -u bh-dic.service --since today --no-pager
+```
+
+Abilitare l'avvio al boot solo dopo uno smoke riuscito:
+
+```bash
+sudo systemctl enable bh-dic.service
+```
+
+Stop e restart:
+
+```bash
+sudo systemctl stop bh-dic.service
+sudo systemctl restart bh-dic.service
+```
+
+In modalità systemd non usare `start.sh`, `stop.sh` o `restart.sh`: quegli script gestiscono un
+PID file proprio e possono divergere dallo stato osservato da systemd. Per processo e log usare
+`systemctl`/`journalctl`; gli script di audit, file, backup e doctor restano utilizzabili a
+servizio fermo quando previsto.
+
+### Opzione B: script PID, per sessioni controllate
+
+Verificare che l'unit systemd non sia abilitata né attiva, quindi:
+
+```bash
+sudo -u bh-dic -H ./scripts/start.sh
+sudo -u bh-dic -H ./scripts/status.sh
+sudo -u bh-dic -H ./scripts/logs.sh all --follow
+sudo -u bh-dic -H ./scripts/stop.sh
+```
+
+In questa modalità non usare `systemctl start bh-dic`. Dettagli su lock, timeout, `--force` e
+foreground in [Start/stop](START_STOP.md).
+
+## 10. Prima attivazione: sola lettura
+
+Prima dell'avvio rieseguire e registrare il gate:
+
+```bash
+grep -E '^ENABLE_' .env
 ./scripts/doctor.sh
-```
-
-`cp -n` evita di sovrascrivere una configurazione esistente. Inserire i segreti soltanto tramite
-un canale sicuro. `OPENAI_STORE=false`, `ENABLE_WRITE_ACTIONS=false` e tutti i flag specifici di
-write devono rimanere invariati. Dettagli in [Configuration](CONFIGURATION.md).
-
-`doctor.sh` è offline per impostazione predefinita. Soltanto dopo autorizzazione e configurazione
-completa:
-
-```bash
-./scripts/doctor.sh --online
-```
-
-Il controllo online non deve eseguire operazioni HR né registrare segreti.
-
-## Verifica senza avvio
-
-```bash
-./scripts/status.sh
 ./scripts/audit-verify.sh
-python -m pytest
 ```
 
-Lo stato finale atteso per un'installazione preparata è `stopped`: nessun PID del bot, nessun
-servizio systemd abilitato e nessun processo Playwright residuo. Per l'avvio autorizzato vedere
-[Start/stop](START_STOP.md).
+L'output atteso contiene soltanto `ENABLE_READ_ACTIONS=true`; kill switch, live test e ogni flag
+specifico devono essere `false`. Non stampare altre righe di `.env`. Avviare con il gestore scelto,
+quindi:
 
-## Aggiornamento
+1. verificare processo, errori di bootstrap e guild/canale;
+2. eseguire `/bh help`, `/bh status` o `/bh health` con un account sintetico autorizzato;
+3. verificare casi deny da altro canale, DM e ruolo non autorizzato;
+4. se autorizzato, eseguire una sola lettura su tenant e record sintetici/pre-approvati;
+5. verificare log redatti, catena audit e assenza di browser/processi residui dopo lo stop.
 
-Quando lo script è presente nel commit distribuito:
+Non usare una write come smoke test. Nessun risultato ottenuto su mock, Discord o provider
+promuove automaticamente lo stato DIC live. Aggiornare lo [stato di verifica
+live](LIVE_VERIFICATION_STATUS.md) solo con evidenza ripetibile.
+
+## 11. Operazioni, log e audit
+
+Script sicuri comuni, eseguiti come `bh-dic`:
+
+```bash
+./scripts/healthcheck.sh --process-only
+./scripts/logs.sh all
+./scripts/logs.sh security --since 2026-08-15T00:00:00Z --level WARNING
+./scripts/logs.sh all --correlation-id <CORRELATION_ID>
+./scripts/files.sh list
+./scripts/files.sh metadata <UPLOAD_UUID>
+./scripts/audit-verify.sh
+```
+
+`logs.sh` applica un ulteriore strato di redazione. Non inoltrare log grezzi in chat. Un fallimento
+della catena audit impone stop, preservazione dell'evidenza ed escalation; non modificare il DB
+per “ripararla”. Lo SHA-256 di un upload è visibile soltanto a un operatore locale mediante
+`files.sh metadata`; non appare in eventi, log, Discord o richieste provider.
+
+Vedere [Operations](OPERATIONS.md), [Logging](LOGGING.md), [Audit](AUDIT.md) e
+[File handling](FILE_HANDLING.md).
+
+## 12. Backup, aggiornamento e restore
+
+L'implementazione applicativa corrente gestisce backup/restore soltanto per SQLite. Prima di un
+upgrade fermare il servizio con il gestore scelto, quindi:
 
 ```bash
 cd /opt/bh-dic
+./scripts/audit-verify.sh
 ./scripts/backup.sh
+sha256sum var/backups/<BACKUP>.tar.gz
 ./scripts/update.sh
 ./scripts/doctor.sh
-./scripts/status.sh
+./scripts/audit-verify.sh
 ```
 
-L'update deve fermarsi se il backup o un gate fallisce e non deve avviare automaticamente il bot.
+`update.sh` richiede working tree pulito e upstream, crea a sua volta un backup, esegue fetch con
+timeout, accetta solo fast-forward, reinstalla dipendenze, migra e testa. A servizio fermo non
+riavvia automaticamente. In modalità systemd non usare `update.sh --restart`; fare stop/update/gate
+e start separati. In modalità PID, `--restart` è consentito soltanto se un change approvato
+richiede esplicitamente il riavvio controllato.
+
+Restore SQLite, sempre con servizio fermo e approvazione:
+
+```bash
+./scripts/backup.sh
+./scripts/restore.sh var/backups/<BACKUP>.tar.gz --confirm RESTORE
+./scripts/audit-verify.sh
+./scripts/doctor.sh
+```
+
+Il risultato atteso resta `stopped`. `.env`, sessioni, upload e log non sono ripristinati. Provare
+periodicamente restore e RPO/RTO su host isolato con dati sintetici. Dettagli in
+[Backup/restore](BACKUP_RESTORE.md).
+
+## 13. Upgrade e rollback
+
+Per ogni release:
+
+1. acquisire SHA approvato, changelog e risultati gate definitivi;
+2. verificare backup e audit prima del cambio;
+3. fermare il gestore processo;
+4. eseguire update fast-forward, migrazioni e test;
+5. rieseguire doctor offline, smoke mock e audit;
+6. avviare prima con write off e verificare una lettura sintetica autorizzata;
+7. promuovere oppure fermare e applicare il rollback approvato.
+
+Se codice o migrazione falliscono, non forzare l'avvio. Ripristinare il backup verificato con la
+procedura sopra e riportare il working tree al commit approvato tramite il normale processo Git;
+non usare reset distruttivi improvvisati. Una write incerta va riconciliata, mai ripetuta
+automaticamente.
+
+## 14. Rotazione chiavi e risposta incidenti
+
+Rotazione pianificata:
+
+1. fermare il bot;
+2. creare backup che escluda `.env` e verificare audit;
+3. creare la nuova credenziale: `DISCORD_BOT_TOKEN`, `OPENAI_API_KEY`, `GROQ_API_KEY`,
+   `LLAMA_API_KEY` quando usata, oppure la credenziale DIC interessata;
+4. aggiornare `.env` localmente, modo `0600`;
+5. invalidare la sessione DIC quando pertinente;
+6. eseguire doctor, smoke e verifica log;
+7. revocare la credenziale precedente e riavviare solo dopo approvazione.
+
+Una rotazione `AUDIT_HMAC_KEY` richiede checkpoint e procedura di chain rollover documentati; non
+sostituire semplicemente la chiave.
+
+In caso di sospetta compromissione:
+
+1. impostare o confermare `ENABLE_WRITE_ACTIONS=false` e fermare il servizio;
+2. revocare token/chiavi e invalidare sessioni coinvolte;
+3. preservare DB, audit, log e host snapshot con accesso read-only;
+4. eseguire audit verify senza alterare l'evidenza;
+5. correlare eventi tramite ID redatti, senza esportare PII;
+6. ripristinare soltanto da backup verificato;
+7. riabilitare prima le sole read dopo decisione dell'incident owner.
+
+Per sintomi e percorsi di escalation vedere [Troubleshooting](TROUBLESHOOTING.md) e
+[Debugging](DEBUGGING.md).
+
+## 15. Checklist di handoff
+
+- [ ] Debian patchato; Python 3.12+ verificato prima dell'installazione.
+- [ ] Utente `bh-dic` non privilegiato; ownership e permessi revisionati.
+- [ ] Clone privato allo SHA approvato, remote senza credenziali.
+- [ ] `.venv`, Chromium e ClamAV verificati per l'utente di servizio.
+- [ ] `.env` `0600`, nessun segreto in Git/log/ticket.
+- [ ] Provider unico e `MODEL_STORE=false`; persona validata.
+- [ ] Guild `1303955635984924722`, Channel ID copiato da `#mng-ai`, Role ID approvati.
+- [ ] Comandi registrati solo nel guild; intent privilegiati off; permission bitfield `19456`.
+- [ ] `ENABLE_WRITE_ACTIONS=false`, live write test e tutti i flag specifici false.
+- [ ] Gestore processo unico; nessuna commistione systemd/script PID.
+- [ ] Doctor offline, mock smoke, audit e backup verdi sul target.
+- [ ] Prima verifica limitata a read sintetica autorizzata; nessuna write live.
+- [ ] Deployment, provider live e DIC live marcati `UNVERIFIED` finché non osservati.
+
+## Riferimenti ufficiali
+
+- OpenAI: [Responses e modelli](https://developers.openai.com/api/docs/guides/latest-model) e
+  [function calling](https://developers.openai.com/api/docs/guides/function-calling).
+- Groq: [compatibilità OpenAI](https://console.groq.com/docs/openai) e
+  [`openai/gpt-oss-120b`](https://console.groq.com/docs/model/openai/gpt-oss-120b).
+- Discord: [creazione app/bot](https://docs.discord.com/developers/quick-start/getting-started),
+  [OAuth2](https://docs.discord.com/developers/topics/oauth2),
+  [permissions](https://docs.discord.com/developers/topics/permissions),
+  [Gateway Intents](https://docs.discord.com/developers/events/gateway) e
+  [application commands](https://docs.discord.com/developers/interactions/application-commands).
+- Ollama/OpenAI-compatible locale: [OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility).

@@ -68,7 +68,7 @@ richiedente. Il numero `0` non elimina preview, conferma, RBAC, idempotenza o po
 | `EMP-DELETE-001` | elimina dipendente | `ENABLE_EMPLOYEE_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-CONTRACT-003` | elimina contratto | `ENABLE_CONTRACT_DELETE` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 
-“Mai” nella colonna Tool significa “mai esposto a OpenAI”, non “privo di route operatore”. I cinque
+“Mai” nella colonna Tool significa “mai esposto al provider di modello”, non “privo di route operatore”. I cinque
 ID esclusi dal modello sono collegati rispettivamente ai comandi deterministici
 `/bh operator-balance-correction`, `/bh operator-rbac-update`,
 `/bh operator-document-download`, `/bh operator-employee-delete` e

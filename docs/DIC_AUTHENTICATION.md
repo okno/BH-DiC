@@ -12,7 +12,7 @@ descritti qui sono coperti da test unitari con oggetti sintetici; autenticazione
 MFA, tenant e selettori devono ancora essere verificati in una sessione
 autorizzata.
 
-Discord e OpenAI non ricevono credenziali, cookie, `storage_state`, primitive
+Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
 Protocol `DipendentiInCloudAdapter`.
 

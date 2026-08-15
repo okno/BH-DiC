@@ -98,6 +98,26 @@ def test_cli_wrappers_match_the_implemented_cli() -> None:
     assert "run_cli cleanup" not in cleanup
 
 
+def test_doctor_checks_only_the_selected_model_endpoint() -> None:
+    doctor = _read("doctor.sh")
+    assert "from bh_dic.config import AppSettings" in doctor
+    assert "OPENAI_RESPONSES_BASE_URL" in doctor
+    assert "GROQ_OPENAI_BASE_URL" in doctor
+    assert "settings.llama_base_url" in doctor
+    assert "read_env_value LLAMA_BASE_URL" not in doctor
+    assert 'runtime_config_valid}" != "true"' in doctor
+    assert "--proto" in doctor
+    assert "GROQ_API_KEY" not in doctor
+    assert "OPENAI_API_KEY" not in doctor
+
+
+def test_doctor_never_contacts_a_non_sqlite_database() -> None:
+    doctor = _read("doctor.sh")
+    assert 'case "${database_url}" in' in doctor
+    assert "sqlite+aiosqlite:///*)" in doctor
+    assert "doctor performs no database network I/O" in doctor
+
+
 def test_backup_excludes_secrets_sessions_and_uploads_by_default() -> None:
     backup = _read("backup.sh")
     assert 'environment_file_included": False' in backup

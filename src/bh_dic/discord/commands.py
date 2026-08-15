@@ -13,6 +13,7 @@ from bh_dic.discord.checks import DiscordAccessDenied, DiscordActor, DiscordGate
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import AttachmentPayload, InteractionCoordinator, InteractionResult
 from bh_dic.discord.views import ApprovalView
+from bh_dic.language import BotLanguageProfile
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class BHCommandGroup(app_commands.Group):
         coordinator: InteractionCoordinator,
         upload_max_bytes: int = 20 * 1024 * 1024,
         rate_limiter: SlidingWindowRateLimiter | None = None,
+        language_profile: BotLanguageProfile | None = None,
     ) -> None:
         super().__init__(name="bh", description="Assistente HR autorizzato BH-DiC")
         if upload_max_bytes <= 0:
@@ -34,6 +36,7 @@ class BHCommandGroup(app_commands.Group):
         self._coordinator = coordinator
         self._upload_max_bytes = upload_max_bytes
         self._rate_limiter = rate_limiter or SlidingWindowRateLimiter(limit=30, window_seconds=60)
+        self._language_profile = language_profile
 
     def _actor(self, interaction: discord.Interaction) -> DiscordActor:
         role_ids = [role.id for role in getattr(interaction.user, "roles", [])]
@@ -75,13 +78,13 @@ class BHCommandGroup(app_commands.Group):
                 )
             if view is None:
                 await interaction.followup.send(
-                    embed=result_embed(result),
+                    embed=result_embed(result, self._language_profile),
                     ephemeral=result.ephemeral,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 await interaction.followup.send(
-                    embed=result_embed(result),
+                    embed=result_embed(result, self._language_profile),
                     ephemeral=result.ephemeral,
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -93,8 +96,11 @@ class BHCommandGroup(app_commands.Group):
                 await interaction.followup.send(message, ephemeral=True)
             else:
                 await interaction.response.send_message(message, ephemeral=True)
-        except Exception:
-            logger.exception("discord_command_failed")
+        except Exception as exc:
+            logger.error(
+                "discord_command_failed",
+                extra={"error_code": "UNEXPECTED_ERROR", "exception_type": type(exc).__name__},
+            )
             message = "Operazione non completata. Usa il correlation ID nei log amministrativi."
             if interaction.response.is_done():
                 await interaction.followup.send(message, ephemeral=True)

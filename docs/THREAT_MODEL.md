@@ -2,14 +2,14 @@
 
 ## Model scope
 
-This model covers Discord input, OpenAI intent routing, local persistence, Playwright automation,
-attachment handling, audit/logging and the single Linux host. It assumes authorized administrative
-use of one configured DIC tenant. It does not authorize bypassing MFA, CAPTCHA or provider access
-controls.
+This model covers Discord input, multi-provider intent routing, local persistence, Playwright
+automation, attachment handling, audit/logging and the single Linux host. It assumes authorized
+administrative use of one configured DIC tenant. It does not authorize bypassing MFA, CAPTCHA or
+provider access controls.
 
 ## Assets
 
-- Discord bot token, OpenAI key and DIC credentials;
+- Discord bot token, the selected model-provider key and DIC credentials;
 - encrypted browser session and encryption/HMAC keys;
 - employee identifiers and redacted HR results;
 - pending-action parameters, approvals and idempotency state;
@@ -35,7 +35,7 @@ controls.
 | T02 | Role spoofing or stale Discord UI permission | application maps immutable Discord Role IDs and rechecks at approval/execution | revoke role and pending actions; review audit |
 | T03 | Model invents an operation or arguments | closed Function ID catalog, strict schema, Pydantic validation | deny unknown ID; inspect correlation ID |
 | T04 | Model controls browser/shell/HTTP | no such tools; deterministic service and adapter boundary | code review protects the tool registry |
-| T05 | Prompt injection from Discord/site/document | sanitize input; site text treated as data; documents never sent to OpenAI | log a redacted suspicious-input event |
+| T05 | Prompt injection from Discord/site/document | sanitize input; site text treated as data; documents never sent to the model provider | log a redacted suspicious-input event |
 | T06 | Cross-tenant action | configured expected tenant checked by policy and adapter context | session invalidation and incident review on mismatch |
 | T07 | Write to the wrong employee | ID-first resolution, ambiguity denial, preview, target text and re-read | no write by name alone |
 | T08 | Approval replay/self-approval | HMAC code, TTL, one-time consumption, distinct approvers, DB uniqueness | expire/reject pending action and investigate replay |
@@ -48,7 +48,7 @@ controls.
 | T15 | Path traversal or filename collision | reject separators/absolute paths; UUID opaque paths; exclusive create | quarantine directory remains untrusted |
 | T16 | MIME/extension spoofing | content MIME detection and extension consistency | unsupported/polyglot files are rejected |
 | T17 | Malware upload | ClamAV scan; required scanner fails closed | quarantine/rejected retention must be monitored |
-| T18 | Document exfiltration through Discord/OpenAI | no document output; opaque local ID; model transmission forbidden | protect host access and local exports |
+| T18 | Document exfiltration through Discord/model provider | no document output; opaque local ID; model transmission forbidden | protect host access and local exports |
 | T19 | Oversized/duplicate-file resource exhaustion | streaming size cap, SHA-256 dedup, rate limit, retention | monitor disk and purge expired data |
 | T20 | Audit row edit, deletion or reorder | HMAC chain, contiguous sequence and chain-state tail check | alert, preserve evidence, stop writes |
 | T21 | Audit HMAC key compromise | protected secret and host least privilege | HMAC is not non-repudiation; rotate via controlled chain rollover |
@@ -56,6 +56,7 @@ controls.
 | T23 | Dependency/supply-chain compromise | pinned lock, `pip-audit`, Bandit, gitleaks, private repository | triage advisories and rebuild from trusted source |
 | T24 | Denial of service via commands/browser jobs | rate limit, single browser queue, timeout, circuit breaker | authorized reads may be delayed during degradation |
 | T25 | Operator enables a critical flag unsafely | validated flag invariants, global kill switch, A2 mandatory | configuration change is privileged and audited |
+| T26 | Persona text is used as prompt injection or mention abuse | closed enums; bounded local decorations; URL/mention/token/instruction rejection; decorations never sent to provider | review configuration change and keep safety strings deterministic |
 
 ## Abuse cases that must remain impossible
 
@@ -77,7 +78,8 @@ affected action.
 
 ## Assumptions and residual risks
 
-- Discord, OpenAI, DIC and ClamAV remain external dependencies.
+- Discord, the selected model runtime, DIC and ClamAV remain dependencies outside the
+  deterministic policy core.
 - A fully compromised host can access data while the process is running; disk encryption, host
   hardening, patching and account controls remain operator responsibilities.
 - HMAC proves integrity to a holder of the same secret; it is not a public digital signature.

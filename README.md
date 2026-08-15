@@ -1,15 +1,17 @@
 # BH-DiC
 
 BH-DiC è un assistente Discord per flussi HR autorizzati nell'area Dipendenti di
-Dipendenti in Cloud. Discord raccoglie la richiesta, OpenAI propone soltanto un intento
-strutturato e un'applicazione deterministica applica scope, RBAC, feature flag, approvazioni e
-controlli prima di invocare l'adapter browser.
+Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello selezionato
+(`openai`, `groq` o `llama`) propone soltanto un intento strutturato e un'applicazione
+deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
+l'adapter browser.
 
-> Stato al 14 agosto 2026: repository privata configurata; deployment server **bloccato**
+> Stato al 15 agosto 2026: repository privata configurata; deployment server **bloccato**
 > perché utente e chiave SSH non sono disponibili; bot **non avviato nel workspace locale** e
 > stato del processo sul target **UNVERIFIED**; nessuna lettura o
-> scrittura verificata sul tenant live. Le scritture sono disponibili soltanto nel percorso
-> mock/test e restano disabilitate per impostazione predefinita.
+> scrittura verificata sul tenant live. Il catalogo comprende 13 read e 19 write: tutte hanno
+> percorso mock; 13 write hanno percorso live implementato ma non verificato e 6 sono
+> `PARTIALLY_COMPLETED`. Tutte restano `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 
@@ -20,19 +22,24 @@ committare `.env`, token, sessioni browser, documenti, screenshot, trace o dump.
 ## Architettura
 
 ```text
-Discord -> validazione scope/RBAC -> router OpenAI -> validazione schema/policy
+Discord -> validazione scope/RBAC -> router modello -> validazione schema/policy
         -> read deterministica oppure preview -> conferma/A1/A2 -> adapter DIC
         -> postcondizione/riconciliazione -> audit append-only
 ```
 
-OpenAI non riceve credenziali, file, primitive browser o facoltà di autorizzazione. La chiamata
-provider usa `store=false`; i Function ID esposti sono filtrati prima della richiesta e l'output
-viene validato nuovamente. La fonte normativa per Function ID, ruoli, flag e approvazioni è
-`src/bh_dic/policies/catalog.py`.
+Il provider non riceve credenziali, file, primitive browser o facoltà di autorizzazione.
+`MODEL_STORE=false` vieta la persistenza richiesta dall'applicazione; i Function ID esposti sono
+filtrati prima della richiesta e l'output viene validato nuovamente. La fonte normativa per
+Function ID, ruoli, flag e approvazioni è
+`src/bh_dic/policies/catalog.py`. Lingua, tono e formula di apertura/chiusura sono configurabili,
+ma la persona non modifica policy o superficie operativa.
 
 ## Caratteristiche implementate
 
 - catalogo di 32 Function ID e policy fail-closed;
+- router multi-provider OpenAI/Groq/llama con tuning comune e rendering deterministico;
+- profilo lingua italiano/inglese per chiarimenti/decorazioni; dati operativi restano in italiano
+  e il profilo è separato da RBAC e autorizzazioni;
 - kill switch globale `ENABLE_WRITE_ACTIONS=false` e flag specifici tutti `false`;
 - preview, conferma monouso hashata, TTL, idempotenza, A1/A2 distinti e riconciliazione;
 - adapter mock deterministico e adapter Playwright non validato live;
@@ -49,7 +56,7 @@ costituisce prova di verifica live.
 - Linux per il deployment operativo e Bash per gli script;
 - Chromium gestito da Playwright;
 - ClamAV per gli upload;
-- accesso autorizzato a Discord, OpenAI e Dipendenti in Cloud;
+- accesso autorizzato a Discord, al provider scelto e a Dipendenti in Cloud;
 - SQLite locale o PostgreSQL tramite driver async.
 
 ## Installazione rapida per sviluppo isolato
@@ -73,9 +80,10 @@ cp .env.example .env
 chmod 600 .env
 ${EDITOR:-nano} .env
 ./scripts/doctor.sh
+.venv/bin/python -m bh_dic model-check
 ```
 
-Non impostare mai `OPENAI_STORE=true`. Per una scrittura non basta il flag specifico: devono
+Non impostare mai `MODEL_STORE=true`. Per una scrittura non basta il flag specifico: devono
 essere veri anche il kill switch globale e ogni precondizione di policy; le funzioni critiche
 richiedono due approvatori distinti. In questo rilascio le scritture live non sono autorizzate.
 
@@ -91,6 +99,10 @@ Le interfacce operative richieste sono:
 Consultare [Start/stop](docs/START_STOP.md) per disponibilità verificata e semantica dei
 comandi. Non avviare il bot finché `doctor.sh` non termina con successo e le credenziali non
 sono state fornite per canale sicuro.
+
+`model-check` è offline per default. Solo con autorizzazione esplicita a rete/costo usare
+`model-check --live`: esegue una singola richiesta sintetica chiusa al provider, senza DIC,
+Discord, browser o tool.
 
 ## Test e gate
 
@@ -123,7 +135,7 @@ Approfondimenti: [architettura di sicurezza](docs/SECURITY_ARCHITECTURE.md),
 [gestione file](docs/FILE_HANDLING.md) e [troubleshooting](docs/TROUBLESHOOTING.md).
 
 Setup e confini delle integrazioni: [autenticazione DIC](docs/DIC_AUTHENTICATION.md),
-[Discord](docs/DISCORD_SETUP.md), [OpenAI](docs/OPENAI_SETUP.md) e
+[Discord](docs/DISCORD_SETUP.md), [provider di modello](docs/OPENAI_SETUP.md) e
 [threat model](docs/THREAT_MODEL.md). Per la manutenzione dell'adapter consultare
 [baseline di ricognizione](docs/RECONNAISSANCE_BASELINE.md),
 [manutenzione selettori](docs/SELECTOR_MAINTENANCE.md),

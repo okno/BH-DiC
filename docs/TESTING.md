@@ -1,7 +1,7 @@
 # Testing
 
 Tutti i test devono usare fixture sintetiche e risorse locali. Per impostazione predefinita non
-devono inviare messaggi Discord, chiamare OpenAI/DIC o eseguire write live.
+devono inviare messaggi Discord, chiamare provider di modello/DIC o eseguire write live.
 
 ## Setup
 
@@ -22,8 +22,8 @@ ruff check .
 mypy src
 pytest
 bandit -r src
-pip-audit
-gitleaks detect
+python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off
+gitleaks detect --source . --no-banner --redact --exit-code 1
 ```
 
 Equivalenti repository quando disponibili:
@@ -53,8 +53,9 @@ sono autorizzati test live, né read né write.
 
 ## Copertura richiesta
 
-- configurazione fail-closed e `OPENAI_STORE=true` rifiutato;
-- schema OpenAI strict e Function ID non esposto rifiutato;
+- configurazione multi-provider fail-closed e `MODEL_STORE=true` rifiutato;
+- schema provider strict e Function ID non esposto rifiutato;
+- `model-check` offline per default e probe live simulato con zero Function ID/tool execution;
 - scope Discord, RBAC, feature flag e kill switch;
 - preview/conferma, A1/A2 distinti, TTL, CAS, idempotenza e reconciliation;
 - catena HMAC e tamper detection;

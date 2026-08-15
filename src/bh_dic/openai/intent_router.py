@@ -6,7 +6,8 @@ import re
 from datetime import date
 from typing import Protocol
 
-from bh_dic.openai.client import ResponsesIntentClient, RoutedIntent
+from bh_dic.language import BotLanguageProfile
+from bh_dic.openai.client import IntentClient, RoutedIntent
 from bh_dic.openai.redaction import prepare_provider_input
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata, Sensitivity
 
@@ -16,7 +17,9 @@ class IntentRouter(Protocol):
 
 
 class OpenAIIntentRouter:
-    def __init__(self, client: ResponsesIntentClient) -> None:
+    """Provider-neutral router facade; name retained for import compatibility."""
+
+    def __init__(self, client: IntentClient) -> None:
         self._client = client
 
     async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent:
@@ -40,7 +43,26 @@ def _september_range(text: str, today: date) -> tuple[date | None, date | None]:
 
 
 class MockIntentRouter:
-    """Deterministic router for tests, setup checks, and OpenAI outages."""
+    """Deterministic router for tests and setup checks without provider access."""
+
+    def __init__(self, profile: BotLanguageProfile | None = None) -> None:
+        self._profile = profile
+
+    def _unsupported_question(self) -> str:
+        if self._profile is not None and self._profile.language == "en":
+            return "The request does not match an authorized function."
+        return "La richiesta non corrisponde a una funzione autorizzata."
+
+    def _employee_id_question(self) -> str:
+        if self._profile is None:
+            return "Indica l'Employee ID esatto."
+        if self._profile.language == "en":
+            return "Provide the exact Employee ID."
+        if self._profile.address_style == "tu":
+            return "Indica l'Employee ID esatto."
+        if self._profile.address_style == "lei":
+            return "Indichi l'Employee ID esatto."
+        return "È necessario indicare l'Employee ID esatto."
 
     async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent:
         text = prepare_provider_input(request)
@@ -83,7 +105,7 @@ class MockIntentRouter:
                 date_from=None,
                 date_to=None,
                 requires_clarification=True,
-                clarification_question="La richiesta non corrisponde a una funzione autorizzata.",
+                clarification_question=self._unsupported_question(),
                 sensitivity=Sensitivity.LOW,
                 confidence=0.0,
             )
@@ -104,7 +126,7 @@ class MockIntentRouter:
                 date_from=date_from,
                 date_to=date_to,
                 requires_clarification=needs_clarification,
-                clarification_question="Indica l'Employee ID esatto."
+                clarification_question=self._employee_id_question()
                 if needs_clarification
                 else None,
                 sensitivity=sensitivity,

@@ -63,7 +63,7 @@ Do not run the restart command until configuration validation and change approva
 This event contains no real Discord or employee identifier:
 
 ```json
-{"timestamp_utc":"2026-01-01T00:00:00Z","timestamp_local":"2026-01-01T01:00:00+01:00","level":"WARNING","logger":"bh_dic.security","event_type":"security.guild_denied","message":"Request denied","correlation_id":"test-correlation-0001","outcome":"DENIED","application_version":"0.1.0"}
+{"timestamp_utc":"2026-08-15T00:00:00Z","timestamp_local":"2026-08-15T02:00:00+02:00","level":"WARNING","logger":"bh_dic.security","event_type":"security.guild_denied","message":"Request denied","correlation_id":"test-correlation-0001","outcome":"DENIED","application_version":"0.2.0"}
 ```
 
 Expected result: base rule `110500` and authorization-denial child `110501` match. The exact decoder

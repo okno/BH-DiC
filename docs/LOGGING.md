@@ -9,7 +9,7 @@ correlazione. Il logger applicativo scrive in `LOG_DIR` (default `./var/log`).
 |---|---|
 | `var/log/app.jsonl` | tutti gli eventi applicativi |
 | `var/log/discord.jsonl` | eventi Discord |
-| `var/log/openai.jsonl` | metadati del router OpenAI |
+| `var/log/openai.jsonl` | metadati del router multi-provider; nome file legacy stabile |
 | `var/log/browser.jsonl` | adapter/browser |
 | `var/log/audit.jsonl` | eventi operativi audit correlati |
 | `var/log/security.jsonl` | deny, rate limit e controlli security |
@@ -51,7 +51,8 @@ duration ed error code.
 La redazione centrale copre chiavi sensibili, bearer/provider token, IBAN, codice fiscale,
 contenuti binari e target non pseudonimizzati. Non loggare comunque:
 
-- prompt o risposta OpenAI completi;
+- prompt o risposta completi del provider di modello;
+- valori `BOT_DISPLAY_NAME`, `BOT_OPENING` o `BOT_CLOSING`;
 - Authorization/Cookie, password, TOTP, confirmation code o session state;
 - nomi, contatti, indirizzi, contenuti HR o documenti;
 - parametri pending in chiaro;

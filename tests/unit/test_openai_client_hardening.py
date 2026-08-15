@@ -8,7 +8,14 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
-from bh_dic.openai.client import IntentProviderError, ResponsesIntentClient, envelope_from_call
+from bh_dic.openai.client import (
+    GroqResponsesIntentClient,
+    IntentProviderError,
+    LlamaChatCompletionsIntentClient,
+    ResponsesIntentClient,
+    envelope_from_call,
+)
+from bh_dic.openai.providers import GROQ_OPENAI_BASE_URL, OPENAI_RESPONSES_BASE_URL
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope, Sensitivity
 
 
@@ -219,7 +226,10 @@ def test_responses_client_requires_key_and_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_responses_client_can_build_default_sdk_boundary_without_network() -> None:
+async def test_responses_client_pins_official_sdk_origin_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://attacker.example.invalid/v1")
     client = ResponsesIntentClient(
         api_key="synthetic-provider-key",
         model="synthetic-model",
@@ -227,14 +237,20 @@ async def test_responses_client_can_build_default_sdk_boundary_without_network()
         max_retries=0,
     )
     provider = cast(Any, client._provider)
+    assert str(provider.base_url).rstrip("/") == OPENAI_RESPONSES_BASE_URL
+    assert provider._client.follow_redirects is False
+    assert provider._client.trust_env is False
     await provider.close()
 
 
 @pytest.mark.asyncio
 async def test_responses_client_normalizes_provider_failures_and_call_count() -> None:
-    failing = _client(_ResponsesStub(error=RuntimeError("provider detail must stay private")))
-    with pytest.raises(IntentProviderError, match="routing failed"):
+    reflected = "EMP-SYNTH-001 Mario Rossi must stay private"
+    failing = _client(_ResponsesStub(error=RuntimeError(reflected)))
+    with pytest.raises(IntentProviderError, match="routing failed") as caught:
         await failing.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+    assert caught.value.__cause__ is None
+    assert reflected not in str(caught.value)
 
     no_call = _client(_ResponsesStub(output=[SimpleNamespace(type="message")]))
     with pytest.raises(IntentProviderError, match="exactly one"):
@@ -269,3 +285,200 @@ async def test_responses_client_omits_reasoning_when_disabled_and_handles_missin
     assert responses.request is not None
     assert "reasoning" not in responses.request
     assert responses.request["store"] is False
+
+
+@pytest.mark.asyncio
+async def test_groq_responses_client_uses_same_closed_validation_and_omits_none_reasoning() -> None:
+    call = SimpleNamespace(
+        type="function_call",
+        name="list_employees",
+        arguments=_tool_arguments(),
+    )
+    responses = _ResponsesStub(output=[call], request_id="req-groq-synthetic")
+    client = GroqResponsesIntentClient(
+        api_key="synthetic-groq-key",
+        model="openai/gpt-oss-120b",
+        reasoning_effort="none",
+        developer_prompt="Prompt sintetico chiuso.",
+        provider=SimpleNamespace(responses=responses),
+    )
+
+    result = await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+    assert result.metadata.provider == "groq"
+    assert result.metadata.request_id == "req-groq-synthetic"
+    assert responses.request is not None
+    assert responses.request["store"] is False
+    assert "reasoning" not in responses.request
+    assert responses.request["input"][0]["content"] == "Prompt sintetico chiuso."
+
+
+@pytest.mark.asyncio
+async def test_groq_sdk_boundary_is_pinned_to_official_origin_without_network() -> None:
+    client = GroqResponsesIntentClient(
+        api_key="synthetic-groq-key",
+        model="openai/gpt-oss-120b",
+        timeout_seconds=1,
+        max_retries=0,
+    )
+    provider = cast(Any, client._provider)
+    assert str(provider.base_url).rstrip("/") == GROQ_OPENAI_BASE_URL
+    assert provider._client.follow_redirects is False
+    assert provider._client.trust_env is False
+    await provider.close()
+
+
+class _ChatCompletionsStub:
+    def __init__(
+        self,
+        *,
+        choices: list[object] | None = None,
+        error: Exception | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        self.choices = choices or []
+        self.error = error
+        self.request_id = request_id
+        self.request: dict[str, Any] | None = None
+
+    async def create(self, **kwargs: Any) -> SimpleNamespace:
+        self.request = kwargs
+        if self.error is not None:
+            raise self.error
+        response = SimpleNamespace(choices=self.choices)
+        if self.request_id is not None:
+            response._request_id = self.request_id
+        return response
+
+
+def _chat_choice(*calls: object) -> SimpleNamespace:
+    return SimpleNamespace(message=SimpleNamespace(tool_calls=list(calls)))
+
+
+def _chat_call(
+    *, name: str = "list_employees", arguments: str | None = None, call_type: str = "function"
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        type=call_type,
+        function=SimpleNamespace(name=name, arguments=arguments or _tool_arguments()),
+    )
+
+
+def _llama_client(completions: _ChatCompletionsStub) -> LlamaChatCompletionsIntentClient:
+    return LlamaChatCompletionsIntentClient(
+        model="synthetic-llama-model",
+        base_url="http://127.0.0.1:11434/v1",
+        developer_prompt="Prompt llama sintetico.",
+        provider=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_llama_sdk_boundary_disables_redirects_without_network() -> None:
+    client = LlamaChatCompletionsIntentClient(
+        model="synthetic-llama-model",
+        base_url="http://127.0.0.1:11434/v1",
+        timeout_seconds=1,
+        max_retries=0,
+    )
+    provider = cast(Any, client._provider)
+    assert provider._client.follow_redirects is False
+    assert provider._client.trust_env is False
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_llama_provider_failure_drops_private_exception_chain() -> None:
+    reflected = "EMP-SYNTH-001 Mario Rossi must stay private"
+    client = _llama_client(_ChatCompletionsStub(error=RuntimeError(reflected)))
+
+    with pytest.raises(IntentProviderError, match="llama intent routing failed") as caught:
+        await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+    assert caught.value.__cause__ is None
+    assert reflected not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_llama_chat_client_uses_interoperable_tools_and_exact_local_validation() -> None:
+    completions = _ChatCompletionsStub(
+        choices=[_chat_choice(_chat_call())], request_id="req-llama-synthetic"
+    )
+
+    result = await _llama_client(completions).route(
+        "richiesta sintetica", frozenset({"EMP-READ-001"})
+    )
+
+    assert result.envelope.function_id == "EMP-READ-001"
+    assert result.metadata.provider == "llama"
+    assert result.metadata.request_id == "req-llama-synthetic"
+    assert completions.request is not None
+    assert completions.request["messages"][0] == {
+        "role": "system",
+        "content": "Prompt llama sintetico.",
+    }
+    assert completions.request["tool_choice"] == "required"
+    assert completions.request["tools"][0]["function"]["strict"] is True
+    assert "parallel_tool_calls" not in completions.request
+    assert "store" not in completions.request
+    assert "reasoning_effort" not in completions.request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("choices", "message"),
+    [
+        ([], "exactly one completion"),
+        ([_chat_choice()], "exactly one tool call"),
+        ([_chat_choice(_chat_call(), _chat_call())], "exactly one tool call"),
+        ([_chat_choice(_chat_call(call_type="custom"))], "non-function"),
+    ],
+)
+async def test_llama_chat_client_rejects_ambiguous_or_invalid_calls(
+    choices: list[object], message: str
+) -> None:
+    client = _llama_client(_ChatCompletionsStub(choices=choices))
+
+    with pytest.raises(IntentProviderError, match=message):
+        await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+
+def test_provider_clients_validate_prompt_and_remote_llama_credentials() -> None:
+    responses_provider = SimpleNamespace(responses=_ResponsesStub())
+    with pytest.raises(ValueError, match="developer prompt"):
+        ResponsesIntentClient(
+            api_key="synthetic",
+            model="synthetic",
+            developer_prompt="   ",
+            provider=responses_provider,
+        )
+    with pytest.raises(ValueError, match=r"API key.*remote"):
+        LlamaChatCompletionsIntentClient(
+            model="synthetic",
+            base_url="https://models.example.invalid/v1",
+            provider=SimpleNamespace(chat=SimpleNamespace(completions=_ChatCompletionsStub())),
+        )
+
+
+@pytest.mark.parametrize(
+    "environment_name",
+    [
+        "OPENAI_ADMIN_KEY",
+        "OPENAI_CUSTOM_HEADERS",
+        "OPENAI_LOG",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_WEBHOOK_SECRET",
+    ],
+)
+def test_real_sdk_clients_reject_ambient_openai_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    environment_name: str,
+) -> None:
+    monkeypatch.setenv(environment_name, "synthetic-ambient-value")
+
+    with pytest.raises(ValueError, match=environment_name):
+        GroqResponsesIntentClient(
+            api_key="synthetic-groq-key",
+            model="openai/gpt-oss-120b",
+        )

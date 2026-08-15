@@ -1,5 +1,20 @@
 # Stato di verifica live DIC
 
+## Integrazioni release 0.2.0
+
+| Integrazione | Stato documentato | Evidenza ancora richiesta |
+|---|---|---|
+| OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
+| Groq | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione e disponibilità `openai/gpt-oss-120b` |
+| llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
+| Discord | setup guild-scoped documentato; `LIVE_DISCORD_UNVERIFIED` | app/token/installazione, Channel ID `#mng-ai`, ruoli e registrazione |
+| DIC | adapter mock e percorsi descritti sotto; `NEEDS_VALIDATION` | login/tenant, DOM, selettori e smoke read-only autorizzato |
+| Debian deployment | `BLOCKED` / `UNVERIFIED` | credenziale SSH, installazione, doctor, processo e restore drill sul target |
+
+Un gate locale 0.2.0 non promuove nessuna di queste righe a “live verified”. Anche un futuro
+`model-check --live` riuscito promuove soltanto il provider/modello osservato, non Discord, DIC o
+deployment.
+
 ## Legenda ed evidenza disponibile
 
 - `IMPLEMENTED`: contratto tipizzato e percorso adapter/service presenti.

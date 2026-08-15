@@ -6,14 +6,14 @@ BH-DiC is a single-node assistant for authorized employee workflows in the Dipen
 employee area. It is not a general-purpose browser agent. The security objectives are:
 
 - deny access outside the configured Discord guild, channel and DIC tenant;
-- prevent OpenAI output from becoming an authorization or execution decision;
-- keep reads usable while every write remains disabled by default;
+- prevent model-provider output from becoming an authorization or execution decision;
+- keep reads usable while every write remains disabled by policy;
 - require a preview, confirmation and the configured approvals before a deterministic write;
 - minimize, redact and encrypt HR data at every persistence and transmission boundary;
 - produce a locally verifiable audit trail and fail closed on an uncertain write result.
 
 Accounting, unrelated administration pages, arbitrary URLs, shell commands, arbitrary HTTP,
-JavaScript execution and document processing by OpenAI are outside the trust boundary.
+JavaScript execution and document processing by any model provider are outside the trust boundary.
 
 ## Security data flow
 
@@ -22,7 +22,7 @@ Discord event
   -> guild/channel allowlist
   -> logical-role mapping and rate limit
   -> input normalization
-  -> optional OpenAI intent classification (store=false)
+  -> optional model intent classification (storage disabled)
   -> strict Function ID validation
   -> policy engine
   -> read OR encrypted pending action and redacted preview
@@ -42,7 +42,7 @@ replacement for application policy.
 | Boundary | Untrusted input | Enforced controls |
 | --- | --- | --- |
 | Discord | messages, attachments, role claims, webhook/bot events | guild/channel allowlist, logical RBAC, DM denial, rate limiting, normalization |
-| OpenAI | model output and tool arguments | strict schema, closed Function ID catalog, dynamic tool exposure, local policy recheck |
+| Model provider | model output and tool arguments | provider allowlist, strict schema, closed Function ID catalog, dynamic tool exposure, local policy recheck |
 | DIC website | text, DOM, dialogs, redirects | route allowlist, Page Objects, target/state verification, UI-drift errors |
 | Browser session | cookies and storage state | Fernet vault, `0600` file, `0700` directory, explicit invalidation |
 | Local database | workflow state and audit metadata | encrypted pending parameters, minimal schema, SQLite WAL, CAS versioning |
@@ -109,15 +109,28 @@ The workflow enforces:
 Loss of connection, timeout or missing postcondition produces
 `UNKNOWN_REQUIRES_RECONCILIATION`. Only a deterministic read-back may reconcile that state.
 
-## OpenAI isolation
+## Model-provider isolation
 
-OpenAI receives only tools compatible with the already evaluated user context. Read-only users do
-not receive write schemas, and high-risk destructive functions are hidden from model exposure.
+The selected OpenAI, Groq or llama provider receives only tools compatible with the already
+evaluated user context. Read-only users do not receive write schemas, and high-risk destructive
+functions are hidden from model exposure.
 There are no browser, URL, HTTP, JavaScript, filesystem, shell or direct execution tools.
 
-Provider calls use `store=false`; full documents, payrolls, credentials, cookies, storage state,
-IBAN and full tax identifiers are forbidden. `OPENAI_RESULT_RENDERING=deterministic` keeps DIC
+`MODEL_STORE=false` forbids application-requested persistence. OpenAI/Groq requests apply the
+supported storage control; the llama chat-compatible request omits unsupported storage and
+conversation-state parameters. Full documents, payrolls, credentials, cookies, storage state,
+IBAN and full tax identifiers are forbidden. `MODEL_RESULT_RENDERING=deterministic` keeps DIC
 results local and renders Discord output through Python templates.
+
+## Persona isolation
+
+The bot persona is a closed language profile, not a free-form system prompt. Language, tone,
+address style, verbosity and emoji mode are enums. Display name, opening and closing are bounded,
+normalized and rejected if they contain mentions, URLs, control characters, token-like material
+or instruction-like text. Those three decorations remain local and are never sent to the model.
+The profile can style an optional clarification and successful Discord presentation; it cannot
+add tools, translate deterministic HR data, change a schema or weaken RBAC, confirmations or
+security wording. Safe summaries expose only whether each decoration is configured, not its value.
 
 ## Browser controls
 
@@ -134,8 +147,8 @@ MFA and CAPTCHA are not bypassed. They stop the operation with
 Discord attachment content enters `var/uploads/quarantine` under a generated UUID. The original
 filename is protected metadata and is never a path. The pipeline applies size limits, content MIME
 detection, extension consistency, SHA-256 duplicate detection and antivirus scanning before moving
-content to `clean`. ClamAV failure is fail-closed when required. No document is sent to OpenAI or
-returned as a Discord attachment. See `FILE_HANDLING.md`.
+content to `clean`. ClamAV failure is fail-closed when required. No document is sent to a model
+provider or returned as a Discord attachment. See `FILE_HANDLING.md`.
 
 ## Cryptographic separation
 
@@ -147,7 +160,7 @@ Use independent secrets for independent purposes:
 - a separate pseudonymization key when stable target pseudonyms are emitted.
 
 Keys must contain at least 32 bytes, live only in the protected `.env` or an approved secret store,
-and must never be committed, printed or reused as Discord/OpenAI/DIC credentials.
+and must never be committed, printed or reused as Discord/model-provider/DIC credentials.
 
 ## Logging, audit and monitoring
 

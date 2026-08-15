@@ -13,6 +13,7 @@ from bh_dic.discord.checks import DiscordAccessDenied, DiscordGate
 from bh_dic.discord.commands import BHCommandGroup
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import InteractionCoordinator
+from bh_dic.language import BotLanguageProfile
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class BHDiCBot(commands.Bot):
         upload_max_bytes: int = 20 * 1024 * 1024,
         rate_limiter: SlidingWindowRateLimiter | None = None,
         pending_view_source: PendingViewSource | None = None,
+        language_profile: BotLanguageProfile | None = None,
     ) -> None:
         intents = discord.Intents.none()
         intents.guilds = True
@@ -50,7 +52,9 @@ class BHDiCBot(commands.Bot):
             coordinator=coordinator,
             upload_max_bytes=upload_max_bytes,
             rate_limiter=self.rate_limiter,
+            language_profile=language_profile,
         )
+        self.language_profile = language_profile
 
     async def setup_hook(self) -> None:
         self.tree.add_command(self.bh_commands, guild=self.allowed_guild)
@@ -101,12 +105,25 @@ class BHDiCBot(commands.Bot):
                 )
                 return
             await message.reply(
-                embed=result_embed(result),
+                embed=result_embed(result, self.language_profile),
                 mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except DiscordAccessDenied:
             logger.warning("discord_message_access_denied")
+        except Exception as exc:
+            logger.error(
+                "discord_message_failed",
+                extra={"error_code": "UNEXPECTED_ERROR", "exception_type": type(exc).__name__},
+            )
+            try:
+                await message.reply(
+                    "Operazione non completata. Usa `/bh ask` per riprovare in modo privato.",
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except Exception:
+                return
 
     async def close(self) -> None:
         await super().close()

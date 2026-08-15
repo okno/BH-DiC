@@ -13,8 +13,8 @@ _ITALIAN_FISCAL_CODE = re.compile(r"(?i)\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]
 _PHONE = re.compile(r"(?<!\w)(?:\+?39[ .-]?)?(?:0\d{1,3}|3\d{2})[ .-]?\d(?:[ .-]?\d){5,9}(?!\w)")
 _SECRET = re.compile(
     r"(?i)(?:\bBearer\s+[A-Za-z0-9._~+/=-]+|"
-    r"\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{12,}|"
-    r"\b(?:token|password|secret|cookie)\s*[:=]\s*\S+)"
+    r"\b(?:sk-|gsk_|ghp_|github_pat_)[A-Za-z0-9_-]{12,}|"
+    r"\b(?:token|password|secret|cookie|api[\s_-]?key)\s*[:=]\s*\S+)"
 )
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
