@@ -112,7 +112,7 @@ def _adapter(
     adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
         UnusedSyntheticPage(),
         coordinator=direct,  # type: ignore[arg-type]
-        expected_tenant_id="TENANT-SYNTH-001",
+        expected_tenant_id="123456789",
         quarantine_root=quarantine_root,
         live_writes_enabled=live_writes_enabled,
         state_digest_key=b"s" * 32,

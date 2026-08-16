@@ -13,16 +13,17 @@ da `src/bh_dic/dic/playwright/pages/`. Non aggiungere selettori direttamente nei
 Page Object: aggiungere o modificare una chiave nel registro centrale e usare la
 chiave semantica dal Page Object.
 
-I selettori non sono stati validati live in questa sessione. Le etichette e i nomi
-accessibili derivano dalla baseline read-only di Fase 1; i `data-testid`, gli
-attributi `data-*` e i fallback CSS rappresentano il contratto implementativo e
-le fixture sintetiche, non evidenza di stabilità sul DOM corrente.
+La ricognizione live read-only ha confermato la struttura federata del login, ma
+non ha validato i selettori delle funzioni HR. Le etichette e i nomi accessibili
+derivano dalla baseline di Fase 1; i `data-testid`, gli attributi `data-*` e i
+fallback CSS rappresentano il contratto implementativo e le fixture sintetiche,
+non evidenza di stabilità sul DOM corrente.
 
 ## Route e Page Object
 
 | Page Object | Route esatta ammessa | Namespace selettori |
 | --- | --- | --- |
-| `LoginPage` | `/it/login` | `auth.*` |
+| `LoginPage` | `/it/login`; redirect federato limitato ai path TeamSystem documentati | `auth.*` |
 | `EmployeesListPage` | `/it/app/employees/list` | `employees.*`, `row.*` |
 | `EmployeeSummaryPage` | `/it/app/employees/info/{employee_id}/summary` | `summary.*` |
 | `EmployeeRolesPage` | `/it/app/employees/info/{employee_id}/roles` | `roles.*` |
@@ -35,9 +36,10 @@ le fixture sintetiche, non evidenza di stabilità sul DOM corrente.
 
 `BaseDicPage` accetta soltanto un'origine HTTPS senza credenziali, path, query o
 fragment; valida il formato di `employee_id`, costruisce una route prevista e
-controlla origine e path dopo la navigazione. Redirect cross-origin o verso una
-route diversa generano `DicUiChangedError`. Non esiste un metodo per aprire URL o
-selettori arbitrari.
+controlla origine e path con `open()`. L'autenticatore usa `navigate()` soltanto
+per le route fisse di login/session probe e valida ogni redirect contro l'allowlist
+esatta DIC/TeamSystem. Le altre navigazioni cross-origin o verso route diverse
+generano errore. Non esiste un metodo per aprire URL o selettori arbitrari.
 
 ## Inventario completo delle chiavi
 
@@ -48,7 +50,7 @@ accanto alla chiave nel file sorgente centrale.
 | Schermata/provenienza | Chiavi del registro |
 | --- | --- |
 | Comuni a conferme e notifiche | `common.confirm`, `common.success` |
-| Login/sessione/tenant | `auth.username`, `auth.password`, `auth.submit`, `auth.mfa`, `auth.captcha`, `auth.authenticated`, `auth.tenant` |
+| Login/sessione federata | `auth.username`, `auth.password`, `auth.submit`, `auth.mfa`, `auth.captcha`, `auth.authenticated`, `auth.dic_email`, `auth.dic_submit`, `auth.teamsystem_email`, `auth.teamsystem_email_submit`, `auth.teamsystem_password`, `auth.teamsystem_password_submit` |
 | Lista dipendenti | `employees.rows`, `employees.total`, `employees.search`, `employees.filter.active`, `employees.filter.inactive`, `employees.filter.all`, `employees.sort.name`, `employees.sort.payroll_number`, `employees.sort.status`, `employees.sort.contract`, `employees.next`, `employees.new`, `employees.create_manual`, `employees.create_payroll`, `employees.create_save` |
 | Riga dipendente | `row.employee_id`, `row.name`, `row.email`, `row.tax_code`, `row.job_title`, `row.group`, `row.payroll_number`, `row.contract`, `row.contract_period`, `row.schedule`, `row.account_state`, `row.employee_state` |
 | Riepilogo dipendente | `summary.first_name`, `summary.last_name`, `summary.payroll_number`, `summary.tax_code`, `summary.birth_date`, `summary.iban`, `summary.job_title`, `summary.phone`, `summary.email`, `summary.address`, `summary.workplace`, `summary.notes`, `summary.state`, `summary.save`, `summary.connect`, `summary.disconnect`, `summary.invite_again`, `summary.cancel_invite`, `summary.deactivate`, `summary.activate`, `summary.delete` |
@@ -101,6 +103,14 @@ riconciliabile. La procedura sicura è:
 8. lasciare le write disabilitate finché read, postcondizioni e tenant guard non
    sono nuovamente verificati.
 
+Il tenant non è un selettore manutenibile: il DOM corrente non espone un ID stabile
+e non sono ammessi fallback su testo o nome azienda. Il guard osserva soltanto il
+`GET` first-party same-origin a `/backend_apiV2/company/info` emesso dalla
+navigazione fissa `/it/app/employees/list`, valida il contratto stretto e confronta
+`/data/company/id` con il tenant configurato. Se questo contratto cambia, fermare
+il bot e aggiornare parser, fixture sintetiche, test e documentazione; non
+aggiungere un nuovo selettore DOM per aggirare il fallimento.
+
 Il circuit breaker passa a stato degradato/aperto dopo errori ripetuti di UI o
 trasporto. Le read idempotenti hanno retry limitati; le write non sono mai
 ritentate automaticamente. Un errore dopo il dispatch richiede riconciliazione.
@@ -131,8 +141,8 @@ Controlli locali, esclusivamente sintetici:
 .\.venv\Scripts\python.exe -m mypy src/bh_dic/dic
 ```
 
-Uno smoke test live read-only non fa parte di questa sessione. Quando sarà
-autorizzato, deve usare `ENABLE_WRITE_ACTIONS=false`, un tenant atteso esplicito,
-nessun download/upload, una piccola query di lista e al massimo l'apertura delle
-route censite. Registrare solo esito, Function ID, route astratta ed errore
-tipizzato; mai HTML, PII o credenziali.
+La ricognizione della struttura login/attestazione non equivale a uno smoke delle
+Function ID. Il primo smoke live read-only deve usare `ENABLE_WRITE_ACTIONS=false`,
+un tenant atteso esplicito, nessun download/upload, una piccola query di lista e
+al massimo l'apertura delle route censite. Registrare solo esito, Function ID,
+route astratta ed errore tipizzato; mai HTML, response body, PII o credenziali.

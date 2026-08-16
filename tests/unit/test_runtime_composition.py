@@ -52,7 +52,7 @@ def _live_settings() -> AppSettings:
         dic_username="synthetic-user",
         dic_password="synthetic-password",
         dic_session_encryption_key="S" * 32,
-        dic_expected_tenant_id="TENANT-SYNTHETIC",
+        dic_expected_tenant_id="123456789",
     )
 
 
@@ -155,6 +155,7 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     await adapter.close()
 
     events: list[str] = []
+    adapter_options: dict[str, object] = {}
 
     class FakeVault:
         def __init__(self, path: object, key: object) -> None:
@@ -186,8 +187,8 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
             events.append("browser-close")
 
     class FakeLiveAdapter:
-        def __init__(self, _page: object, **_kwargs: object) -> None:
-            pass
+        def __init__(self, _page: object, **kwargs: object) -> None:
+            adapter_options.update(kwargs)
 
         async def ensure_authenticated(self, credentials: object) -> None:
             events.append(f"authenticate:{bool(credentials)}")
@@ -206,6 +207,7 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     assert type(cast(Any, live_adapter)) is FakeLiveAdapter
     assert isinstance(live_browser, FakeBrowser)
     assert isinstance(live_manager, FakeSessionManager)
+    assert adapter_options["login_timeout_ms"] == 60_000
     assert events[-1] == "persist"
 
     missing_key = _live_settings().model_copy(update={"dic_session_encryption_key": None})

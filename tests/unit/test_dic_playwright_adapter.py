@@ -17,7 +17,7 @@ class UnusedPage:
 @pytest.mark.asyncio
 async def test_playwright_adapter_is_fail_closed_for_live_writes() -> None:
     adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
-        UnusedPage(), expected_tenant_id="TENANT-SYNTH-001"
+        UnusedPage(), expected_tenant_id="123456789"
     )
     now = datetime.now(UTC)
     action = PreparedAction(

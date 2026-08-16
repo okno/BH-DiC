@@ -1,7 +1,7 @@
 # Backup e restore
 
-Nessun backup server è stato eseguito: il deployment è bloccato da credenziali SSH mancanti.
-Questa è la procedura prevista; provarla con dati sintetici prima dell'uso operativo.
+Il runtime server è preparato, ma backup e restore drill non sono ancora stati eseguiti.
+Provare questa procedura con dati sintetici prima dell'uso operativo.
 
 ## Contenuto
 

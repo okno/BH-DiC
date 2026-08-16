@@ -98,6 +98,12 @@ def test_cli_wrappers_match_the_implemented_cli() -> None:
     assert "run_cli cleanup" not in cleanup
 
 
+def test_env_reader_uses_portable_awk_quote_patterns() -> None:
+    library = _read("lib.sh")
+    assert '$0 ~ /^".*"$/' in library
+    assert '$0 ~ /^\\".*\\"$/' not in library
+
+
 def test_doctor_checks_only_the_selected_model_endpoint() -> None:
     doctor = _read("doctor.sh")
     assert "from bh_dic.config import AppSettings" in doctor

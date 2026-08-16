@@ -2,18 +2,17 @@
 
 ## Stato operativo corrente
 
-- repository privata collegata localmente;
-- server `10.1.2.253` non raggiunto: utente/chiave SSH mancanti;
-- processo bot assente nel workspace locale; stato sul target `UNVERIFIED`;
-- nessun read o write live verificato;
-- write mock-only, kill switch globale e flag specifici disabilitati.
+- repository privata installata in `/opt/bh-dic` sul target Debian 12;
+- Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
+- Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
+- processo bot sul target fermo;
+- nessuna Function ID DIC read o write verificata live;
+- autenticazione DIC bloccata dalla password TeamSystem scaduta e da vault assente;
+- kill switch globale e tutte le flag write specifiche disabilitati.
 
-I 22 script Bash richiesti sono presenti e il gate locale ha verificato parsing `bash -n`, 29 casi
-statici di contratto e 2 casi comportamentali (31 totali). Restano non eseguiti sul target Linux:
-un test locale non equivale a un comando riuscito sul server.
-
-Il gate release 0.2.0 del 15 agosto 2026 ha rieseguito tutti i 31 casi sul worktree finale. Non sono
-stati eseguiti comandi sul target Debian.
+I gate offline della release 0.2.1 sono registrati nell'implementation report. Sul target sono
+stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
+Function ID DIC.
 
 ## Runbook giornaliero
 
@@ -69,7 +68,30 @@ rete/costo, prima dell'avvio:
 
 Il doctor online prova DNS/HTTP senza autenticazione. Il model-check live esegue una singola
 richiesta sintetica con zero Function ID ammessi, non costruisce DIC/Discord/browser e non esegue
-tool. Il suo `LIVE_VERIFIED` non attesta DIC o deployment.
+tool. Il suo `LIVE_VERIFIED` osservato attesta soltanto Groq e il modello selezionato, non DIC o
+Discord.
+
+### Autenticazione DIC
+
+Il check offline non contatta la rete:
+
+```bash
+.venv/bin/python -m bh_dic dic-auth-check
+```
+
+Dopo che un amministratore ha completato il cambio password TeamSystem e aggiornato il secret in
+locale, mantenere il bot fermo e le write disabilitate, quindi eseguire il controllo live
+esplicitamente autorizzato:
+
+```bash
+.venv/bin/python -m bh_dic dic-auth-check --live
+```
+
+Il comando ripristina prima un eventuale vault, prova la route applicativa fissa e richiede
+l'attestazione passiva dell'azienda corrente. Se serve login, accetta redirect soltanto verso le
+origini TeamSystem esatte previste. Qualunque mismatch, risposta mancante, password scaduta,
+MFA/CAPTCHA o redirect inatteso fallisce chiuso. Non avviare il bot finché sessione e tenant non
+risultano verificati.
 
 ### Log
 

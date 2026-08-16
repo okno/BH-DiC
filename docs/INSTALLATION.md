@@ -4,10 +4,10 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato della consegna: deployment, provider live e Dipendenti in Cloud live non sono stati
-> verificati. Il bot non è stato avviato dal workspace locale e lo stato del target è
-> `UNVERIFIED`. Tutte le write devono restare `DISABLED_BY_POLICY`; questa guida non è
-> un'autorizzazione a collegarsi al tenant o ad avviare il servizio.
+> Stato al 16 agosto 2026: il runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati; il
+> bot è fermo. Il login DIC headless è bloccato dalla password TeamSystem scaduta e non esiste
+> ancora un vault autenticato. Nessuna Function ID DIC è stata collaudata live. Tutte le write
+> devono restare `DISABLED_BY_POLICY`; questa guida non autorizza l'avvio.
 
 ## 1. Decisioni prima dell'installazione
 
@@ -217,7 +217,7 @@ BOT_CLOSING=
 La persona cambia soltanto chiarimenti e decorazioni; dati/output operativi restano in italiano.
 Non amplia tool, ruoli o azioni e non trasforma BH-DiC in un bot generalista o di moderazione.
 
-## 7. Discord e registrazione guild-scoped
+## 7. Discord e preparazione guild-scoped
 
 Nel Discord Developer Portal creare app e bot, lasciare disabilitati gli intent privilegiati e
 installare nel solo guild `1303955635984924722` con gli scope `applications.commands` e `bot`.
@@ -231,11 +231,11 @@ La procedura esatta, l'install URL guild-locked e la mappa RBAC sono in
 cd /opt/bh-dic
 sudo -u bh-dic -H ./scripts/doctor.sh
 sudo -u bh-dic -H ./scripts/status.sh
-sudo -u bh-dic -H ./scripts/register-commands.sh
-sudo -u bh-dic -H ./scripts/status.sh
 ```
 
-La registrazione non deve avviare il gateway e non deve eseguire richieste DIC.
+Rinviare `register-commands.sh` finché autenticazione e tenant DIC non sono verificati. La
+registrazione non avvia il gateway e non esegue richieste DIC, ma rende i comandi visibili nel
+guild e appartiene quindi alla fase di attivazione controllata.
 
 ## 8. Gate offline e smoke mock
 
@@ -267,6 +267,33 @@ l'autenticazione. `model-check --live` invia una sola richiesta sintetica senza 
 Function ID e accetta soltanto `unsupported_request`; non costruisce Discord, DIC o browser e non
 esegue tool. `LIVE_VERIFIED` vale esclusivamente per il provider/modello in quel momento. Nessuno
 dei due comandi prova login DIC, selettori live o deployment completo.
+
+### Gate DIC prima dell'attivazione
+
+Con servizio fermo e tutte le write disabilitate, il controllo offline è sempre il primo passo:
+
+```bash
+sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check
+```
+
+Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale,
+aggiornare `DIC_PASSWORD` localmente senza mostrarla e invalidare l'eventuale sessione precedente.
+Poi, con autorizzazione esplicita alla rete DIC:
+
+```bash
+sudo -u bh-dic -H .venv/bin/python -m bh_dic invalidate-session
+sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check --live
+sudo -u bh-dic -H ./scripts/status.sh
+```
+
+Il check live prova prima una sessione restaurata mediante la route fissa della lista dipendenti,
+osserva passivamente l'attestazione tenant first-party e segue, solo se necessario, l'allowlist
+esatta del login TeamSystem. Non esegue Function ID HR. Password scaduta, MFA/CAPTCHA, redirect
+inatteso o attestazione non valida impongono stop. Solo dopo esito autenticazione/tenant positivo:
+
+```bash
+sudo -u bh-dic -H ./scripts/register-commands.sh
+```
 
 ## 9. Scegliere un solo gestore di processo
 
@@ -462,7 +489,8 @@ Per sintomi e percorsi di escalation vedere [Troubleshooting](TROUBLESHOOTING.md
 - [ ] Gestore processo unico; nessuna commistione systemd/script PID.
 - [ ] Doctor offline, mock smoke, audit e backup verdi sul target.
 - [ ] Prima verifica limitata a read sintetica autorizzata; nessuna write live.
-- [ ] Deployment, provider live e DIC live marcati `UNVERIFIED` finché non osservati.
+- [ ] Runtime Debian e provider selezionato marcati secondo evidenza; DIC/Discord restano
+      `UNVERIFIED` finché verificati separatamente.
 
 ## Riferimenti ufficiali
 

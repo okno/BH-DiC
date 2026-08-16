@@ -107,6 +107,10 @@ class PageLike(LocatorLike, Protocol):
         timeout: float | None = None,  # noqa: ASYNC109
     ) -> None: ...
 
+    def on(self, event: str, handler: object) -> None: ...
+
+    def remove_listener(self, event: str, handler: object) -> None: ...
+
 
 EMPLOYEE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
@@ -181,13 +185,23 @@ class BaseDicPage:
             raise DicValidationError("employee_id is required by this route")
         return self.route_template.format(employee_id=self.validate_employee_id(employee_id))
 
-    async def open(self, employee_id: str | None = None) -> None:
+    def absolute_url(self, employee_id: str | None = None) -> str:
         path = self.route(employee_id)
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         if f"{urlparse(url).scheme}://{urlparse(url).netloc}" != self.base_url:
             raise DicConfigurationError("route escaped the configured DIC origin")
+        return url
+
+    async def navigate(self, employee_id: str | None = None) -> None:
+        """Navigate from a fixed route while leaving redirect validation to the caller."""
+
+        url = self.absolute_url(employee_id)
         await self.page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
         await self.page.wait_for_load_state("domcontentloaded", timeout=self.timeout_ms)
+
+    async def open(self, employee_id: str | None = None) -> None:
+        path = self.route(employee_id)
+        await self.navigate(employee_id)
         current = urlparse(self.page.url)
         if f"{current.scheme}://{current.netloc}" != self.base_url:
             raise DicUiChangedError("navigation left the configured DIC origin")

@@ -2,22 +2,15 @@
 
 ## Stato corrente
 
-Il deployment verso `10.1.2.253:22` è **BLOCCATO**. Mancano l'utente SSH e la chiave/agent
-autorizzati; nessun tentativo deve aggirare il blocco. Nessun bot è stato avviato nel workspace
-locale, ma lo stato del processo sul target è `UNVERIFIED`. Non esistono letture o scritture live
-verificate e tutte le write restano `TESTED_WITH_MOCK` e `DISABLED_BY_POLICY`.
+La preparazione su Debian 12 in `/opt/bh-dic` è completata. Sono stati verificati Python 3.12
+installato senza sostituire il Python di sistema, virtualenv e dipendenze, migrazione SQLite,
+directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
+doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-Input ancora necessari:
-
-```text
-DEPLOY_HOST=10.1.2.253
-DEPLOY_SSH_PORT=22
-DEPLOY_SSH_USER=<FORNITO_TRAMITE_CANALE_SICURO>
-DEPLOY_SSH_KEY_PATH=<PATH_LOCALE_OPZIONALE>
-REMOTE_PROJECT_DIR=/opt/bh-dic
-```
-
-Non salvare questi valori, una passphrase o una chiave privata nella repository.
+Il bot è **fermo** e deve restarlo. La verifica DIC headless è bloccata dalla password
+TeamSystem scaduta e dall'assenza di un vault autenticato; nessuna Function ID DIC read/write è
+stata collaudata live. `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le
+flag write specifiche restano `false`.
 
 ## Gate SSH
 
@@ -30,30 +23,28 @@ Comando previsto dopo la verifica della fingerprint:
 
 ```bash
 ssh -p 22 -o StrictHostKeyChecking=yes -i <DEPLOY_SSH_KEY_PATH> \
-  <DEPLOY_SSH_USER>@10.1.2.253
+  <DEPLOY_SSH_USER>@<DEPLOY_HOST>
 ```
 
 Se la chiave è già nell'agent, omettere `-i`. Non inserire password nella riga di comando e non
 modificare `sshd_config` o firewall.
 
-## Procedura di preparazione
+## Aggiornamento dalla release precedente
 
-Una volta sbloccato l'accesso:
+Eseguire soltanto dopo la pubblicazione della release correttiva e con il bot confermato fermo:
 
 ```bash
-ssh <USER>@10.1.2.253
 cd /opt/bh-dic
-cp -n .env.example .env
-chmod 600 .env
-nano .env
-./scripts/install.sh
-./scripts/doctor.sh
-.venv/bin/python -m bh_dic model-check
 ./scripts/status.sh
+./scripts/backup.sh
+./scripts/update.sh
+./scripts/doctor.sh
+.venv/bin/python -m bh_dic validate-config
+.venv/bin/python -m bh_dic model-check
 ```
 
-Se il progetto non è in `/opt/bh-dic`, sostituire il percorso in tutti i comandi. La repository
-privata va clonata con una credenziale a privilegi minimi che non compaia nel remote.
+`update.sh` richiede un worktree pulito e aggiorna solo fast-forward. Non usare `--restart` in
+questa fase. Non mostrare `.env`; conservarlo con owner del servizio e modalità `0600`.
 
 La configurazione deve mantenere:
 
@@ -63,39 +54,54 @@ ENABLE_WRITE_ACTIONS=false
 ENABLE_LIVE_WRITE_TESTS=false
 ```
 
-Non registrare slash command e non eseguire `start.sh` durante la sola preparazione. I comandi
-seguenti appartengono alla successiva attivazione, che richiede autorizzazione distinta:
+## Sblocco autenticazione DIC
+
+Un amministratore deve prima completare il cambio della password scaduta nel normale flusso
+TeamSystem, poi aggiornare `DIC_PASSWORD` nel secret store o nell'editor locale e invalidare
+l'eventuale vecchia sessione. Non passare la password nella command line, nei log o in ticket.
+
+Con le write ancora disabilitate:
 
 ```bash
 ./scripts/doctor.sh --online
 .venv/bin/python -m bh_dic model-check --live
+.venv/bin/python -m bh_dic dic-auth-check
+.venv/bin/python -m bh_dic dic-auth-check --live
+./scripts/status.sh
+```
+
+Il controllo live deve terminare con autenticazione e tenant verificati e deve lasciare un vault
+cifrato valido. Un redirect fuori dall'allowlist esatta DIC/TeamSystem, un tenant non attestabile,
+MFA/CAPTCHA o un nuovo cambio password impongono stop ed escalation umana.
+
+Solo dopo questo esito, con autorizzazione distinta, proseguire:
+
+```bash
 ./scripts/register-commands.sh
 ./scripts/start.sh
 ./scripts/status.sh
 ./scripts/logs.sh all --follow
-./scripts/stop.sh
 ```
 
-I due comandi online richiedono autorizzazione esplicita a rete/costo. Il doctor verifica solo
-DNS/HTTP; il model-check effettua una singola richiesta sintetica chiusa al provider e non tocca
-DIC/Discord/browser. Ometterli se tale autorizzazione non è presente e mantenere il bot fermo.
+`doctor --online` e `model-check --live` non attestano DIC. `dic-auth-check --live` può contattare
+DIC e l'IdP TeamSystem, ma non esegue Function ID HR. Non registrare comandi e non avviare se uno
+dei gate fallisce.
 
 ## Stato di consegna atteso
 
-- codice e `.venv` presenti;
-- Chromium e dipendenze verificati;
-- database migrato e audit inizializzabile;
+- codice e `.venv` presenti (verificato);
+- Chromium, dipendenze e ClamAV verificati;
+- database migrato e audit verificato;
 - `.env.example` presente; `.env` assente o protetto e valorizzato localmente;
 - directory e file con i permessi documentati;
 - `doctor.sh` riuscito, con risultato online separato se autorizzato;
-- bot fermo, nessun PID/lock stale, nessun servizio systemd abilitato;
+- bot fermo e nessun PID/lock stale;
 - nessun processo Chromium/Playwright residuo;
 - report senza token, PII, cookie o contenuti HR.
 
-Un file systemd di esempio può essere revisionato, ma non va installato né abilitato senza una
-richiesta successiva. Se viene scelto systemd, usare esclusivamente `systemctl`/`journalctl` per
-il lifecycle; non mescolare l'unit con gli script PID `start.sh`, `stop.sh` o `restart.sh`. La
-procedura completa Debian, provider, Discord e prima verifica read-only è in
+Se viene scelto systemd, usare esclusivamente `systemctl`/`journalctl` per il lifecycle; non
+mescolare l'unit con gli script PID `start.sh`, `stop.sh` o `restart.sh`. La procedura completa
+Debian, provider, Discord e prima verifica read-only è in
 [Installazione e runbook](INSTALLATION.md).
 
 ## Rollback

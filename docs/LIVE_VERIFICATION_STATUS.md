@@ -1,19 +1,19 @@
 # Stato di verifica live DIC
 
-## Integrazioni release 0.2.0
+## Integrazioni: stato osservato al 16 agosto 2026
 
 | Integrazione | Stato documentato | Evidenza ancora richiesta |
 |---|---|---|
 | OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
-| Groq | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione e disponibilità `openai/gpt-oss-120b` |
+| Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
 | Discord | setup guild-scoped documentato; `LIVE_DISCORD_UNVERIFIED` | app/token/installazione, Channel ID `#mng-ai`, ruoli e registrazione |
-| DIC | adapter mock e percorsi descritti sotto; `NEEDS_VALIDATION` | login/tenant, DOM, selettori e smoke read-only autorizzato |
-| Debian deployment | `BLOCKED` / `UNVERIFIED` | credenziale SSH, installazione, doctor, processo e restore drill sul target |
+| DIC | struttura login e contratto tenant osservati read-only; funzioni applicative `NEEDS_VALIDATION` | password TeamSystem valida, `dic-auth-check --live`, vault cifrato e smoke read-only autorizzato |
+| Debian deployment | preparazione runtime `VERIFIED`; servizio `STOPPED` | verifica DIC, registrazione comandi, avvio controllato e restore drill |
 
-Un gate locale 0.2.0 non promuove nessuna di queste righe a “live verified”. Anche un futuro
-`model-check --live` riuscito promuove soltanto il provider/modello osservato, non Discord, DIC o
-deployment.
+Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata: non attesta
+Discord o DIC. Il doctor Debian attesta i prerequisiti controllati, non il login DIC, il gateway
+Discord o il restore. Il servizio resta fermo.
 
 ## Legenda ed evidenza disponibile
 
@@ -24,8 +24,8 @@ deployment.
   prova di compatibilità con il sito live.
 - `BASELINE_OBSERVED`: controllo o schermata riportati dalla ricognizione
   read-only di Fase 1.
-- `NEEDS_VALIDATION`: nessuna verifica live di Fase 2 è stata eseguita; non va
-  interpretato come `LIVE_READ_VERIFIED`.
+- `NEEDS_VALIDATION`: la specifica funzione non è stata verificata end-to-end sul sito live;
+  non va interpretato come `LIVE_READ_VERIFIED`.
 - `LIVE_WRITE_UNVERIFIED`: la write non è mai stata eseguita su dati live.
 - `NOT_AVAILABLE`: il percorso live viene rifiutato esplicitamente anziché simulare un supporto
   non osservato.
@@ -34,8 +34,11 @@ deployment.
 - `DISABLED_BY_DEFAULT`: evidenza di configurazione, non stato alternativo; il kill switch globale
   e la feature flag specifica sono `false` in `.env.example`.
 
-In questa sessione non è stato effettuato alcun probe live. Nessuna riga è quindi
-classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono
+Sono stati eseguiti soltanto una ricognizione DIC autorizzata in sola lettura e i probe
+infrastrutturali descritti sopra. La ricognizione ha confermato il flusso di login federato e il
+contratto first-party usato dal tenant guard, ma il tentativo headless si è fermato sulla password
+TeamSystem scaduta prima di creare un vault. Nessuna Function ID DIC è quindi classificata
+`LIVE_READ_VERIFIED`. Tutte le write rimangono
 `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY` e `DISABLED_BY_DEFAULT`, anche quando il relativo
 controllo era visibile nella baseline. `TESTED_WITH_MOCK` indica test sintetici
 del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.

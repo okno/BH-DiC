@@ -134,6 +134,7 @@ class PlaywrightDicAdapter:
         base_url: str = "https://secure.dipendentincloud.it",
         coordinator: BrowserCoordinator | None = None,
         expected_tenant_id: str | None = None,
+        login_timeout_ms: float = 15_000,
         quarantine_root: Path | None = None,
         live_writes_enabled: bool = False,
         state_digest_key: bytes | None = None,
@@ -146,7 +147,12 @@ class PlaywrightDicAdapter:
         if state_digest_key is not None and len(state_digest_key) < 32:
             raise DicConfigurationError("DIC state digest key must contain at least 32 bytes")
         self._state_digest_key = bytes(state_digest_key) if state_digest_key is not None else None
-        self._auth = PlaywrightAuthenticator(page, base_url, expected_tenant_id=expected_tenant_id)
+        self._auth = PlaywrightAuthenticator(
+            page,
+            base_url,
+            expected_tenant_id=expected_tenant_id,
+            login_timeout_ms=login_timeout_ms,
+        )
         self._employees = EmployeesListPage(page, base_url)
         self._summary = EmployeeSummaryPage(page, base_url)
         self._roles = EmployeeRolesPage(page, base_url)

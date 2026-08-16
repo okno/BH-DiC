@@ -2,32 +2,33 @@
 
 ## Verifica live e compatibilità UI
 
-- Nessun login, probe DOM, smoke test read-only o test write live è stato eseguito
-  durante la Fase 2 corrente.
+- Una ricognizione autorizzata in sola lettura ha osservato la struttura corrente del login e la
+  sorgente first-party dell'identità aziendale. Non ha eseguito Function ID DIC, smoke read-only
+  applicativi o write live.
 - La baseline di Fase 1 documenta route, etichette e controlli osservati, ma non
   certifica il DOM attuale. Nessuna read ha quindi stato `LIVE_READ_VERIFIED`.
-- `data-testid`, attributi `data-*`, ordinamento dei fallback e controlli
-  distintivi richiedono validazione live autorizzata. Un cambio UI può produrre
-  `DicUiChangedError` e aprire il circuit breaker.
-- Non è stata identificata o adottata un'API ufficiale DIC. L'implementazione è
-  un adapter UI confinato alle route censite e non usa endpoint privati inventati.
+- `data-testid`, attributi `data-*`, ordinamento dei fallback e controlli distintivi delle pagine
+  HR richiedono validazione live autorizzata. Un cambio UI può produrre `DicUiChangedError` e
+  aprire il circuit breaker.
+- Non è stata identificata o adottata un'API pubblica supportata da DIC. L'attestazione tenant
+  osserva passivamente una risposta first-party emessa durante una normale navigazione UI; non la
+  espone come API operativa e non sostituisce i Page Object.
 - I Page Object verificano origine e route esatta; la presenza di tutti i
   controlli distintivi non è stata collaudata sul sito corrente.
 
 ## Autenticazione e sessione
 
-- La generazione TOTP automatica da `DIC_TOTP_SECRET` non è collegata. Il form MFA
-  accetta un codice monouso già fornito; in sua assenza l'autenticazione si ferma.
+- `DIC_TOTP_SECRET` non è consumato dal flusso live corrente. Qualunque challenge MFA si ferma
+  fail-closed e richiede una procedura umana autorizzata; nessun codice viene compilato o inviato.
 - CAPTCHA richiede sempre intervento umano e non viene aggirato.
-- La composizione settings → vault → browser context → persistenza è collegata
-  al bootstrap non-mock e testata con boundary sintetici, ma non è stata verificata
-  sul sito o sull'host Linux finale. `dic-auth-check` controlla offline vault e
-  sessione senza rete; solo `dic-auth-check --live` può verificare sessione e tenant
-  contro DIC, e non è stato eseguito in questa consegna.
-- Permessi POSIX `0600`/`0700`, scadenza reale della sessione e rotazione devono
-  essere verificati sull'host Linux finale.
-- L'adapter richiede un tenant ID osservabile nel DOM. Se il sito non espone un
-  attributo stabile e verificabile, l'accesso fallisce chiuso.
+- La composizione settings → vault → browser context → persistenza è collegata e testata con
+  boundary sintetici. Il tentativo headless autorizzato sul server si è fermato perché la password
+  TeamSystem risulta scaduta; non è stato creato un vault autenticato.
+- Il probe di sessione restaurata e l'attestazione passiva tenant sono implementati e coperti da
+  test sintetici, ma non sono ancora stati verificati con un vault live sul server.
+- L'identificatore aziendale non è disponibile in un marker DOM stabile. L'adapter richiede quindi
+  la risposta first-party prevista durante la navigazione controllata; risposta assente, ambigua,
+  malformata o difforme fallisce chiuso.
 
 ## Read e dati
 
@@ -81,12 +82,11 @@ semantica, permessi e postcondizioni.
 
 ## Provider di modello e persona
 
-- Il router supporta configurazione OpenAI, Groq e llama/OpenAI-compatible, ma autenticazione,
-  disponibilità modello, quota, latenza e conformità degli output non sono state verificate live
-  per alcun provider in questa consegna.
-- Groq usa una base URL fissa e il modello predefinito documentato; ciò non garantisce che il
-  modello sia abilitato nell'account. Il runtime llama locale, il modello e la protezione della
-  porta sono responsabilità dell'operatore e non vengono installati da BH-DiC.
+- Il router supporta OpenAI, Groq e llama/OpenAI-compatible. Groq con
+  `openai/gpt-oss-120b` ha superato il probe live chiuso sul server; quota, latenza nel tempo e gli
+  altri provider/modelli restano verifiche separate.
+- Il runtime llama locale, il modello e la protezione della porta sono responsabilità
+  dell'operatore e non vengono installati da BH-DiC.
 - La lingua della persona riguarda chiarimenti e decorazioni; dati/output operativi restano in
   italiano. Il profilo non migliora l'autorizzazione, non sostituisce la validazione deterministica
   e non rende BH-DiC un assistente generalista o un bot di moderazione Discord.
@@ -101,9 +101,9 @@ semantica, permessi e postcondizioni.
   processo/container non sono verificati.
 - La riconciliazione può essere eseguita anche dopo kill switch o scadenza
   dell'approvazione, ma richiede comunque accesso read al tenant.
-- Non è stato effettuato deploy o collaudo dell'adapter sull'host remoto. Stato
-  systemd, browser installato, dipendenze native e storage persistente restano
-  verifiche operative separate.
+- Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
+  offline/online sono stati verificati sul Debian target. Il servizio è fermo; login DIC, vault,
+  gateway Discord, restore drill e comportamento applicativo sotto carico restano separati.
 
 ## Criterio per rimuovere una limitazione
 

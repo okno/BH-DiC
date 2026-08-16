@@ -5,6 +5,29 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-16
+
+### Added
+
+- Current TeamSystem multi-step sign-in support for Dipendenti in Cloud, including explicit
+  fail-closed handling when interactive password renewal is required.
+- Passive current-company attestation during a fixed read-only employee-list navigation, with
+  restored browser-session verification before credentials are used.
+
+### Changed
+
+- Debian deployment and operations documentation now records the verified Groq and local runtime
+  gates while keeping the unfinished DIC authentication check clearly blocked.
+- Shell environment parsing uses a portable `awk` quote expression and no longer emits `mawk`
+  escape warnings on Debian 12.
+
+### Security
+
+- Tenant authorization now requires the exact first-party company-info response contract and no
+  longer trusts company names or inferred DOM attributes.
+- Tenant response bodies, identifiers, URLs and parsing failures are excluded from exception
+  chains and structured logs.
+
 ## [0.2.0] - 2026-08-15
 
 ### Added
@@ -36,5 +59,6 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/okno/BH-DiC/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/okno/BH-DiC/releases/tag/v0.2.0

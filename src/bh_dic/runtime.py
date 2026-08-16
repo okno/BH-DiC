@@ -176,6 +176,7 @@ async def _adapter(
             base_url=settings.dic_base_url,
             coordinator=browser_coordinator,
             expected_tenant_id=settings.dic_expected_tenant_id,
+            login_timeout_ms=settings.dic_login_timeout_seconds * 1_000,
             quarantine_root=(settings.data_dir / "uploads").resolve(),
             live_writes_enabled=settings.enable_write_actions,
             state_digest_key=state_digest_key,

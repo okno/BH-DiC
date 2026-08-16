@@ -14,9 +14,9 @@ non deve essere mantenuta come secondo catalogo runtime.
   `EMP-DOC-003` e `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. I 19 Function ID write
   sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
-- Nessuna operazione live è stata eseguita durante questa sessione di Fase 2; nessun bot è stato
-  avviato localmente, mentre bot e deployment sul target sono `UNVERIFIED`/`BLOCKED` per assenza
-  dell'identità SSH.
+- Nessuna Function ID DIC live è stata eseguita. Il runtime Debian e Groq sono verificati
+  separatamente, ma il bot target è fermo e DIC resta `NEEDS_VALIDATION` finché password, vault,
+  autenticazione e tenant non superano il check live.
 
 “Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
 Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il

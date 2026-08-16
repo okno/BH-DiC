@@ -121,8 +121,8 @@ class AppSettings(BaseSettings):
     dic_expected_tenant_id: str | None = Field(
         default=None,
         min_length=1,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        max_length=19,
+        pattern=r"^[1-9][0-9]{0,18}$",
     )
     dic_headless: bool = True
     dic_locale: str = "it-IT"
@@ -308,7 +308,7 @@ class AppSettings(BaseSettings):
             or parsed.fragment
         ):
             raise ValueError("DIC_BASE_URL must be the secure.dipendentincloud.it HTTPS origin")
-        return value.rstrip("/")
+        return "https://secure.dipendentincloud.it"
 
     @model_validator(mode="after")
     def enforce_security_invariants(self) -> AppSettings:

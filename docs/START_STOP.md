@@ -1,8 +1,8 @@
 # Start e stop
 
-> Stato corrente: nessun processo bot è stato avviato o rimane nel workspace locale. Lo stato del
-> bot sul target è **UNVERIFIED**: gli script Bash hanno superato parsing e test locali, ma non sono
-> stati eseguiti sul server Linux perché il deployment SSH è bloccato.
+> Stato al 16 agosto 2026: il runtime sul target Debian è preparato e il bot è **STOPPED**.
+> Doctor offline/online e Groq sono verificati; la verifica DIC headless è bloccata dalla password
+> TeamSystem scaduta e dall'assenza di un vault. Non avviare ancora il servizio.
 
 ## Prerequisiti
 
@@ -11,6 +11,7 @@ cd /opt/bh-dic
 test -x ./scripts/start.sh
 ./scripts/doctor.sh
 .venv/bin/python -m bh_dic model-check
+.venv/bin/python -m bh_dic dic-auth-check
 ./scripts/status.sh
 ```
 
@@ -110,31 +111,41 @@ Solo come ultima decisione esplicita:
 Lo stop è idempotente: se già fermo pulisce esclusivamente lifecycle file stale controllati. Non
 usare `kill -9` manualmente e non eliminare PID/lock senza verificare il processo.
 
-## Sequenza richiesta al committente
+## Sequenza di ripresa sul target
 
-Una volta completato il deployment e ottenuta autorizzazione all'avvio:
+Dopo l'aggiornamento alla release correttiva, mantenere le write disabilitate e il bot fermo:
 
 ```bash
-ssh <USER>@10.1.2.253
 cd /opt/bh-dic
-cp -n .env.example .env
-chmod 600 .env
-nano .env
 ./scripts/doctor.sh
 ./scripts/doctor.sh --online
 .venv/bin/python -m bh_dic model-check --live
+.venv/bin/python -m bh_dic dic-auth-check
+```
+
+Un amministratore deve completare fuori dal bot il cambio della password TeamSystem scaduta e
+aggiornare `DIC_PASSWORD` localmente senza mostrarla. Poi:
+
+```bash
+.venv/bin/python -m bh_dic invalidate-session
+.venv/bin/python -m bh_dic dic-auth-check --live
+./scripts/status.sh
+```
+
+Solo se il check live attesta autenticazione e tenant, e dopo autorizzazione separata:
+
+```bash
 ./scripts/register-commands.sh
 ./scripts/start.sh
 ./scripts/status.sh
 ./scripts/logs.sh all --follow
-./scripts/stop.sh
 ```
 
 I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. Il model-check live
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 15 agosto 2026 questa sequenza non è stata eseguita: SSH user/key mancanti, stato bot target
-`UNVERIFIED`, nessun read/write live.
+Al 16 agosto 2026 la preparazione e il provider check sono riusciti; la sequenza si ferma prima di
+`dic-auth-check --live`. Nessun read/write DIC live è stato completato e il bot resta fermo.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

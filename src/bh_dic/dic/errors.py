@@ -30,6 +30,10 @@ class DicCaptchaRequiredError(DicAuthenticationError):
     """A CAPTCHA or other human verification gate was encountered."""
 
 
+class DicPasswordExpiredError(DicAuthenticationError):
+    """The identity provider requires an interactive password renewal."""
+
+
 class DicSessionExpiredError(DicAuthenticationError):
     """The encrypted browser session is expired."""
 

@@ -27,7 +27,7 @@ sessione DIC. Usare un secret manager o un canale amministrativo sicuro.
 | Modello | `MODEL_PROVIDER`, tuning `MODEL_*` | provider unico; storage sempre false |
 | Credenziali modello | `OPENAI_*`, `GROQ_*` oppure `LLAMA_*` | valorizzare soltanto il provider selezionato |
 | Persona | `BOT_LANGUAGE`, `BOT_TONE`, `BOT_ADDRESS_STYLE`, `BOT_VERBOSITY`, `BOT_EMOJI_MODE`, testi | cambia la resa, mai policy o autorizzazioni |
-| DIC | URL, user, password, TOTP opzionale, tenant, session key | origine HTTPS fissata; tenant atteso obbligatorio |
+| DIC | URL, user, password, TOTP riservato, tenant, session key | origine HTTPS fissata; tenant numerico obbligatorio; MFA live fail-closed |
 | Write | kill switch e flag specifici | tutti false; non abilitare nel rilascio corrente |
 | File | limite, MIME, retention, ClamAV | upload richiede ClamAV fail-closed |
 | Operazioni | PID, lock, log | path locali protetti, non condivisi via Git |
@@ -186,8 +186,9 @@ contatta mai un database non-SQLite: per PostgreSQL il relativo stato migrazioni
 `UNVERIFIED` e va controllato separatamente in una finestra di manutenzione autorizzata. Il
 model-check live è opt-in anche per il costo e invia una sola richiesta sintetica chiusa, senza
 PII né tool operativi. Non confondere la presenza dei comandi con un esito riuscito; conservare
-exit code e timestamp, non configurazioni. Provider live, DIC live e deployment restano
-`UNVERIFIED` finché non esiste evidenza osservata sul target autorizzato.
+exit code e timestamp, non configurazioni. Sul target preparato Groq e il modello selezionato
+hanno esito `LIVE_VERIFIED`; OpenAI/llama, DIC e Discord restano stati separati e non vanno
+promossi senza evidenza propria.
 
 ## Modifica e rotazione
 

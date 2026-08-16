@@ -21,7 +21,7 @@ def valid_runtime_values() -> dict[str, object]:
         "dic_username": "synthetic@example.invalid",
         "dic_password": "synthetic-password-value",
         "dic_session_encryption_key": "c" * 32,
-        "dic_expected_tenant_id": "tenant-synthetic-001",
+        "dic_expected_tenant_id": "123456789",
     }
 
 
@@ -190,6 +190,14 @@ def test_dic_base_url_cannot_turn_the_adapter_into_a_general_browser() -> None:
             _env_file=None,
         )
 
+    settings = AppSettings(
+        app_env="test",
+        mock_mode=True,
+        dic_base_url="https://secure.dipendentincloud.it:443/",
+        _env_file=None,
+    )
+    assert settings.dic_base_url == "https://secure.dipendentincloud.it"
+
 
 def test_complete_runtime_configuration_is_accepted_and_redacted() -> None:
     settings = AppSettings(**valid_runtime_values(), _env_file=None)
@@ -304,6 +312,14 @@ def test_expected_tenant_is_required_in_normal_runtime() -> None:
     values = valid_runtime_values()
     values["dic_expected_tenant_id"] = None
     with pytest.raises(ValidationError, match="DIC_EXPECTED_TENANT_ID"):
+        AppSettings(**values, _env_file=None)
+
+
+@pytest.mark.parametrize("tenant_id", ["0", "0123", "tenant-synthetic-001", "1.5"])
+def test_expected_tenant_must_be_a_canonical_positive_integer(tenant_id: str) -> None:
+    values = valid_runtime_values()
+    values["dic_expected_tenant_id"] = tenant_id
+    with pytest.raises(ValidationError, match="dic_expected_tenant_id"):
         AppSettings(**values, _env_file=None)
 
 

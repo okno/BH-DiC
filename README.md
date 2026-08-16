@@ -6,12 +6,12 @@ Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello sele
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 15 agosto 2026: repository privata configurata; deployment server **bloccato**
-> perché utente e chiave SSH non sono disponibili; bot **non avviato nel workspace locale** e
-> stato del processo sul target **UNVERIFIED**; nessuna lettura o
-> scrittura verificata sul tenant live. Il catalogo comprende 13 read e 19 write: tutte hanno
-> percorso mock; 13 write hanno percorso live implementato ma non verificato e 6 sono
-> `PARTIALLY_COMPLETED`. Tutte restano `DISABLED_BY_POLICY`.
+> Stato al 16 agosto 2026: la preparazione su Debian 12 è riuscita, inclusi Python 3.12,
+> dipendenze, migrazione, Chromium Playwright, ClamAV e doctor offline/online. Groq con
+> `openai/gpt-oss-120b` ha superato `model-check --live`. Il servizio è fermo: la verifica
+> autenticata DIC headless non è completa perché la password TeamSystem risulta scaduta e non
+> esiste ancora un vault di sessione valido. Nessuna funzione read o write del bot è stata
+> collaudata sul tenant live; tutte le write restano `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 
@@ -42,7 +42,8 @@ ma la persona non modifica policy o superficie operativa.
   e il profilo è separato da RBAC e autorizzazioni;
 - kill switch globale `ENABLE_WRITE_ACTIONS=false` e flag specifici tutti `false`;
 - preview, conferma monouso hashata, TTL, idempotenza, A1/A2 distinti e riconciliazione;
-- adapter mock deterministico e adapter Playwright non validato live;
+- adapter mock deterministico e adapter Playwright con tenant guard basato su attestazione
+  passiva first-party; le funzioni HR Playwright non sono ancora validate live;
 - audit HMAC append-only, cifratura dei parametri pending e log JSON redatti;
 - quarantena UUID, hash/deduplica, MIME/estensione, ClamAV fail-closed e retention;
 - persistenza async SQLite/PostgreSQL, migrazioni Alembic e test sintetici.
@@ -71,7 +72,8 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). Il deployment corrente non è stato eseguito.
+[Deployment](docs/DEPLOYMENT.md). La preparazione Debian è stata eseguita; l'attivazione resta
+sospesa fino alla verifica DIC e alla registrazione controllata dei comandi Discord.
 
 ## Configurazione e operatività
 
@@ -122,13 +124,14 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 
 ## Sicurezza e limiti
 
-- Il progetto è alpha e non è stato validato contro l'interfaccia live corrente.
+- Il progetto è alpha. La struttura di login e il contratto di attestazione tenant sono stati
+  osservati in ricognizione read-only, ma le funzioni HR non sono state validate live.
 - MFA, CAPTCHA e UI drift possono impedire l'automazione.
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.
 - Gli esempi YAML non sostituiscono il catalogo e i controlli nel codice.
-- Nessun processo bot o Chromium è residuo nel workspace locale; lo stato del target non è
-  attestabile finché l'accesso SSH resta bloccato.
+- Il bot sul target è fermo; non avviarlo finché `dic-auth-check --live` non attesta sessione e
+  tenant e non crea il vault cifrato.
 
 Approfondimenti: [architettura di sicurezza](docs/SECURITY_ARCHITECTURE.md),
 [privacy](docs/PRIVACY_GDPR.md), [audit](docs/AUDIT.md),

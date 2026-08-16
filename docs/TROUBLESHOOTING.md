@@ -9,8 +9,8 @@ Partire sempre da stato e log redatti:
 ./scripts/audit-verify.sh
 ```
 
-Non avviare il bot o abilitare write per diagnosticare. Nel workspace locale il processo bot è
-assente; sul target il suo stato è `UNVERIFIED` e il deployment è `BLOCKED`.
+Non avviare il bot o abilitare write per diagnosticare. Il runtime Debian è preparato, ma il bot
+target è fermo finché autenticazione e tenant DIC non sono verificati.
 
 | Sintomo | Verifica | Azione sicura |
 |---|---|---|
@@ -24,7 +24,8 @@ assente; sul target il suo stato è `UNVERIFIED` e il deployment è `BLOCKED`.
 | timeout/quota provider | log router, account provider, `model-check` offline/live autorizzato | verificare `MODEL_PROVIDER`, modello e chiave; retry limitato, mai bypassare intent validation |
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
-| login DIC fallisce | URL, clock, sessione, MFA/CAPTCHA | invalidare sessione; escalation umana per MFA/CAPTCHA |
+| login DIC fallisce | route DIC/TeamSystem, password scaduta, sessione, MFA/CAPTCHA | rinnovo password ed escalation umana; invalidare il vault, mai usare passwordless o ampliare l'allowlist |
+| attestazione tenant fallisce | route fissa, risposta first-party, schema/ID configurato | mantenere il bot fermo; nessun fallback su nome o DOM, patchare solo con nuova evidenza redatta |
 | UI drift/selettore rotto | route/page object, trace protetto | smoke read-only e patch testata; nessuna write live |
 | database locked | processi, WAL, filesystem | fermare processo concorrente; non cancellare WAL/SHM |
 | migrazione fallisce | `alembic current/history` | backup, correggere schema; non marcare manualmente la revision |

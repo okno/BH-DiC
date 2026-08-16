@@ -33,7 +33,7 @@ def _settings(tmp_path: Path, *, session_key: str = "S" * 32) -> AppSettings:
         dic_username="operator@example.invalid",
         dic_password="synthetic-password",
         dic_session_encryption_key=session_key,
-        dic_expected_tenant_id="TENANT-SYNTHETIC-001",
+        dic_expected_tenant_id="123456789",
         data_dir=tmp_path,
         dic_session_state_path=tmp_path / "session" / "dic_session.enc",
         _env_file=None,
@@ -88,7 +88,7 @@ def test_dic_auth_check_defaults_to_safe_offline_vault_validation(
     assert payload["vault_permissions"] in {"PRIVATE", "UNVERIFIED_NON_POSIX"}
     build_runtime.assert_not_awaited()
     assert "COOKIE-MUST-NOT-BE-PRINTED" not in result.output
-    assert "TENANT-SYNTHETIC-001" not in result.output
+    assert "123456789" not in result.output
     assert "synthetic-password" not in result.output
     assert str(settings.dic_session_state_path) not in result.output
 
@@ -131,7 +131,7 @@ def test_dic_auth_check_offline_fails_closed_without_sensitive_details(
 
     assert result.exit_code == 1
     assert "COOKIE-MUST-NOT-BE-PRINTED" not in result.output
-    assert "TENANT-SYNTHETIC-001" not in result.output
+    assert "123456789" not in result.output
     assert str(settings.dic_session_state_path) not in result.output
 
 

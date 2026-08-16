@@ -1,6 +1,6 @@
 # Implementation report
 
-Snapshot documentale: **15 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
+Snapshot documentale: **16 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
 un commit non può auto-referenziare il proprio hash. Aggiornare questo file dopo il deployment senza
 sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 
@@ -23,19 +23,20 @@ source è stata aggiunta.
 
 | Campo | Stato osservato |
 |---|---|
-| Host | `10.1.2.253:22` |
-| Utente SSH | `BLOCKED`: non fornito |
-| Chiave/agent | `BLOCKED`: non forniti |
-| Directory prevista | `/opt/bh-dic`; non creata/verificata |
-| Python server | `UNVERIFIED` |
-| `.venv` server | `UNVERIFIED` |
-| Chromium server | `UNVERIFIED` |
-| Database server | `UNVERIFIED` |
-| Permessi/spazio | `UNVERIFIED` |
-| Bot target | `UNVERIFIED`; nessun processo è stato avviato dalla sessione locale |
+| Host | target Debian 12 autorizzato; indirizzo omesso dalla documentazione |
+| Utente runtime | account di servizio dedicato verificato |
+| Directory | `/opt/bh-dic`; ownership e modalità runtime verificate |
+| Python server | 3.12 installato separatamente dal Python di sistema |
+| `.venv` server | presente; `pip check` riuscito |
+| Chromium server | installato nel profilo runtime; launch headless riuscito |
+| Database server | SQLite presente e migrazione alla head verificata |
+| Antivirus | ClamAV attivo; socket `0660` e scansione applicativa riuscita |
+| Doctor | offline e online riusciti |
+| Bot target | `STOPPED`; nessun avvio di produzione eseguito |
 
-Il workspace locale usa Python 3.12.13 e una `.venv`; ciò non prova lo stato del server. Non sono
-stati creati PID, servizi systemd o processi Playwright sul target.
+Il provider Groq e il modello configurato hanno superato il probe live chiuso. Il login DIC
+headless si è fermato fail-closed sulla password TeamSystem scaduta e non ha creato un vault;
+nessuna Function ID DIC read/write è stata eseguita.
 
 ## Implementazione
 
@@ -50,7 +51,8 @@ Completati nel codice e testati con risorse sintetiche:
 - catalogo/policy/RBAC/flag per 32 Function ID;
 - approval state machine, A1/A2, TTL, conferma hashata monouso, CAS/idempotenza, payload cifrati;
 - audit append-only HMAC e verifica catena;
-- adapter mock completo, page object/selector e adapter Playwright non validati live;
+- adapter mock completo, Page Object e adapter Playwright; login federato con allowlist esatta,
+  probe di sessione restaurata e attestazione tenant passiva first-party;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
 - documentazione sicurezza, privacy, operazioni, Wazuh, deployment e troubleshooting.
@@ -66,35 +68,34 @@ Stato funzionale:
   sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
-- nessun bot avviato nel workspace locale; stato target `UNVERIFIED`; nessuna modifica di
-  produzione.
+- bot target fermo; nessuna modifica DIC di produzione.
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate osservati — release 0.2.0
+## Test e gate — release 0.2.1
 
-I risultati seguenti sono stati osservati il 15 agosto 2026 sul worktree finale 0.2.0, senza
+I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.1, senza
 avviare bot/browser e senza chiamare Discord, DIC o provider. Provano soltanto i confini coperti da
 fixture sintetiche; non trasformano alcuna integrazione in `LIVE_VERIFIED`.
 
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS: 182 file già formattati |
+| `ruff format --check .` | PASS: 184 file già formattati |
 | `ruff check .` | PASS: zero issue |
-| `mypy src` | PASS: 107 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 481 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 481 test |
-| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (7.922 statement, 2.398 branch), soglia 80% |
+| `mypy src` | PASS: 108 source file, zero issue |
+| `pytest` (pytest 9.0.3) | PASS: 517 test, 1 warning esterno `discord.py/audioop` |
+| `coverage run --branch -m pytest` | PASS: 517 test |
+| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (8.110 statement, 2.442 branch), soglia 80% |
 | `bandit -q -r src` | PASS: nessun issue riportato |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS: nessuna vulnerabilità nota nel lock |
-| `gitleaks dir <snapshot-sorgenti> --redact --no-banner` | PASS: gitleaks 8.30.1, 222 file tracciati/non ignorati, nessun finding |
+| `gitleaks git . --log-opts v0.2.0..HEAD --redact --no-banner` | PASS: gitleaks 8.30.1, 1 commit/circa 62 KB, nessun finding |
 | parsing YAML/XML docs/security | PASS |
 | scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
-| 22 script `bash -n` + contratti/lifecycle ops | PASS: 31 casi; start fail-closed e status/stop sintetici inclusi |
+| 22 script `bash -n` + contratti/lifecycle ops | PASS: 32 casi; start fail-closed e status/stop sintetici inclusi |
 
-La scansione della cronologia Git e i workflow del nuovo commit restano gate di consegna da
-eseguire dopo il commit. Deployment, provider live e DIC live non sono deducibili da alcun gate
-locale e restano bloccati/non verificati come indicato sotto.
+La scansione della cronologia del nuovo commit è riuscita; i workflow remoti restano da verificare
+dopo il push. Le evidenze Debian/Groq riportate sopra derivano da controlli separati sul target;
+non promuovono DIC o Discord a verificati.
 
 ## Operatività
 
@@ -115,8 +116,8 @@ Restore         ./scripts/restore.sh var/backups/<BACKUP>.tar.gz --confirm RESTO
 Update          ./scripts/update.sh
 ```
 
-Gli script non sono stati eseguiti sul server. Backup/restore corrente supporta SQLite locale, non
-PostgreSQL.
+Installazione, doctor, audit e smoke mock sono stati eseguiti sul server. Il restore drill non è
+stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 
 ## Sicurezza
 
@@ -128,13 +129,14 @@ PostgreSQL.
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
-- nessuna write/read live eseguita in questa sessione di Fase 2 e nessun processo bot locale.
+- nessuna Function ID DIC write/read live eseguita; processo bot target fermo.
 
 ## Problemi residui
 
-- credenziali SSH mancanti: deployment bloccato;
-- configurazione reale Discord/provider/DIC non fornita e connessioni non verificate;
-- selettori e route Playwright non validati live; UI drift possibile;
+- password TeamSystem scaduta: autenticazione DIC e creazione vault bloccate fino all'azione umana;
+- Discord gateway e registrazione comandi non ancora verificati end-to-end;
+- Groq/modello verificati live; OpenAI e llama restano non verificati;
+- selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;
 - form write, delete/export/download e postcondizioni non verificati live;
 - MFA/CAPTCHA e funzionalità TeamSystem non documentate possono bloccare flussi;
 - rotazione log e Wazuh non installati/testati sul target;
