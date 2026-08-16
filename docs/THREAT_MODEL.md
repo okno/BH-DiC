@@ -53,7 +53,7 @@ provider access controls.
 | T20 | Audit row edit, deletion or reorder | HMAC chain, contiguous sequence and chain-state tail check | alert, preserve evidence, stop writes |
 | T21 | Audit HMAC key compromise | protected secret and host least privilege | HMAC is not non-repudiation; rotate via controlled chain rollover |
 | T22 | Database corruption/lock | WAL, busy timeout, backup/restore and health checks | stop writes until integrity is established |
-| T23 | Dependency/supply-chain compromise | pinned lock, `pip-audit`, Bandit, gitleaks; requisito repository privata (visibilità pubblica corrente blocca la produzione) | triage advisories and rebuild from trusted source |
+| T23 | Dependency/supply-chain compromise or public-source data leak | pinned lock, `pip-audit`, Bandit, gitleaks, CodeQL, sanitized public tree and protected review process | rotate any exposed secret, purge PII through an approved incident procedure, triage advisories and rebuild from trusted source |
 | T24 | Denial of service via commands/browser jobs | rate limit, single browser queue, timeout, circuit breaker | authorized reads may be delayed during degradation |
 | T25 | Operator enables a critical flag unsafely | validated flag invariants, global kill switch, A2 mandatory | configuration change is privileged and audited |
 | T26 | Persona text is used as prompt injection or mention abuse | closed enums; bounded local decorations; URL/mention/token/instruction rejection; decorations never sent to provider | review configuration change and keep safety strings deterministic |

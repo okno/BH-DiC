@@ -6,12 +6,12 @@ Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello sele
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 17 agosto 2026: la preparazione su Debian 12 è riuscita, inclusi Python 3.12,
-> dipendenze, migrazione, Chromium Playwright, ClamAV e doctor offline/online. Groq con
-> `openai/gpt-oss-120b` ha superato `model-check --live`. Un login DIC manuale autorizzato in
-> browser fresco è `LIVE_AUTHENTICATED`, ma adapter headless, tenant e vault server non sono ancora
-> verificati. Il servizio resta fermo; nessuna Function ID read o write è stata collaudata sul
-> tenant live e tutte le write restano `DISABLED_BY_POLICY`.
+> Stato al 17 agosto 2026: Debian 12, Groq `openai/gpt-oss-120b` e il check DIC headless sono
+> verificati. `dic-auth-check --live` ha restituito sessione `AUTHENTICATED` e tenant
+> `VERIFIED_BY_ADAPTER`; il vault cifrato è utilizzabile dal servizio. systemd risulta
+> `active/running` con `NRestarts=0`; il comando guild-scoped è registrato e il gateway risponde.
+> Il primo smoke Discord è stato negato dal gate RBAC prima del dispatch: nessuna Function ID read o
+> write è stata collaudata sul tenant live e tutte le write restano `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 
@@ -72,8 +72,8 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). La preparazione Debian è stata eseguita; l'attivazione resta
-sospesa fino alla verifica DIC e alla registrazione controllata dei comandi Discord.
+[Deployment](docs/DEPLOYMENT.md). Il servizio Debian è attivo e le integrazioni di autenticazione e
+trasporto sono verificate; resta da correggere la mappatura RBAC prima dello smoke read-only.
 
 ## Configurazione e operatività
 
@@ -130,8 +130,8 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.
 - Gli esempi YAML non sostituiscono il catalogo e i controlli nel codice.
-- Il bot sul target è fermo; non avviarlo finché `dic-auth-check --live` non attesta sessione e
-  tenant e non crea il vault cifrato.
+- Il servizio sul target è attivo; prima di qualunque smoke read-only verificare il ruolo Discord
+  dell'operatore. La creazione del bot o l'ownership del guild non sostituiscono la mappa RBAC.
 
 Approfondimenti: [architettura di sicurezza](docs/SECURITY_ARCHITECTURE.md),
 [privacy](docs/PRIVACY_GDPR.md), [audit](docs/AUDIT.md),
@@ -145,5 +145,7 @@ Setup e confini delle integrazioni: [autenticazione DIC](docs/DIC_AUTHENTICATION
 [stato di verifica live](docs/LIVE_VERIFICATION_STATUS.md) e
 [limitazioni note](docs/KNOWN_LIMITATIONS.md).
 
-La repository deve restare privata. Non aggiungere una licenza open source senza
-autorizzazione.
+La repository è pubblica per scelta esplicita del titolare e contiene soltanto sorgenti,
+configurazioni di esempio e fixture sintetiche. Segreti, identificatori operativi, stato runtime e
+PII devono restare fuori da Git. La pubblicazione del codice non aggiunge automaticamente una
+licenza open source: non aggiungerne una senza autorizzazione.

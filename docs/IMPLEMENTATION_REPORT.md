@@ -11,14 +11,15 @@ sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 | Owner | `okno` |
 | Nome | `BH-DiC` |
 | Remote | `https://github.com/okno/BH-DiC.git` |
-| Visibilità | `PUBLIC`, verificata tramite GitHub API; blocco di sicurezza per la produzione |
+| Visibilità | `PUBLIC`, verificata tramite GitHub API e scelta esplicitamente dal titolare |
 | Branch | `main` |
 | Commit SHA | riportato nel report di consegna; non auto-referenziato nel commit stesso |
 | Git | branch `main` pushato; worktree e tracking remoto verificati dal gate di consegna |
 
-Il remote non contiene credenziali note, ma la visibilità osservata è pubblica. Il requisito di
-progetto resta `PRIVATE`: rendere privata la repository e riverificare via API prima di avviare il
-bot in produzione. Nessuna licenza open source è stata aggiunta.
+Il tree corrente del remote pubblico non contiene credenziali o PII rilevate ed è limitato a
+sorgenti, configurazioni di esempio e fixture sintetiche. Segreti, identificatori operativi, stato
+runtime e PII devono restare locali; l'eccezione nei metadati Git storici è documentata tra i
+problemi residui. Nessuna licenza open source è stata aggiunta.
 
 ## Server
 
@@ -33,23 +34,26 @@ bot in produzione. Nessuna licenza open source è stata aggiunta.
 | Database server | SQLite presente e migrazione alla head verificata |
 | Antivirus | ClamAV attivo; socket `0660` e scansione applicativa riuscita |
 | Doctor | offline e online riusciti |
-| Bot target | `STOPPED`; nessun avvio di produzione eseguito |
+| Bot target | systemd `active/running`; `NRestarts=0` al controllo di avvio |
 
 Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
 TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato. I check DIC headless
 0.2.2 e 0.2.3 si sono fermati prima del submit password. La 0.2.4 ha inviato la password una sola
 volta, ma ha rifiutato fail-closed la callback DIC legittima con exit 78. Un successivo accesso
 manuale autorizzato, in browser fresco e in sola lettura, ha accettato le credenziali con un solo
-submit e raggiunto callback, dashboard, route e marker esatti della lista dipendenti. Questo
-attesta soltanto il login manuale (`LIVE_AUTHENTICATED`): adapter headless, tenant, vault e Function
-ID DIC restano non verificati live.
+submit e raggiunto callback, dashboard, route e marker esatti della lista dipendenti. Dopo il
+deployment 0.2.5, un singolo `dic-auth-check --live` ha attestato sessione `AUTHENTICATED`, tenant
+`VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile. Il comando guild-scoped è stato registrato e il
+gateway ha risposto; il primo smoke è stato negato dal gate RBAC prima del dispatch. Nessuna
+Function ID DIC resta verificata live.
 
 ## Implementazione
 
 Completati nel codice e testati con risorse sintetiche:
 
 - configurazione Pydantic fail-closed, logging redatto, DB async e Alembic;
-- Discord gate/command group e runtime composition senza gateway live;
+- Discord gate/command group e runtime composition; registrazione guild-scoped e gateway verificati
+  live, con diniego RBAC osservato prima del dispatch;
 - intent router strict multi-provider: Responses per OpenAI/Groq e chat-compatible per llama,
   con storage applicativo disabilitato e tool exposure filtrata;
 - persona configurabile e confinata alla presentazione, senza effetto su policy/RBAC;
@@ -90,15 +94,15 @@ Stato funzionale:
   sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
-- bot target fermo; nessuna modifica DIC di produzione.
+- bot target attivo tramite systemd; nessuna modifica DIC di produzione.
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
 ## Test e gate — release 0.2.5
 
-I gate completi del worktree candidato 0.2.5 sono stati eseguiti il 17 agosto 2026. Il login manuale
-autorizzato è un'evidenza live separata e non sostituisce questi gate né promuove adapter headless,
-tenant o vault a verificati.
+I gate completi del worktree candidato 0.2.5 sono stati eseguiti il 17 agosto 2026. Le verifiche live
+DIC, provider e Discord sono evidenze separate e non sostituiscono questi gate né promuovono le
+Function ID HR a verificate.
 
 | Comando | Risultato |
 |---|---|
@@ -151,7 +155,7 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
-- nessuna Function ID DIC write/read live eseguita; processo bot target fermo;
+- nessuna Function ID DIC write/read live eseguita; processo bot target attivo tramite systemd;
 - l'unit systemd impedisce il restart su exit 78; il comando `run` usa tale codice per ogni errore
   di autenticazione, evitando nuovi login automatici; su Debian 12 l'unit dalla 0.2.4 usa
   `ConditionPathExists` più un `ExecCondition` di file regolare, mentre `doctor.sh` verifica
@@ -159,10 +163,7 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 
 ## Problemi residui
 
-- credenziale accettata nel browser fresco con un solo submit, ma adapter headless, tenant e
-  creazione vault devono ancora superare esattamente un `dic-auth-check --live` autorizzato dopo
-  il deployment della 0.2.5; un nuovo exit 78 impone stop senza ulteriore retry;
-- Discord gateway e registrazione comandi non ancora verificati end-to-end;
+- mappatura RBAC Discord dell'operatore da correggere e smoke read-only ancora da completare;
 - Groq/modello verificati live; OpenAI e llama restano non verificati;
 - selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;
 - form write, delete/export/download e postcondizioni non verificati live;
@@ -172,10 +173,10 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 - i file tracciati sono privi di PII rilevata, ma i commit già pubblicati conservano l'identità
   e-mail della configurazione Git locale nei metadati Author/Committer; i nuovi commit usano
   l'identità GitHub `noreply` e la cronologia non è stata riscritta perché richiederebbe force-push;
-- GitHub Advanced Security, secret/push scanning e branch protection non sono disponibili sul piano
-  privato corrente: CodeQL esegue l'analisi in workflow con upload SARIF disabilitato; Bandit,
-  dependency audit, gitleaks, required review tramite processo operativo e i gate CI restano i
-  controlli applicabili.
+- alla data dello snapshot GitHub API riporta secret scanning, push protection e branch protection
+  non abilitati: devono essere attivati nelle impostazioni del repository pubblico; il workflow
+  CodeQL richiede l'upload SARIF, mentre Bandit, dependency audit, gitleaks, required review tramite
+  processo operativo e i gate CI restano controlli complementari.
 
 Non inserire in versioni successive password, token, API key, cookie, TOTP, PII o contenuti di
 documenti.

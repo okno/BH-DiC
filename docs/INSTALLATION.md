@@ -4,23 +4,22 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato al 17 agosto 2026: il runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati; il
-> bot è fermo. Un login manuale autorizzato in browser fresco ha accettato le credenziali con un
-> solo submit e raggiunto callback, dashboard, route e marker esatti della lista dipendenti. Il
-> check server 0.2.4 ha rifiutato quella callback legittima con exit 78; la 0.2.5 corregge il
-> passaggio, ma adapter headless, tenant e vault server non sono ancora verificati. Nessuna Function
-> ID DIC è stata collaudata live. Tutte le write
-> devono restare `DISABLED_BY_POLICY`; questa guida non autorizza l'avvio.
+> Stato al 17 agosto 2026: runtime Debian 12, Groq `openai/gpt-oss-120b` e check DIC headless sono
+> verificati. La 0.2.5 ha restituito sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault
+> cifrato utilizzabile. systemd è `active/running` con `NRestarts=0`; il comando guild-scoped è
+> registrato e il gateway risponde. Il primo smoke Discord è stato negato dal gate RBAC prima del
+> dispatch, quindi nessuna Function ID DIC è stata collaudata live. Tutte le write devono restare
+> `DISABLED_BY_POLICY`.
 
 ## 1. Decisioni prima dell'installazione
 
 Registrare in un change ticket approvato, senza segreti:
 
-- commit e branch da distribuire dalla repository `okno/BH-DiC`; la visibilità deve risultare
-  `PRIVATE` tramite API prima dell'avvio di produzione (al 17 agosto 2026 risulta `PUBLIC`);
+- commit e branch da distribuire dalla repository pubblica `okno/BH-DiC`; verificare la visibilità
+  `PUBLIC` tramite API e distribuire soltanto lo SHA approvato, senza configurazione runtime;
 - amministratore responsabile, finestra e piano di rollback;
 - host, filesystem cifrato, backup e retention;
-- guild Discord `1303955635984924722`, Channel ID copiato da `#mng-ai` e Role ID approvati;
+- Guild ID, Channel ID e Role ID Discord approvati, conservati soltanto nella configurazione locale;
 - provider `openai`, `groq` o `llama`, modello e budget/limiti;
 - tenant DIC atteso e identità di servizio a privilegi minimi;
 - gestore processo scelto: **systemd** oppure **script PID**, mai entrambi.
@@ -75,21 +74,22 @@ Non eseguire il bot come `root`. Target attesi: applicazione `0750`, directory d
 `.env` e backup `0600`, log `0640` o più restrittivi. La home separata evita di mescolare cache
 runtime e working tree.
 
-## 4. Clone privato verificato
+## 4. Clone pubblico verificato
 
-Configurare per `bh-dic` una deploy key read-only o un credential helper approvato. Verificare
-prima la host key GitHub e non inserire token nell'URL. Quindi:
+Il clone pubblico non richiede token, deploy key o credenziali nell'URL. Verificare TLS e il remote,
+quindi distribuire soltanto lo SHA approvato:
 
 ```bash
-sudo -u bh-dic -H git clone git@github.com:okno/BH-DiC.git /opt/bh-dic
+sudo -u bh-dic -H git clone https://github.com/okno/BH-DiC.git /opt/bh-dic
 cd /opt/bh-dic
 sudo -u bh-dic -H git remote -v
 sudo -u bh-dic -H git status --short --branch
 sudo -u bh-dic -H git rev-parse HEAD
 ```
 
-Confrontare lo SHA con quello approvato. Il remote non deve contenere credenziali. Prima dell'avvio
-rendere e mantenere la repository privata; non copiare deploy key o output sensibile nel report.
+Confrontare lo SHA con quello approvato. Il remote non deve contenere credenziali. La repository
+pubblica contiene soltanto sorgenti e materiale sintetico: non copiarvi `.env`, output runtime,
+identificatori operativi, segreti o PII.
 
 ## 5. Dipendenze Python, Playwright e ClamAV
 
@@ -146,8 +146,8 @@ APP_ENV=production
 MOCK_MODE=false
 MODEL_STORE=false
 MODEL_RESULT_RENDERING=deterministic
-DISCORD_GUILD_ID=1303955635984924722
-DISCORD_CHANNEL_ID=<ID_COPIATO_DA_MNG_AI>
+DISCORD_GUILD_ID=<DISCORD_GUILD_ID>
+DISCORD_CHANNEL_ID=<DISCORD_CHANNEL_ID>
 DISCORD_INTERACTION_MODE=slash
 DISCORD_ALLOW_DMS=false
 ENABLE_READ_ACTIONS=true
@@ -224,9 +224,9 @@ Non amplia tool, ruoli o azioni e non trasforma BH-DiC in un bot generalista o d
 ## 7. Discord e preparazione guild-scoped
 
 Nel Discord Developer Portal creare app e bot, lasciare disabilitati gli intent privilegiati e
-installare nel solo guild `1303955635984924722` con gli scope `applications.commands` e `bot`.
-Usare i permessi minimi View Channel, Send Messages ed Embed Links (`19456`). Copiare il Channel
-ID da `#mng-ai` con Developer Mode; il nome del canale non è un ID.
+installare nel solo guild allowlistato con gli scope `applications.commands` e `bot`. Usare i
+permessi minimi View Channel, Send Messages ed Embed Links (`19456`). Copiare il Channel ID del
+canale allowlistato con Developer Mode; il nome del canale non è un ID.
 
 La procedura esatta, l'install URL guild-locked e la mappa RBAC sono in
 [Configurazione Discord](DISCORD_SETUP.md). Con configurazione completa e bot fermo:
@@ -520,18 +520,18 @@ Per sintomi e percorsi di escalation vedere [Troubleshooting](TROUBLESHOOTING.md
 
 - [ ] Debian patchato; Python 3.12+ verificato prima dell'installazione.
 - [ ] Utente `bh-dic` non privilegiato; ownership e permessi revisionati.
-- [ ] Clone privato allo SHA approvato, remote senza credenziali.
+- [ ] Clone pubblico allo SHA approvato, remote senza credenziali.
 - [ ] `.venv`, Chromium e ClamAV verificati per l'utente di servizio.
 - [ ] `.env` `0600`, nessun segreto in Git/log/ticket.
 - [ ] Provider unico e `MODEL_STORE=false`; persona validata.
-- [ ] Guild `1303955635984924722`, Channel ID copiato da `#mng-ai`, Role ID approvati.
+- [ ] Guild ID, Channel ID e Role ID approvati presenti soltanto nella configurazione locale.
 - [ ] Comandi registrati solo nel guild; intent privilegiati off; permission bitfield `19456`.
 - [ ] `ENABLE_WRITE_ACTIONS=false`, live write test e tutti i flag specifici false.
 - [ ] Gestore processo unico; nessuna commistione systemd/script PID.
 - [ ] Doctor offline, mock smoke, audit e backup verdi sul target.
 - [ ] Prima verifica limitata a read sintetica autorizzata; nessuna write live.
-- [ ] Runtime Debian e provider selezionato marcati secondo evidenza; DIC/Discord restano
-      `UNVERIFIED` finché verificati separatamente.
+- [ ] Runtime Debian, provider e autenticazione DIC marcati secondo evidenza; trasporto Discord
+      verificato separatamente da RBAC e dalle Function ID applicative.
 
 ## Riferimenti ufficiali
 

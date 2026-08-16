@@ -7,13 +7,13 @@
 | OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
-| Discord | setup guild-scoped documentato; `LIVE_DISCORD_UNVERIFIED` | app/token/installazione, Channel ID `#mng-ai`, ruoli e registrazione |
-| DIC | `LIVE_AUTHENTICATED` manuale in browser fresco: singolo submit accettato, callback DIC esatta, dashboard, route e marker lista dipendenti osservati; adapter/tenant/vault server `UNVERIFIED`; funzioni applicative `NEEDS_VALIDATION` | deployment 0.2.5, esattamente un `dic-auth-check --live` autorizzato, attestazione tenant, vault cifrato e smoke read-only autorizzato |
-| Debian deployment | preparazione runtime `VERIFIED`; unit Debian 12 0.2.4 verificata; servizio `STOPPED` | deployment 0.2.5, verifica DIC, registrazione comandi, avvio controllato e restore drill |
+| Discord | `LIVE_DISCORD_TRANSPORT_VERIFIED`: comando guild-scoped registrato e gateway responsivo; primo smoke negato dal gate RBAC prima del dispatch | Correggere il ruolo dell'operatore e ripetere un solo smoke read-only; nessuna Function ID ancora verificata |
+| DIC | check headless `LIVE_AUTHENTICATED`: sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile; funzioni applicative `NEEDS_VALIDATION` | Smoke read-only autorizzato dopo correzione RBAC; nessuna write live |
+| Debian deployment | runtime `VERIFIED`; servizio systemd `active/running`, `NRestarts=0` | Monitoraggio log, smoke RBAC/read-only e restore drill |
 
-Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata: non attesta
-Discord o DIC. Il doctor Debian attesta i prerequisiti controllati, non il login DIC, il gateway
-Discord o il restore. Il servizio resta fermo.
+Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. DIC e trasporto
+Discord hanno evidenze live separate; nessuna di esse attesta una Function ID HR. Il doctor Debian
+attesta i prerequisiti controllati, non il restore né l'autorizzazione RBAC dell'operatore.
 
 ## Legenda ed evidenza disponibile
 
@@ -40,12 +40,10 @@ infrastrutturali descritti sopra. Il check 0.2.2 si è fermato durante l'hydrati
 rifiutato fail-closed la callback DIC legittima, con `CREDENTIAL_SUBMIT`/exit 78 e nessun restart
 automatico. Un successivo accesso manuale autorizzato in browser fresco ha accettato le
 credenziali con un solo submit e ha osservato la sequenza password TeamSystem → callback DIC esatta
-→ dashboard → route e marker esatti della lista dipendenti. Questa evidenza promuove soltanto il
-login manuale a `LIVE_AUTHENTICATED`: non prova l'adapter headless, `/data/company/id`, il tenant
-configurato o il vault cifrato sul server. La 0.2.5 ammette la callback esatta come transitoria e
-attende il marker entro il budget condiviso; query opache non sono lette o registrate e tutte le
-varianti di route restano fail-closed. Il bot resta fermo e le write disabilitate; dopo il
-deployment 0.2.5 va eseguito esattamente un nuovo check live autorizzato.
+→ dashboard → route e marker esatti della lista dipendenti. Dopo il deployment, un singolo check
+headless 0.2.5 ha verificato sessione, tenant e vault. La callback esatta resta ammessa soltanto come
+transitoria bounded; query opache non sono lette o registrate e tutte le varianti di route restano
+fail-closed. Il servizio systemd è attivo e le write restano disabilitate.
 Nessuna Function ID DIC è quindi classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono
 `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY` e `DISABLED_BY_DEFAULT`, anche quando il relativo
 controllo era visibile nella baseline. `TESTED_WITH_MOCK` indica test sintetici

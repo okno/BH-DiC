@@ -192,7 +192,8 @@ Writes are denied on any of the following:
 - The bot runs as a dedicated unprivileged user.
 - The provided systemd unit is an example only until an administrator installs it.
 - The installation process leaves the bot stopped and no Chromium process resident.
-- GitHub visibility must be verified as `PRIVATE`, not inferred from the create command.
+- GitHub visibility is intentionally `PUBLIC`; the tracked tree contains only source, examples and
+  synthetic fixtures, while runtime secrets, operational identifiers, state and PII stay outside Git.
 
 ## Expected operational verification
 

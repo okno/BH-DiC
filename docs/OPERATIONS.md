@@ -2,16 +2,17 @@
 
 ## Stato operativo corrente
 
-- repository installata in `/opt/bh-dic` sul target Debian 12; il remote GitHub risulta attualmente
-  `PUBLIC` e deve tornare `PRIVATE` prima dell'avvio di produzione;
+- repository installata in `/opt/bh-dic` sul target Debian 12; il remote GitHub è intenzionalmente
+  `PUBLIC` e il tree corrente contiene soltanto sorgenti e materiale sintetico, mai configurazione
+  runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- processo bot sul target fermo;
+- servizio systemd `active/running`, con `NRestarts=0` al controllo di avvio;
 - nessuna Function ID DIC read o write verificata live;
-- login manuale autorizzato in browser fresco `LIVE_AUTHENTICATED` con un solo submit e marker
-  della lista dipendenti osservato; adapter headless, tenant e vault server non verificati;
-- tentativo headless 0.2.4 fermato con exit 78 perché la callback DIC legittima non era
-  allowlistata; correzione 0.2.5 da distribuire prima dell'unico nuovo check;
+- check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED`, tenant
+  `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile;
+- comando guild-scoped registrato e gateway responsivo; primo smoke negato dal gate RBAC prima del
+  dispatch, senza eseguire Function ID DIC;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
 I gate sintetici della release 0.2.5 sono verdi: 574 test, branch coverage 86%, Ruff, mypy, Bandit,
@@ -88,16 +89,16 @@ Se il vault non esiste (prima installazione, rotazione o invalidazione), il fall
 non attesta nulla sul login. In quel caso procedere soltanto con l'unico check live autorizzato
 descritto sotto.
 
-La password TeamSystem è stata rinnovata e il secret locale aggiornato. Dopo aver distribuito la
-release 0.2.5, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e
-eseguire esattamente una volta il controllo live esplicitamente autorizzato:
+La password TeamSystem è stata rinnovata e il secret locale aggiornato. Il controllo live 0.2.5 è
+stato eseguito una sola volta con bot fermo e write disabilitate:
 
 ```bash
 .venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ```
 
-Il comando ripristina prima un eventuale vault, prova la route applicativa fissa e richiede
+Il risultato osservato è sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato
+utilizzabile. Il comando ripristina prima un eventuale vault, prova la route applicativa fissa e richiede
 l'attestazione passiva dell'azienda corrente. Se serve login, accetta redirect soltanto verso le
 origini TeamSystem esatte previste. Qualunque mismatch, risposta mancante, password scaduta,
 MFA/CAPTCHA o redirect inatteso fallisce chiuso. Non avviare il bot finché sessione e tenant non
@@ -117,9 +118,9 @@ fermare il runbook e verificare umanamente, senza un nuovo login.
 La 0.2.5 tratta soltanto l'esatta `/it/callback` DIC come transitoria entro il budget condiviso;
 non legge né registra la query e rifiuta fragment, porta esplicita, userinfo, host somigliante,
 trailing slash e path aggiuntivi. Il marker autenticato viene atteso entro la cattura tenant, ma
-`/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il login
-manuale fresco non autorizza più tentativi: dopo il deployment è consentito un solo check live;
-un nuovo exit 78 impone nuovamente lo stop.
+`/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il singolo
+check headless successivo al login manuale è stato completato; per una futura rotazione o
+invalidazione, un nuovo exit 78 impone nuovamente lo stop senza retry.
 
 ### Log
 

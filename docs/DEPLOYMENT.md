@@ -7,13 +7,12 @@ installato senza sostituire il Python di sistema, virtualenv e dipendenze, migra
 directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
 doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-Il bot è **fermo** e deve restarlo. Un accesso manuale autorizzato, in un browser fresco e in sola
-lettura, ha accettato le credenziali con un solo submit e ha raggiunto la route e il marker esatti
-della lista dipendenti. Il tentativo headless 0.2.4 ha invece rifiutato la callback DIC legittima
-prima di completare attestazione tenant e vault. La 0.2.5 corregge quel passaggio, ma adapter
-headless, tenant e vault server restano da verificare; nessuna Function ID DIC read/write è stata
-collaudata live. `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag
-write specifiche restano `false`.
+Il servizio systemd è `active/running` con `NRestarts=0`. Il check headless 0.2.5 ha restituito
+sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile. Il comando
+guild-scoped è registrato e il gateway risponde, ma il primo smoke è stato negato dal gate RBAC
+prima del dispatch; nessuna Function ID DIC read/write è stata collaudata live.
+`ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
+restano `false`.
 
 ## Gate SSH
 
@@ -110,7 +109,7 @@ dei gate fallisce.
 - `.env.example` presente; `.env` assente o protetto e valorizzato localmente;
 - directory e file con i permessi documentati;
 - `doctor.sh` riuscito, con risultato online separato se autorizzato;
-- bot fermo e nessun PID/lock stale;
+- gestore systemd unico, servizio `active/running` e `NRestarts=0` al controllo di avvio;
 - nessun processo Chromium/Playwright residuo;
 - report senza token, PII, cookie o contenuti HR.
 

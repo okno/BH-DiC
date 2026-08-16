@@ -35,8 +35,8 @@ pubblico `data-testid="login-email"`. Il tentativo server 0.2.4 ha inviato la pa
 volta, ma ha classificato come inattesa la callback DIC legittima e si è fermato con exit 78.
 Una successiva verifica manuale autorizzata, in browser fresco e in sola lettura, ha accettato le
 credenziali con un solo submit e ha osservato password TeamSystem → callback DIC esatta → dashboard
-→ route e marker esatti della lista dipendenti. L'evidenza è `LIVE_AUTHENTICATED` soltanto per il
-flusso manuale: adapter headless, attestazione tenant e vault server non sono ancora verificati.
+→ route e marker esatti della lista dipendenti. Dopo il deployment 0.2.5, un singolo check headless
+ha restituito sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
@@ -217,10 +217,9 @@ dell'autenticazione per hydration incompleta. Il tentativo 0.2.3 ha superato que
 fermato allo stage `DIC_EMAIL` per l'ambiguità padre/input del placeholder. La 0.2.4 usa il target
 nativo univoco, ha effettuato un solo submit e ha poi rifiutato la callback DIC legittima con exit
 78. La 0.2.5 corregge esclusivamente questo stato transitorio e l'attesa bounded del marker.
-Distribuire la 0.2.5 prima di eseguire, una sola volta, un nuovo check autorizzato con bot fermo e
-write disabilitate. In assenza del flag il codice live non viene invocato. Il successo manuale nel
-browser fresco non sostituisce questo gate: finché il comando non restituisce autenticazione e
-tenant verificati e non persiste il vault, il servizio non va avviato.
+Il check autorizzato 0.2.5 è stato eseguito una sola volta con bot fermo e write disabilitate e ha
+verificato autenticazione, tenant e persistenza del vault. In assenza del flag il codice live non
+viene invocato; per futuri rinnovi o invalidazioni resta obbligatoria la stessa procedura singola.
 
 ## Invalidazione e rotazione
 

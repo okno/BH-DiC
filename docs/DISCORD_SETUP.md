@@ -1,11 +1,13 @@
 # Configurazione Discord
 
-Questa procedura prepara un'applicazione Discord slash-only limitata al guild
-`1303955635984924722` e al canale `#mng-ai`. Il Channel ID di `#mng-ai` non è noto nella
-repository e deve essere copiato dal client Discord: non ricavarlo dal nome e non inventarlo.
+Questa procedura prepara un'applicazione Discord slash-only limitata al guild e al canale
+allowlistati nella configurazione locale. I relativi ID non sono conservati nella repository e
+devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarli.
 
-> Stato: applicazione, token, installazione nel guild e registrazione dei comandi live non sono
-> stati verificati in questa consegna. Le istruzioni seguono la documentazione Discord ufficiale
+> Stato al 17 agosto 2026: installazione guild-scoped, registrazione del comando e risposta del
+> gateway sono verificate. Il primo smoke è stato negato dal gate RBAC prima del dispatch; occorre
+> correggere il ruolo dell'operatore senza ampliare guild o canale. Le istruzioni seguono la
+> documentazione Discord ufficiale
 > per [creare l'app e il bot](https://docs.discord.com/developers/quick-start/getting-started),
 > [OAuth2](https://docs.discord.com/developers/topics/oauth2) e [application
 > commands](https://docs.discord.com/developers/interactions/application-commands).
@@ -33,9 +35,9 @@ Intents](https://docs.discord.com/developers/events/gateway#privileged-intents).
 Nel client Discord desktop/web:
 
 1. aprire **User Settings → Advanced** e abilitare **Developer Mode**;
-2. fare clic destro sul guild autorizzato e scegliere **Copy Server ID**; deve risultare
-   `1303955635984924722`;
-3. fare clic destro sul canale **#mng-ai** e scegliere **Copy Channel ID**; usare quel numero come
+2. fare clic destro sul guild autorizzato e scegliere **Copy Server ID**; usare quel numero come
+   `DISCORD_GUILD_ID`;
+3. fare clic destro sul canale allowlistato e scegliere **Copy Channel ID**; usare quel numero come
    `DISCORD_CHANNEL_ID`;
 4. copiare allo stesso modo gli ID dei ruoli approvati, senza usare nomi o menzioni.
 
@@ -49,14 +51,14 @@ Configurazione minima, solo sul server:
 ```dotenv
 DISCORD_BOT_TOKEN=<SEGRETO_LOCALE>
 DISCORD_APPLICATION_ID=<APPLICATION_ID>
-DISCORD_GUILD_ID=1303955635984924722
-DISCORD_CHANNEL_ID=<CHANNEL_ID_COPIATO_DA_MNG_AI>
+DISCORD_GUILD_ID=<DISCORD_GUILD_ID>
+DISCORD_CHANNEL_ID=<DISCORD_CHANNEL_ID>
 DISCORD_INTERACTION_MODE=slash
 DISCORD_ALLOW_DMS=false
 ```
 
-Proteggere `.env` con modo `0600`. È corretto documentare il Guild ID approvato; token, chiavi e
-Channel/Role ID operativi restano nella configurazione locale.
+Proteggere `.env` con modo `0600`. Token, chiavi e Guild/Channel/Role ID operativi restano nella
+configurazione locale e non devono essere copiati nella repository pubblica.
 
 ## 3. Install URL least privilege
 
@@ -71,21 +73,22 @@ Permessi bot minimi richiesti dall'implementazione slash attuale:
 - **Send Messages** (`2048`);
 - **Embed Links** (`16384`).
 
-La somma è `19456`. Dopo aver sostituito soltanto l'Application ID, l'URL guild-locked è:
+La somma è `19456`. Dopo aver sostituito Application ID e Guild ID con i valori locali, l'URL
+guild-locked è:
 
 ```text
-https://discord.com/oauth2/authorize?client_id=<DISCORD_APPLICATION_ID>&scope=applications.commands%20bot&permissions=19456&guild_id=1303955635984924722&disable_guild_select=true&integration_type=0
+https://discord.com/oauth2/authorize?client_id=<DISCORD_APPLICATION_ID>&scope=applications.commands%20bot&permissions=19456&guild_id=<DISCORD_GUILD_ID>&disable_guild_select=true&integration_type=0
 ```
 
-Verificare il riepilogo del portal prima di autorizzare. Installare esclusivamente nel guild
-mostrato come `1303955635984924722`. Riferimento: [Discord permissions e permission
-bitfields](https://docs.discord.com/developers/topics/permissions).
+Verificare il riepilogo del portal prima di autorizzare. Installare esclusivamente nel guild il cui
+ID coincide con `DISCORD_GUILD_ID` nella configurazione locale. Riferimento: [Discord permissions e
+permission bitfields](https://docs.discord.com/developers/topics/permissions).
 
 Non concedere **Administrator**, Manage Guild, Manage Roles o accesso a canali non necessari.
 L'attuale bot slash non richiede Read Message History né Attach Files. Gli operatori umani che
 usano `/bh upload` devono invece poter allegare file nel canale; ciò non richiede il permesso
-Attach Files sul ruolo del bot. Nel canale `#mng-ai`, gli utenti autorizzati devono poter usare gli
-application commands.
+Attach Files sul ruolo del bot. Nel canale allowlistato, gli utenti autorizzati devono poter usare
+gli application commands.
 
 ## 4. Ruoli RBAC applicativi
 
@@ -125,7 +128,7 @@ cd /opt/bh-dic
 
 `register-commands.sh` registra il gruppo `/bh` soltanto in `DISCORD_GUILD_ID` e chiude la sessione
 senza avviare il gateway. Non usare una registrazione globale. La propagazione guild-scoped è
-adatta alla verifica iniziale; controllare in `#mng-ai` che `/bh` e i relativi sottocomandi
+adatta alla verifica iniziale; controllare nel canale allowlistato che `/bh` e i relativi sottocomandi
 compaiano, senza eseguire una richiesta DIC live.
 
 La superficie comprende i comandi informativi/read e le route operatore previste dal catalogo.
@@ -141,7 +144,7 @@ esclusivamente all'operatore locale tramite i metadati file.
 
 ## 6. Gate prima dell'avvio
 
-- `DISCORD_GUILD_ID=1303955635984924722` e Channel ID copiato da `#mng-ai`;
+- Guild ID e Channel ID copiati dal client e presenti soltanto nella configurazione locale;
 - DM disabilitati; altro guild/canale, thread, webhook e bot rifiutati;
 - permessi OAuth pari al minimo revisionato, senza privilegi amministrativi;
 - ruoli testati con identità sintetiche e casi deny;

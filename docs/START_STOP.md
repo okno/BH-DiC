@@ -1,10 +1,8 @@
 # Start e stop
 
-> Stato al 17 agosto 2026: il runtime sul target Debian è preparato e il bot è **STOPPED**.
-> Doctor offline/online e Groq sono verificati. Un login manuale autorizzato in browser fresco ha
-> accettato le credenziali con un solo submit; il check server 0.2.4 ha invece rifiutato la callback
-> DIC legittima con exit 78. Distribuire la 0.2.5 e completare il gate adapter/tenant/vault prima di
-> avviare il servizio.
+> Stato al 17 agosto 2026: il servizio systemd sul target Debian è `active/running` con
+> `NRestarts=0`. Doctor, Groq e check DIC headless sono verificati; il comando guild-scoped è
+> registrato e il gateway risponde. Il primo smoke è stato negato dal gate RBAC prima del dispatch.
 
 ## Prerequisiti
 
@@ -169,9 +167,8 @@ I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. 
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 17 agosto 2026 la preparazione e il provider check sono riusciti. Il login manuale fresco è
-`LIVE_AUTHENTICATED`, ma non sostituisce il check headless: la correzione 0.2.5 deve ancora
-dimostrare adapter, tenant e vault server. Nessuna Function ID read/write DIC live è stata
-completata e il bot resta fermo con write disabilitate.
+Al 17 agosto 2026 preparazione, provider e check headless sono riusciti: sessione `AUTHENTICATED`,
+tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile. Il servizio systemd è attivo; nessuna
+Function ID read/write DIC live è stata completata e le write restano disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).
