@@ -31,6 +31,7 @@ def _mock_settings() -> AppSettings:
         discord_channel_id=102,
         discord_hr_read_role_ids=(201,),
         discord_balance_role_ids=(202,),
+        _env_file=None,
     )
 
 
@@ -53,6 +54,7 @@ def _live_settings() -> AppSettings:
         dic_password="synthetic-password",
         dic_session_encryption_key="S" * 32,
         dic_expected_tenant_id="123456789",
+        _env_file=None,
     )
 
 

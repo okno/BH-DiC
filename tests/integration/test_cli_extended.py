@@ -30,6 +30,7 @@ def _settings(tmp_path: Path | None = None, **updates: object) -> AppSettings:
         discord_guild_id=101,
         discord_channel_id=102,
         discord_hr_read_role_ids=(201,),
+        _env_file=None,
     )
     if tmp_path is not None:
         updates = {

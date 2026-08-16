@@ -10,7 +10,7 @@
 - autenticazione DIC bloccata dalla password TeamSystem scaduta e da vault assente;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-I gate offline della release 0.2.1 sono registrati nell'implementation report. Sul target sono
+I gate offline della release 0.2.2 sono registrati nell'implementation report. Sul target sono
 stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
 Function ID DIC.
 

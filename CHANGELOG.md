@@ -5,6 +5,18 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-16
+
+### Fixed
+
+- Test e comandi di verifica mock sono ora isolati dal file `.env` operativo e dalle variabili
+  ambiente di produzione, evitando che provider, token Discord, chiavi audit o database reali
+  alterino i risultati della suite.
+- La configurazione mock usa sempre un database SQLite in memoria, nessun segreto runtime e un
+  provider sintetico deterministico; la configurazione live resta invariata.
+- Aggiunta una regressione che riproduce l'installazione Debian con Groq e alias di tuning in
+  conflitto senza caricare né stampare valori sensibili.
+
 ## [0.2.1] - 2026-08-16
 
 ### Added
@@ -59,6 +71,7 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/okno/BH-DiC/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/okno/BH-DiC/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/okno/BH-DiC/releases/tag/v0.2.0

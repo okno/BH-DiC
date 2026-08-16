@@ -143,7 +143,14 @@ def _settings(*, mock: bool = False, data_dir: Path | None = None) -> AppSetting
     overrides: dict[str, Any] = {
         "app_env": "mock",
         "mock_mode": True,
+        "database_url": "sqlite+aiosqlite:///:memory:",
         "model_store": False,
+        "openai_store": False,
+        "model_provider": "openai",
+        "openai_model": None,
+        "llama_model": None,
+        "dic_username": None,
+        "dic_expected_tenant_id": None,
         "enable_write_actions": False,
         "enable_live_write_tests": False,
         "discord_application_id": 10_000_003,
@@ -152,6 +159,21 @@ def _settings(*, mock: bool = False, data_dir: Path | None = None) -> AppSetting
         "discord_hr_read_role_ids": (10_000_004,),
         "discord_balance_role_ids": (10_000_004,),
     }
+    overrides.update(
+        dict.fromkeys(
+            (
+                "audit_hmac_key",
+                "encryption_key",
+                "discord_bot_token",
+                "openai_api_key",
+                "groq_api_key",
+                "llama_api_key",
+                "dic_password",
+                "dic_totp_secret",
+                "dic_session_encryption_key",
+            )
+        )
+    )
     overrides.update({field: False for field in AppSettings.WRITE_FLAG_FIELDS})
     if data_dir is not None:
         resolved = data_dir.resolve()
@@ -165,7 +187,11 @@ def _settings(*, mock: bool = False, data_dir: Path | None = None) -> AppSetting
                 "lock_file": resolved / "run" / "bh-dic.lock",
             }
         )
-    return AppSettings(**overrides)
+    return AppSettings(
+        **overrides,
+        _env_file=None,
+        _env_prefix="BH_DIC_ISOLATED_MOCK_",
+    )
 
 
 def _provider_endpoint(settings: AppSettings) -> SplitResult:

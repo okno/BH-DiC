@@ -72,23 +72,23 @@ Stato funzionale:
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — release 0.2.1
+## Test e gate — release 0.2.2
 
-I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.1, senza
+I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.2, senza
 avviare bot/browser e senza chiamare Discord, DIC o provider. Provano soltanto i confini coperti da
 fixture sintetiche; non trasformano alcuna integrazione in `LIVE_VERIFIED`.
 
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS: 184 file già formattati |
+| `ruff format --check .` | PASS: 185 file già formattati |
 | `ruff check .` | PASS: zero issue |
 | `mypy src` | PASS: 108 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 517 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 517 test |
-| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (8.110 statement, 2.442 branch), soglia 80% |
+| `pytest` (pytest 9.0.3) | PASS: 518 test, 1 warning esterno `discord.py/audioop` |
+| `coverage run --branch -m pytest` | PASS: 518 test |
+| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (8.111 statement, 2.442 branch), soglia 80% |
 | `bandit -q -r src` | PASS: nessun issue riportato |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS: nessuna vulnerabilità nota nel lock |
-| `gitleaks git . --log-opts v0.2.0..HEAD --redact --no-banner` | PASS: gitleaks 8.30.1, 1 commit/circa 62 KB, nessun finding |
+| `gitleaks git . --log-opts v0.2.1..HEAD --redact --no-banner` | PASS: gitleaks 8.30.1, 1 commit/circa 4,7 KB, nessun finding |
 | parsing YAML/XML docs/security | PASS |
 | scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
 | 22 script `bash -n` + contratti/lifecycle ops | PASS: 32 casi; start fail-closed e status/stop sintetici inclusi |
