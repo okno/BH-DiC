@@ -6,12 +6,12 @@ Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello sele
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 16 agosto 2026: la preparazione su Debian 12 è riuscita, inclusi Python 3.12,
+> Stato al 17 agosto 2026: la preparazione su Debian 12 è riuscita, inclusi Python 3.12,
 > dipendenze, migrazione, Chromium Playwright, ClamAV e doctor offline/online. Groq con
-> `openai/gpt-oss-120b` ha superato `model-check --live`. Il servizio è fermo: la verifica
-> autenticata DIC headless non è completa perché la password TeamSystem risulta scaduta e non
-> esiste ancora un vault di sessione valido. Nessuna funzione read o write del bot è stata
-> collaudata sul tenant live; tutte le write restano `DISABLED_BY_POLICY`.
+> `openai/gpt-oss-120b` ha superato `model-check --live`. Un login DIC manuale autorizzato in
+> browser fresco è `LIVE_AUTHENTICATED`, ma adapter headless, tenant e vault server non sono ancora
+> verificati. Il servizio resta fermo; nessuna Function ID read o write è stata collaudata sul
+> tenant live e tutte le write restano `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 

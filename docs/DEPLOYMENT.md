@@ -7,10 +7,13 @@ installato senza sostituire il Python di sistema, virtualenv e dipendenze, migra
 directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
 doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-Il bot è **fermo** e deve restarlo. La verifica DIC headless è bloccata dalla password
-TeamSystem scaduta e dall'assenza di un vault autenticato; nessuna Function ID DIC read/write è
-stata collaudata live. `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le
-flag write specifiche restano `false`.
+Il bot è **fermo** e deve restarlo. Un accesso manuale autorizzato, in un browser fresco e in sola
+lettura, ha accettato le credenziali con un solo submit e ha raggiunto la route e il marker esatti
+della lista dipendenti. Il tentativo headless 0.2.4 ha invece rifiutato la callback DIC legittima
+prima di completare attestazione tenant e vault. La 0.2.5 corregge quel passaggio, ma adapter
+headless, tenant e vault server restano da verificare; nessuna Function ID DIC read/write è stata
+collaudata live. `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag
+write specifiche restano `false`.
 
 ## Gate SSH
 
@@ -45,6 +48,7 @@ cd /opt/bh-dic
 
 `update.sh` richiede un worktree pulito e aggiorna solo fast-forward. Non usare `--restart` in
 questa fase. Non mostrare `.env`; conservarlo con owner del servizio e modalità `0600`.
+Verificare che `.venv/bin/python -m bh_dic version` riporti `0.2.5` prima del gate DIC.
 
 La configurazione deve mantenere:
 
@@ -56,9 +60,10 @@ ENABLE_LIVE_WRITE_TESTS=false
 
 ## Sblocco autenticazione DIC
 
-Un amministratore deve prima completare il cambio della password scaduta nel normale flusso
-TeamSystem, poi aggiornare `DIC_PASSWORD` nel secret store o nell'editor locale e invalidare
-l'eventuale vecchia sessione. Non passare la password nella command line, nei log o in ticket.
+Assicurarsi che `DIC_PASSWORD` nel secret store o nell'editor locale corrisponda alla credenziale
+corrente e invalidare l'eventuale vecchia sessione. Non passare la password nella command line,
+nei log o in ticket. Il login manuale fresco prova soltanto che la credenziale è stata accettata:
+non attesta l'adapter headless, il tenant configurato o il vault server.
 
 Con le write ancora disabilitate:
 
@@ -73,6 +78,12 @@ Con le write ancora disabilitate:
 Il controllo live deve terminare con autenticazione e tenant verificati e deve lasciare un vault
 cifrato valido. Un redirect fuori dall'allowlist esatta DIC/TeamSystem, un tenant non attestabile,
 MFA/CAPTCHA o un nuovo cambio password impongono stop ed escalation umana.
+
+La 0.2.5 tratta l'esatta `/it/callback` DIC come transitoria e soltanto entro il budget residuo.
+La query opaca non viene letta o registrata; fragment, porta esplicita, userinfo, host somigliante,
+trailing slash e path aggiuntivi restano rifiutati. Il marker e `/data/company/id` restano
+obbligatori. Eseguire `dic-auth-check --live` una sola volta dopo il deployment: un nuovo exit 78
+impone stop e non autorizza un secondo tentativo.
 
 Solo dopo questo esito, con autorizzazione distinta, proseguire:
 

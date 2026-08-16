@@ -9,13 +9,13 @@ Partire sempre da stato e log redatti:
 ./scripts/audit-verify.sh
 ```
 
-Non avviare il bot o abilitare write per diagnosticare. Il runtime Debian è preparato e la
-password TeamSystem è stata rinnovata nel flusso umano, ma il bot target resta fermo finché
-autenticazione e tenant DIC non sono verificati. Il fallimento 0.2.2 è avvenuto prima
-dell'autenticazione durante l'hydration dei controlli. Il tentativo 0.2.3 si è fermato allo stage
-`DIC_EMAIL` perché il lookup per placeholder vedeva sia il componente padre sia l'input nativo.
-Nessuno dei due esiti prova un rifiuto della nuova password; non esiste ancora una sessione
-autenticata o un tenant verificato live.
+Non avviare il bot o abilitare write per diagnosticare. Il runtime Debian è preparato, ma il bot
+target resta fermo finché autenticazione e tenant DIC non sono verificati dall'adapter. Il
+fallimento 0.2.2 è avvenuto durante l'hydration e il tentativo 0.2.3 allo stage `DIC_EMAIL`. La
+0.2.4 ha inviato la password una sola volta e si è fermata con exit 78 perché la callback DIC
+legittima non era ancora allowlistata. Un successivo accesso manuale autorizzato in browser fresco
+ha confermato credenziali, callback, dashboard e marker della lista dipendenti; non prova ancora
+attestazione tenant o vault headless sul server.
 
 | Sintomo | Verifica | Azione sicura |
 |---|---|---|
@@ -30,8 +30,8 @@ autenticata o un tenant verificato live.
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
 | login DIC fallisce | JSON `error_type`/`stage`, route DIC/TeamSystem, sessione, MFA/CAPTCHA | usare solo lo stage chiuso; invalidare il vault quando pertinente; mai stampare l'errore interno né usare passwordless o ampliare l'allowlist |
-| `DicAuthUiChangedError` durante login | stage `DIC_*` o `TEAMSYSTEM_*`, release installata | se `DIC_EMAIL` proviene dalla 0.2.3, distribuire la 0.2.4 e ripetere esattamente una verifica autorizzata soltanto dopo il deployment; zero/multipli controlli o route diversa restano fail-closed |
-| `DicAuthOutcomeUnknownError`, exit 78 | stage `CREDENTIAL_SUBMIT`; invio forse partito ma completamento/tenant/vault non dimostrabili | non ritentare; mantenere bot fermo, verificare account/sessione con procedura umana e fare escalation |
+| `DicAuthUiChangedError` durante login | stage `DIC_*` o `TEAMSYSTEM_*`, release installata | distribuire la release correttiva approvata; zero/multipli controlli o route diversa restano fail-closed |
+| `DicAuthOutcomeUnknownError`, exit 78 | stage `CREDENTIAL_SUBMIT`; invio forse partito ma completamento/tenant/vault non dimostrabili | se proviene dal singolo tentativo 0.2.4 già revisionato, distribuire 0.2.5 e autorizzare un solo nuovo check; in ogni altro caso non ritentare e fare escalation |
 | attestazione tenant fallisce | route fissa, risposta first-party, schema/ID configurato | mantenere il bot fermo; nessun fallback su nome o DOM, patchare solo con nuova evidenza redatta |
 | UI drift/selettore rotto | route/page object, trace protetto | smoke read-only e patch testata; nessuna write live |
 | database locked | processi, WAL, filesystem | fermare processo concorrente; non cancellare WAL/SHM |
@@ -54,7 +54,7 @@ soltanto questo significato operativo:
 
 | Stage | Confine verificato | Azione sicura |
 |---|---|---|
-| `DIC_EMAIL`, `DIC_SUBMIT` | pagina login DIC esatta | verificare release 0.2.4 e disponibilità del sito; la 0.2.4 usa l'input nativo univoco nel contenitore pubblico, senza aggiungere click o selettori generici |
+| `DIC_EMAIL`, `DIC_SUBMIT` | pagina login DIC esatta | verificare release e disponibilità del sito; dalla 0.2.4 è usato l'input nativo univoco nel contenitore pubblico, senza aggiungere click o selettori generici |
 | `TEAMSYSTEM_EMAIL`, `TEAMSYSTEM_EMAIL_SUBMIT` | passaggio e-mail TeamSystem esatto | verificare eventuale CAPTCHA/MFA o manutenzione IdP con procedura umana |
 | `TEAMSYSTEM_CREDENTIAL`, `TEAMSYSTEM_CREDENTIAL_SUBMIT` | passaggio credenziale TeamSystem esatto | non ripetere automaticamente la password; verificare stato account tramite il flusso umano |
 | `CREDENTIAL_SUBMIT` | esito post-submit non dimostrabile | trattare exit 78 come stop non riavviabile; nessun nuovo login automatico o manuale senza revisione |
@@ -64,8 +64,12 @@ soltanto questo significato operativo:
 Il polling introdotto nella 0.2.3 è limitato dal budget di login, ricontrolla route/CAPTCHA e
 rifiuta controlli visibili ambigui. La 0.2.4 seleziona il campo e-mail DIC come unico input nativo
 sotto il contenitore pubblico `data-testid="login-email"`, invece del placeholder che nella 0.2.3
-corrispondeva a padre e input. Non compensare un errore aumentando indiscriminatamente i timeout o
-lanciando il comando in loop.
+corrispondeva a padre e input. La 0.2.5 ammette poi soltanto l'esatta `/it/callback` DIC come stato
+transitorio bounded: la query opaca non viene letta o registrata, mentre fragment, porta
+esplicita, userinfo, host somigliante, trailing slash e path aggiuntivi restano rifiutati. Il marker
+viene atteso entro lo stesso budget e `/data/company/id` resta obbligatorio. Non compensare un
+errore aumentando indiscriminatamente i timeout o lanciando il comando in loop. Lo user agent
+Chromium nativo non è risultato la causa e non va sostituito per aggirare controlli del sito.
 
 L'unit systemd distribuita deve contenere `RestartPreventExitStatus=78`. Il comando `run` usa 78
 per tutti gli errori di autenticazione, mentre `dic-auth-check --live` lo usa per l'esito ambiguo
@@ -73,7 +77,7 @@ post-submit. Se la direttiva manca nell'unit installata, mantenere il servizio d
 aggiornare l'unit dalla release approvata, verificare con `systemd-analyze verify` ed eseguire
 `systemctl daemon-reload`; non avviare per provare la correzione.
 
-Su Debian 12 l'unit 0.2.4 non usa `ConditionPathIsRegularFile`, che non è supportata: verifica
+Su Debian 12 l'unit dalla 0.2.4 non usa `ConditionPathIsRegularFile`, che non è supportata: verifica
 l'esistenza di `.env` con `ConditionPathExists` e il tipo file regolare con
 `ExecCondition=/usr/bin/test -f`. La modalità `0600` e la validità della configurazione restano
 responsabilità di `doctor.sh`; non rimuovere il suo `ExecStartPre`.

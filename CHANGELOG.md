@@ -5,6 +5,34 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-17
+
+### Fixed
+
+- Il completamento federato TeamSystem riconosce come stato transitorio soltanto la callback DIC
+  esatta `/it/callback`, entro il budget condiviso del login. La query opaca necessaria al
+  protocollo è ammessa ma non viene letta né registrata; fragment, porta esplicita, userinfo, host
+  somigliante, trailing slash e path aggiuntivi restano rifiutati fail-closed.
+- Il marker autenticato viene atteso con polling limitato durante la cattura tenant, senza
+  estendere il budget, aggiungere retry delle credenziali o rendere opzionale l'attestazione
+  first-party `/data/company/id`.
+
+### Security
+
+- Un submit della password resta singolo. Esiti post-submit non dimostrabili continuano a
+  terminare con `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` ed exit code 78; nessuna write e
+  nessun fallback tenant sono stati aggiunti.
+- Lo user agent Chromium nativo resta invariato: la verifica live non ha indicato che fosse la
+  causa e la release non introduce spoofing o bypass dei controlli del sito.
+
+### Verification
+
+- Un accesso manuale autorizzato, in un browser fresco e in sola lettura, ha accettato le
+  credenziali con un solo submit e ha osservato la sequenza TeamSystem password → callback DIC
+  esatta → dashboard → route e marker esatti della lista dipendenti. Questo attesta soltanto il
+  login manuale (`LIVE_AUTHENTICATED`): adapter headless, attestazione tenant e persistenza del
+  vault sul server restano da verificare con un unico check autorizzato dopo il deployment.
+
 ## [0.2.4] - 2026-08-16
 
 ### Fixed
@@ -116,7 +144,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/okno/BH-DiC/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/okno/BH-DiC/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/okno/BH-DiC/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/okno/BH-DiC/compare/v0.2.1...v0.2.2

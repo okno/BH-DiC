@@ -38,6 +38,7 @@ _TEAMSYSTEM_ORIGIN = "https://identity.teamsystem.com"
 _TEAMSYSTEM_EMAIL_PATH = "/Account/LoginEmail"
 _TEAMSYSTEM_SECRET_ENTRY_PATH = "/Account/Login" + "Password"
 _TEAMSYSTEM_SECRET_RENEWAL_PATH = _TEAMSYSTEM_SECRET_ENTRY_PATH + "Expired"
+_DIC_AUTH_CALLBACK_PATH = "/it/callback"
 _CANONICAL_TENANT_ID = re.compile(r"[1-9][0-9]{0,18}")
 _AUTH_POLL_SECONDS = 0.1
 
@@ -199,6 +200,48 @@ class PlaywrightAuthenticator:
             and not parsed.fragment
         )
 
+    def _session_probe_is_on_target_route(self) -> bool:
+        stage = DicAuthStage.SESSION_PROBE
+        self._raise_if_password_expired(self.page.url, stage)
+        if self._is_exact_route(self.page.url, _DIC_ORIGIN, "/it/login") or any(
+            self._is_exact_route(self.page.url, _TEAMSYSTEM_ORIGIN, path)
+            for path in (_TEAMSYSTEM_EMAIL_PATH, _TEAMSYSTEM_SECRET_ENTRY_PATH)
+        ):
+            return False
+        if not self._is_exact_route(
+            self.page.url,
+            _DIC_ORIGIN,
+            self.employees_page.route_template,
+            allow_query=False,
+        ):
+            raise DicAuthenticationError("DIC session probe reached an unexpected route")
+        return True
+
+    async def _wait_for_authenticated_marker(self, *, deadline: float) -> bool:
+        stage = DicAuthStage.SESSION_PROBE
+        while True:
+            self._raise_if_deadline_reached(deadline, stage)
+            if not self._session_probe_is_on_target_route():
+                return False
+            try:
+                marker = await self._candidate_visible(
+                    "auth.authenticated",
+                    stage,
+                    deadline=deadline,
+                    allow_multiple=True,
+                )
+            except _AuthProbePending:
+                marker = None
+            if marker is not None:
+                self._raise_if_deadline_reached(deadline, stage)
+                if not self._session_probe_is_on_target_route():
+                    return False
+                return True
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise DicAuthUiChangedError(stage)
+            await self._sleep(min(_AUTH_POLL_SECONDS, remaining))
+
     async def _probe_authenticated_session(self) -> bool:
         if self.expected_tenant_id is None:
             raise DicConfigurationError("expected DIC tenant is not configured")
@@ -223,31 +266,33 @@ class PlaywrightAuthenticator:
 
         event_source = cast(ResponseEventSource, self.page)
         with TenantResponseCapture(event_source) as capture:
+            probe_deadline = self._control_deadline()
+            remaining = probe_deadline - self._monotonic()
+            if remaining <= 0:
+                raise DicAuthUiChangedError(DicAuthStage.SESSION_PROBE)
             try:
-                await self.employees_page.navigate()
+                await asyncio.wait_for(
+                    self.employees_page.navigate(),
+                    timeout=remaining,
+                )
             except Exception:
                 raise DicAuthenticationError("DIC session probe navigation failed") from None
 
-            self._raise_if_password_expired(self.page.url)
-            if self._is_exact_route(self.page.url, _DIC_ORIGIN, "/it/login") or any(
-                self._is_exact_route(self.page.url, _TEAMSYSTEM_ORIGIN, path)
-                for path in (_TEAMSYSTEM_EMAIL_PATH, _TEAMSYSTEM_SECRET_ENTRY_PATH)
-            ):
+            if not await self._wait_for_authenticated_marker(deadline=probe_deadline):
                 return False
-            if not self._is_exact_route(
-                self.page.url,
-                _DIC_ORIGIN,
-                self.employees_page.route_template,
-                allow_query=False,
-            ):
-                raise DicAuthenticationError("DIC session probe reached an unexpected route")
-            marker = await self.login_page.locate("auth.authenticated", required=False)
-            if marker is None or not await marker.is_visible():
-                return False
-            await capture.attest(
-                self.expected_tenant_id,
-                timeout_ms=self.login_page.timeout_ms,
-            )
+            remaining = probe_deadline - self._monotonic()
+            if remaining <= 0:
+                raise DicAuthUiChangedError(DicAuthStage.SESSION_PROBE)
+            try:
+                await asyncio.wait_for(
+                    capture.attest(
+                        self.expected_tenant_id,
+                        timeout_ms=remaining * 1_000,
+                    ),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                raise DicAuthenticationError("DIC session probe timed out") from None
         return True
 
     async def _candidate_visible(
@@ -499,8 +544,12 @@ class PlaywrightAuthenticator:
                 if self._is_dic_app_route(self.page.url):
                     self._raise_if_deadline_reached(deadline, stage, completion=True)
                     return
-                if not self._is_exact_route(
-                    self.page.url, _TEAMSYSTEM_ORIGIN, _TEAMSYSTEM_SECRET_ENTRY_PATH
+                if not any(
+                    self._is_exact_route(self.page.url, origin, path)
+                    for origin, path in (
+                        (_TEAMSYSTEM_ORIGIN, _TEAMSYSTEM_SECRET_ENTRY_PATH),
+                        (_DIC_ORIGIN, _DIC_AUTH_CALLBACK_PATH),
+                    )
                 ):
                     raise DicAuthUiChangedError(stage)
             except DicAuthPasswordExpiredError:

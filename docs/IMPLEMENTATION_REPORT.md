@@ -1,6 +1,6 @@
 # Implementation report
 
-Snapshot documentale: **16 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
+Snapshot documentale: **17 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
 un commit non può auto-referenziare il proprio hash. Aggiornare questo file dopo il deployment senza
 sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 
@@ -11,13 +11,14 @@ sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 | Owner | `okno` |
 | Nome | `BH-DiC` |
 | Remote | `https://github.com/okno/BH-DiC.git` |
-| Visibilità | `PRIVATE`, verificata tramite GitHub API |
+| Visibilità | `PUBLIC`, verificata tramite GitHub API; blocco di sicurezza per la produzione |
 | Branch | `main` |
 | Commit SHA | riportato nel report di consegna; non auto-referenziato nel commit stesso |
 | Git | branch `main` pushato; worktree e tracking remoto verificati dal gate di consegna |
 
-Il remote non contiene credenziali. La repository deve restare privata; nessuna licenza open
-source è stata aggiunta.
+Il remote non contiene credenziali note, ma la visibilità osservata è pubblica. Il requisito di
+progetto resta `PRIVATE`: rendere privata la repository e riverificare via API prima di avviare il
+bot in produzione. Nessuna licenza open source è stata aggiunta.
 
 ## Server
 
@@ -35,11 +36,13 @@ source è stata aggiunta.
 | Bot target | `STOPPED`; nessun avvio di produzione eseguito |
 
 Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
-TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato; il check DIC headless
-0.2.2 si è però fermato fail-closed prima dell'autenticazione per una race di hydration e non ha
-creato un vault. Il tentativo 0.2.3 ha superato l'hydration ma si è fermato fail-closed allo stage
-`DIC_EMAIL`, perché il placeholder pubblico individuava sia il componente padre sia l'input nativo.
-Autenticazione, tenant e Function ID DIC restano non verificati live.
+TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato. I check DIC headless
+0.2.2 e 0.2.3 si sono fermati prima del submit password. La 0.2.4 ha inviato la password una sola
+volta, ma ha rifiutato fail-closed la callback DIC legittima con exit 78. Un successivo accesso
+manuale autorizzato, in browser fresco e in sola lettura, ha accettato le credenziali con un solo
+submit e raggiunto callback, dashboard, route e marker esatti della lista dipendenti. Questo
+attesta soltanto il login manuale (`LIVE_AUTHENTICATED`): adapter headless, tenant, vault e Function
+ID DIC restano non verificati live.
 
 ## Implementazione
 
@@ -64,6 +67,11 @@ Completati nel codice e testati con risorse sintetiche:
   `SESSION_PROBE` quando non può dichiarare successo entro la deadline;
 - correzione 0.2.4 del campo e-mail DIC, ristretto all'unico input nativo sotto il contenitore
   pubblico `data-testid="login-email"`, con regressione sintetica per il caso padre/input duplicato;
+- correzione 0.2.5 del completamento federato: callback DIC esatta ammessa solo come transitoria
+  bounded, query opaca mai letta o registrata e varianti di origine/porta/fragment/path rifiutate;
+  marker autenticato atteso dentro la cattura tenant con route esatta e budget condiviso, mentre
+  `/data/company/id` resta obbligatorio e il submit password resta singolo; lo user agent Chromium
+  nativo resta invariato perché la verifica live non lo ha indicato come causa;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
 - unit systemd 0.2.4 compatibile con Debian 12: `ConditionPathExists` più
@@ -86,31 +94,30 @@ Stato funzionale:
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — release 0.2.4
+## Test e gate — release 0.2.5
 
-I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.4, senza
-avviare bot/browser applicativi e senza chiamare Discord, DIC autenticato o provider. L'ispezione
-del login DIC ha riguardato soltanto il DOM pubblico e non ha compilato campi. Questi gate non
-trasformano alcuna integrazione in `LIVE_VERIFIED`.
+I gate completi del worktree candidato 0.2.5 sono stati eseguiti il 17 agosto 2026. Il login manuale
+autorizzato è un'evidenza live separata e non sostituisce questi gate né promuove adapter headless,
+tenant o vault a verificati.
 
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS: 185 file già formattati |
-| `ruff check .` | PASS: zero issue |
-| `mypy src` | PASS: 108 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 562 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 562 test, 1 warning esterno `discord.py/audioop` |
-| `coverage report --show-missing --fail-under=80` | PASS: 86%; 8.405 statement / 916 miss, 2.524 branch / 487 partial |
-| `bandit -q -r src` | PASS: nessun issue riportato |
-| `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS: nessuna vulnerabilità nota nel lock |
-| `gitleaks git --staged . --redact --no-banner` | PASS: nessun leak nel contenuto candidato |
-| parsing YAML/XML docs/security | PASS |
-| scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
-| 22 script `bash -n` + contratti/lifecycle ops | PASS: 32 casi; start fail-closed e status/stop sintetici inclusi |
+| `ruff format --check .` | PASS, 185 file |
+| `ruff check .` | PASS |
+| `mypy src` | PASS, 108 file sorgente |
+| `pytest` | PASS, 574 test; un warning deprecazione `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 574 test con branch coverage |
+| `coverage report --show-missing --fail-under=80` | PASS, totale 86% |
+| `bandit -q -r src` | PASS, zero finding |
+| `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note; lock pinned non hashato segnalato come warning |
+| `gitleaks git --staged . --redact --no-banner` | PASS sul candidato staged, output redatto |
+| parsing YAML/XML docs/security | PASS, 5 YAML e 2 XML |
+| scansione secret sul diff tracciato | PASS, gitleaks 8.30.1 redatto |
+| script `bash -n` + contratti/lifecycle ops | PASS, 22 script; contratti inclusi nella suite |
+| link Markdown locali | PASS sui documenti modificati |
 
-La scansione della cronologia del nuovo commit è riuscita; i workflow remoti restano da verificare
-dopo il push. Le evidenze Debian/Groq riportate sopra derivano da controlli separati sul target;
-non promuovono DIC o Discord a verificati.
+I workflow remoti restano da verificare dopo il push. Le evidenze Debian/Groq e il login manuale
+riportati sopra derivano da controlli separati; non promuovono adapter DIC o Discord a verificati.
 
 ## Operatività
 
@@ -146,15 +153,15 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
 - nessuna Function ID DIC write/read live eseguita; processo bot target fermo;
 - l'unit systemd impedisce il restart su exit 78; il comando `run` usa tale codice per ogni errore
-  di autenticazione, evitando nuovi login automatici; su Debian 12 l'unit 0.2.4 usa
+  di autenticazione, evitando nuovi login automatici; su Debian 12 l'unit dalla 0.2.4 usa
   `ConditionPathExists` più un `ExecCondition` di file regolare, mentre `doctor.sh` verifica
   modalità `0600` e configurazione.
 
 ## Problemi residui
 
-- password TeamSystem rinnovata, ma autenticazione, tenant e creazione vault devono ancora
-  superare esattamente un `dic-auth-check --live` autorizzato dopo il deployment della correzione
-  0.2.4; il tentativo 0.2.3 è terminato a `DIC_EMAIL` prima dell'autenticazione;
+- credenziale accettata nel browser fresco con un solo submit, ma adapter headless, tenant e
+  creazione vault devono ancora superare esattamente un `dic-auth-check --live` autorizzato dopo
+  il deployment della 0.2.5; un nuovo exit 78 impone stop senza ulteriore retry;
 - Discord gateway e registrazione comandi non ancora verificati end-to-end;
 - Groq/modello verificati live; OpenAI e llama restano non verificati;
 - selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;

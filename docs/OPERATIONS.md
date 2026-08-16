@@ -2,21 +2,22 @@
 
 ## Stato operativo corrente
 
-- repository privata installata in `/opt/bh-dic` sul target Debian 12;
+- repository installata in `/opt/bh-dic` sul target Debian 12; il remote GitHub risulta attualmente
+  `PUBLIC` e deve tornare `PRIVATE` prima dell'avvio di produzione;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
 - processo bot sul target fermo;
 - nessuna Function ID DIC read o write verificata live;
-- password TeamSystem rinnovata nel flusso umano e secret `.env` aggiornato;
-- `dic-auth-check --live` 0.2.2 fermato fail-closed prima dell'autenticazione da una race di
-  hydration;
-- tentativo 0.2.3 fermato fail-closed allo stage `DIC_EMAIL`, perché il placeholder pubblico
-  risolveva sia il componente padre sia l'input nativo; vault, sessione e tenant non verificati;
+- login manuale autorizzato in browser fresco `LIVE_AUTHENTICATED` con un solo submit e marker
+  della lista dipendenti osservato; adapter headless, tenant e vault server non verificati;
+- tentativo headless 0.2.4 fermato con exit 78 perché la callback DIC legittima non era
+  allowlistata; correzione 0.2.5 da distribuire prima dell'unico nuovo check;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-I gate sintetici della release 0.2.4 comprendono 562 test e sono registrati
-nell'implementation report. Sul target sono stati eseguiti solo i controlli operativi riportati
-sopra; nessun test live ha eseguito una Function ID DIC.
+I gate sintetici della release 0.2.5 sono verdi: 574 test, branch coverage 86%, Ruff, mypy, Bandit,
+audit dipendenze e secret scan senza finding. Il dettaglio è nell'implementation report. Sul target
+sono stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
+Function ID DIC.
 
 ## Runbook giornaliero
 
@@ -84,7 +85,7 @@ Il check offline non contatta la rete:
 ```
 
 La password TeamSystem è stata rinnovata e il secret locale aggiornato. Dopo aver distribuito la
-release 0.2.4, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e
+release 0.2.5, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e
 eseguire esattamente una volta il controllo live esplicitamente autorizzato:
 
 ```bash
@@ -108,6 +109,13 @@ sono JSON con i soli campi `error_type` e `stage`; non estrarre messaggi interni
 eseguire il comando in loop. `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` con exit code 78
 indica che il submit può essere partito ma completamento, tenant o vault non sono dimostrabili:
 fermare il runbook e verificare umanamente, senza un nuovo login.
+
+La 0.2.5 tratta soltanto l'esatta `/it/callback` DIC come transitoria entro il budget condiviso;
+non legge né registra la query e rifiuta fragment, porta esplicita, userinfo, host somigliante,
+trailing slash e path aggiuntivi. Il marker autenticato viene atteso entro la cattura tenant, ma
+`/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il login
+manuale fresco non autorizza più tentativi: dopo il deployment è consentito un solo check live;
+un nuovo exit 78 impone nuovamente lo stop.
 
 ### Log
 
@@ -152,7 +160,7 @@ catena. Vedere [Audit](AUDIT.md).
 
 In modalità systemd l'unit installata deve includere `RestartPreventExitStatus=78`: `run` usa 78
 per ogni errore di autenticazione, impedendo a `Restart=on-failure` di rilanciare il login. Su
-Debian 12 l'unit 0.2.4 usa `ConditionPathExists=/opt/bh-dic/.env` più
+Debian 12 l'unit dalla 0.2.4 usa `ConditionPathExists=/opt/bh-dic/.env` più
 `ExecCondition=/usr/bin/test -f /opt/bh-dic/.env`, non la direttiva non supportata
 `ConditionPathIsRegularFile`. `doctor.sh` resta il controllo che impone modalità `0600` di `.env`
 e configurazione valida. Dopo un update dell'unit, ricopiarla, usare `systemd-analyze verify` e

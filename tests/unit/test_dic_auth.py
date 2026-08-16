@@ -15,6 +15,7 @@ from bh_dic.dic.auth import (
     PlaywrightAuthenticator,
 )
 from bh_dic.dic.errors import (
+    DicAuthenticationError,
     DicAuthorizationError,
     DicCaptchaRequiredError,
     DicConfigurationError,
@@ -260,6 +261,9 @@ class AuthFlowPage:
         if self.identity_result == "authenticated":
             self.authenticated = True
             self._url = f"{DIC_ORIGIN}/it/app/employees"
+        elif self.identity_result == "callback":
+            self.authenticated = True
+            self._url = f"{DIC_ORIGIN}/it/callback?code=opaque-synthetic-value"
         elif self.identity_result == "expired":
             self._url = f"{IDENTITY_ORIGIN}/Account/LoginPasswordExpired?flow=x"
         elif self.identity_result == "wrong-origin":
@@ -387,6 +391,45 @@ async def test_restored_session_is_probed_from_about_blank_and_attested() -> Non
 
 
 @pytest.mark.asyncio
+async def test_restored_session_waits_for_hydrated_authenticated_marker() -> None:
+    page = AuthFlowPage(authenticated=True)
+    page.marker = DelayedLocator(
+        missing_counts=2,
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/app/employees/list",
+    )
+
+    result = await authenticator(
+        page,
+        monotonic=lambda: 0.0,
+        sleeper=_no_sleep,
+    ).status()
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.marker.missing_counts == 0
+    assert page.handlers == []
+
+
+@pytest.mark.asyncio
+async def test_restored_session_marker_hydration_timeout_fails_closed() -> None:
+    page = AuthFlowPage(authenticated=True)
+    page.marker = FlowLocator(present=lambda: False)
+    clock = ManualMonotonic()
+
+    async def expire_probe(_delay: float) -> None:
+        clock.value = 15.0
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(
+            page,
+            monotonic=clock,
+            sleeper=expire_probe,
+        ).status()
+
+    assert caught.value.stage is DicAuthStage.SESSION_PROBE
+    assert page.handlers == []
+
+
+@pytest.mark.asyncio
 async def test_session_status_is_unknown_after_exact_identity_redirect() -> None:
     page = AuthFlowPage(authenticated=False)
 
@@ -485,6 +528,43 @@ async def test_exact_dic_and_teamsystem_login_flow_attests_tenant() -> None:
     assert page.identity_password.filled == ["synthetic-password"]
     assert page.dic_submit.clicks == 1
     assert page.identity_email_submit.clicks == 1
+    assert page.identity_password_submit.clicks == 1
+    assert page.goto_urls == [
+        f"{DIC_ORIGIN}/it/login",
+        "about:blank",
+        f"{DIC_ORIGIN}/it/app/employees/list",
+    ]
+
+
+@pytest.mark.parametrize(
+    "callback_url",
+    [
+        f"{DIC_ORIGIN}/it/callback",
+        f"{DIC_ORIGIN}/it/callback?code=opaque-synthetic-value",
+    ],
+)
+@pytest.mark.asyncio
+async def test_exact_dic_callback_is_pending_until_app_route_then_attests_tenant(
+    callback_url: str,
+) -> None:
+    page = AuthFlowPage()
+
+    def enter_callback() -> None:
+        page.authenticated = True
+        page._set_url(callback_url)
+
+    page.identity_password_submit = FlowLocator(
+        present=lambda: page._identity_path("/Account/LoginPassword"),
+        on_click=enter_callback,
+    )
+
+    async def complete_callback(_delay: float) -> None:
+        if page.url.startswith(f"{DIC_ORIGIN}/it/callback"):
+            page._set_url(f"{DIC_ORIGIN}/it/app/dashboard")
+
+    result = await authenticator(page, sleeper=complete_callback).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
     assert page.identity_password_submit.clicks == 1
     assert page.goto_urls == [
         f"{DIC_ORIGIN}/it/login",
@@ -760,6 +840,82 @@ async def test_password_submit_dispatched_then_provider_raises_is_outcome_unknow
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert sensitive not in str(caught.value)
+    assert page.identity_password_submit.clicks == 1
+
+
+@pytest.mark.parametrize(
+    "callback_url",
+    [
+        "https://secure.dipendentincloud.it.evil.invalid/it/callback?code=synthetic",
+        "https://secure.dipendentincloud.it:443/it/callback?code=synthetic",
+        "https://user@secure.dipendentincloud.it/it/callback?code=synthetic",
+        "https://secure.dipendentincloud.it/it/callback?code=synthetic#fragment",
+        "https://secure.dipendentincloud.it/it/callback/",
+        "https://secure.dipendentincloud.it/it/callback/extra?code=synthetic",
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_submit_callback_variants_fail_closed(callback_url: str) -> None:
+    page = AuthFlowPage()
+    page.identity_password_submit = FlowLocator(
+        present=lambda: page._identity_path("/Account/LoginPassword"),
+        on_click=lambda: page._set_url(callback_url),
+    )
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    assert callback_url not in str(caught.value)
+    assert page.identity_password_submit.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_session_probe_route_change_during_marker_hydration_fails_closed() -> None:
+    page = AuthFlowPage(authenticated=True)
+    page.marker = DelayedLocator(
+        missing_counts=1,
+        present=lambda: True,
+        on_missing=lambda: page._set_url(f"{DIC_ORIGIN}/it/app/unexpected"),
+    )
+
+    with pytest.raises(DicAuthenticationError, match="unexpected route"):
+        await authenticator(
+            page,
+            monotonic=lambda: 0.0,
+            sleeper=_no_sleep,
+        ).status()
+
+    assert page.handlers == []
+
+
+@pytest.mark.asyncio
+async def test_post_submit_callback_timeout_does_not_expose_query(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = AuthFlowPage()
+    clock = ManualMonotonic()
+    query_marker = "private-oauth-query-marker"
+    page.identity_password_submit = FlowLocator(
+        present=lambda: page._identity_path("/Account/LoginPassword"),
+        on_click=lambda: page._set_url(
+            f"{DIC_ORIGIN}/it/callback?code={query_marker}&state=opaque"
+        ),
+    )
+
+    async def expire_flow(_delay: float) -> None:
+        clock.value = 15.0
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await authenticator(
+            page,
+            monotonic=clock,
+            sleeper=expire_flow,
+        ).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    assert query_marker not in str(caught.value)
+    assert query_marker not in caplog.text
     assert page.identity_password_submit.clicks == 1
 
 

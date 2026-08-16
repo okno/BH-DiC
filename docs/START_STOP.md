@@ -1,11 +1,10 @@
 # Start e stop
 
-> Stato al 16 agosto 2026: il runtime sul target Debian è preparato e il bot è **STOPPED**.
-> Doctor offline/online e Groq sono verificati. La password TeamSystem è stata rinnovata, ma il
-> check live 0.2.2 si è fermato prima dell'autenticazione per una race di hydration e non ha creato
-> un vault verificato; quello 0.2.3 si è fermato allo stage `DIC_EMAIL` per l'ambiguità tra
-> componente padre e input nativo. Distribuire la 0.2.4 e completare il gate DIC prima di avviare
-> il servizio.
+> Stato al 17 agosto 2026: il runtime sul target Debian è preparato e il bot è **STOPPED**.
+> Doctor offline/online e Groq sono verificati. Un login manuale autorizzato in browser fresco ha
+> accettato le credenziali con un solo submit; il check server 0.2.4 ha invece rifiutato la callback
+> DIC legittima con exit 78. Distribuire la 0.2.5 e completare il gate adapter/tenant/vault prima di
+> avviare il servizio.
 
 ## Prerequisiti
 
@@ -123,7 +122,7 @@ usare `kill -9` manualmente e non eliminare PID/lock senza verificare il process
 
 ## Sequenza di ripresa sul target
 
-Dopo l'aggiornamento alla release 0.2.4, mantenere le write disabilitate e il bot fermo:
+Dopo l'aggiornamento alla release 0.2.5, mantenere le write disabilitate e il bot fermo:
 
 ```bash
 cd /opt/bh-dic
@@ -146,7 +145,9 @@ stati completati. Eseguire una sola verifica live autorizzata:
 eliminare. La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le
 credenziali; la 0.2.4 usa per l'e-mail DIC l'unico input nativo sotto il contenitore pubblico
 `data-testid="login-email"`, invece del placeholder che corrispondeva anche al componente padre.
-Eseguire il check live esattamente una volta e soltanto dopo il deployment 0.2.4. Se restituisce
+La 0.2.5 ammette la callback DIC esatta soltanto come transitoria bounded, senza leggere o
+registrare la query, e attende il marker entro lo stesso budget mantenendo obbligatorio il tenant.
+Eseguire il check live esattamente una volta e soltanto dopo il deployment 0.2.5. Se restituisce
 JSON con `error_type`/`stage`, non trasformarlo in un loop e non avviare il bot.
 
 Se `dic-auth-check --live` restituisce `DicAuthOutcomeUnknownError` con stage
@@ -168,10 +169,9 @@ I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. 
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 16 agosto 2026 la preparazione e il provider check sono riusciti; il tentativo DIC 0.2.2 si è
-fermato durante l'hydration pre-autenticazione e il tentativo 0.2.3 allo stage `DIC_EMAIL` per il
-target padre/input duplicato. La correzione 0.2.4 è coperta da test sintetici, ma deve ancora
-superare il check live: autenticazione, tenant e Function ID DIC non sono verificati, nessun
-read/write DIC live è stato completato e il bot resta fermo con write disabilitate.
+Al 17 agosto 2026 la preparazione e il provider check sono riusciti. Il login manuale fresco è
+`LIVE_AUTHENTICATED`, ma non sostituisce il check headless: la correzione 0.2.5 deve ancora
+dimostrare adapter, tenant e vault server. Nessuna Function ID read/write DIC live è stata
+completata e il bot resta fermo con write disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

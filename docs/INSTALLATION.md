@@ -4,19 +4,20 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato al 16 agosto 2026: il runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati; il
-> bot è fermo. La password TeamSystem è stata rinnovata e il secret locale aggiornato; il check
-> DIC 0.2.2 si è fermato prima dell'autenticazione per una race di hydration e quello 0.2.3 allo
-> stage `DIC_EMAIL`, perché il placeholder risolveva sia il componente padre sia l'input nativo.
-> La 0.2.4 corregge il selettore ma non è ancora stata verificata live. Non esiste ancora un vault
-> autenticato e nessuna Function ID DIC è stata collaudata live. Tutte le write
+> Stato al 17 agosto 2026: il runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati; il
+> bot è fermo. Un login manuale autorizzato in browser fresco ha accettato le credenziali con un
+> solo submit e raggiunto callback, dashboard, route e marker esatti della lista dipendenti. Il
+> check server 0.2.4 ha rifiutato quella callback legittima con exit 78; la 0.2.5 corregge il
+> passaggio, ma adapter headless, tenant e vault server non sono ancora verificati. Nessuna Function
+> ID DIC è stata collaudata live. Tutte le write
 > devono restare `DISABLED_BY_POLICY`; questa guida non autorizza l'avvio.
 
 ## 1. Decisioni prima dell'installazione
 
 Registrare in un change ticket approvato, senza segreti:
 
-- commit e branch da distribuire dalla repository privata `okno/BH-DiC`;
+- commit e branch da distribuire dalla repository `okno/BH-DiC`; la visibilità deve risultare
+  `PRIVATE` tramite API prima dell'avvio di produzione (al 17 agosto 2026 risulta `PUBLIC`);
 - amministratore responsabile, finestra e piano di rollback;
 - host, filesystem cifrato, backup e retention;
 - guild Discord `1303955635984924722`, Channel ID copiato da `#mng-ai` e Role ID approvati;
@@ -87,8 +88,8 @@ sudo -u bh-dic -H git status --short --branch
 sudo -u bh-dic -H git rev-parse HEAD
 ```
 
-Confrontare lo SHA con quello approvato. Il remote non deve contenere credenziali. Conservare la
-repository privata e non copiare deploy key o output sensibile nel report.
+Confrontare lo SHA con quello approvato. Il remote non deve contenere credenziali. Prima dell'avvio
+rendere e mantenere la repository privata; non copiare deploy key o output sensibile nel report.
 
 ## 5. Dipendenze Python, Playwright e ClamAV
 
@@ -282,7 +283,7 @@ sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check
 Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale,
 aggiornare `DIC_PASSWORD` localmente senza mostrarla e invalidare l'eventuale sessione precedente.
 Sul target documentato questi due passaggi sono già stati completati. Distribuire la release
-0.2.4 e, soltanto dopo il deployment, con autorizzazione esplicita alla rete DIC, eseguire una
+0.2.5 e, soltanto dopo il deployment, con autorizzazione esplicita alla rete DIC, eseguire una
 sola verifica:
 
 ```bash
@@ -300,7 +301,11 @@ inatteso o attestazione non valida impongono stop. Dalla 0.2.3 il polling dei co
 route-aware e richiede un solo controllo visibile; status e autenticazione sono eseguiti una volta
 sola, senza retry automatico delle credenziali. Nella 0.2.4 il campo e-mail DIC è inoltre ristretto
 all'unico input nativo sotto il contenitore pubblico `data-testid="login-email"`: non usa il
-placeholder che nella 0.2.3 corrispondeva anche al componente padre. Un errore mostra soltanto JSON
+placeholder che nella 0.2.3 corrispondeva anche al componente padre. La 0.2.5 ammette l'esatta
+`/it/callback` DIC soltanto come transitoria entro il budget condiviso: la query opaca non viene
+letta o registrata e le varianti di origine, porta, fragment o path restano rifiutate. Attende il
+marker autenticato senza rendere opzionale `/data/company/id`; lo user agent Chromium nativo resta
+invariato. Un errore mostra soltanto JSON
 `error_type`/`stage`: non stampare eccezioni interne, HTML o URL e non ripetere il comando in loop.
 `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` usa exit code 78 e indica che il submit può essere
 partito senza che completamento, tenant o vault siano dimostrabili: fermarsi e verificare con una
@@ -334,10 +339,11 @@ restituisce 78 per ogni errore di autenticazione e systemd non deve riavviare au
 processo, perché ciò potrebbe reinviare credenziali. Dopo ogni aggiornamento del template,
 ricopiare e rivalidare l'unit a servizio fermo prima di abilitarla.
 
-Su Debian 12 `ConditionPathIsRegularFile` non è una direttiva systemd supportata. L'unit 0.2.4 usa
-quindi `ConditionPathExists` come condizione di unit e `/usr/bin/test -f` come `ExecCondition` del
-servizio. Questi controlli provano esistenza e tipo del file; non sostituiscono `doctor.sh`, che
-continua a richiedere `.env` in modalità `0600` e una configurazione runtime valida.
+Su Debian 12 `ConditionPathIsRegularFile` non è una direttiva systemd supportata. L'unit dalla
+0.2.4 usa quindi `ConditionPathExists` come condizione di unit e `/usr/bin/test -f` come
+`ExecCondition` del servizio. Questi controlli provano esistenza e tipo del file; non sostituiscono
+`doctor.sh`, che continua a richiedere `.env` in modalità `0600` e una configurazione runtime
+valida.
 
 La preparazione termina qui con il servizio disabled/stopped. Dopo autorizzazione distinta:
 

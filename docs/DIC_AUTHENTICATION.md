@@ -11,12 +11,15 @@ Il solo flusso federato ammesso aggiunge questi target HTTPS esatti e nessun alt
 
 - `https://secure.dipendentincloud.it/it/login`;
 - `https://identity.teamsystem.com/Account/LoginEmail`;
-- `https://identity.teamsystem.com/Account/LoginPassword`.
+- `https://identity.teamsystem.com/Account/LoginPassword`;
+- `https://secure.dipendentincloud.it/it/callback`, esclusivamente come stato transitorio
+  post-submit entro lo stesso budget del login.
 
 Schema, host, porta e path sono confrontati esattamente e i fragment sono
-rifiutati; gli eventuali parametri di stato dell'IdP non possono cambiare questo
-confronto. Un'altra origine TeamSystem, un sottodominio somigliante o un redirect
-inatteso falliscono chiuso. Il percorso passwordless non viene usato. La route
+rifiutati; sulla callback DIC la query opaca può essere presente ma non viene letta né registrata.
+Una porta esplicita, userinfo, trailing slash, path aggiuntivo, altra origine TeamSystem,
+sottodominio somigliante o redirect inatteso falliscono chiuso. Gli eventuali parametri di stato
+dell'IdP non possono cambiare il confronto. Il percorso passwordless non viene usato. La route
 `/Account/LoginPasswordExpired` viene riconosciuta soltanto per produrre un errore
 fail-closed che richiede rinnovo umano.
 
@@ -28,8 +31,12 @@ hydration classificata `DicUiChangedError`: non ha creato un vault e non ha
 eseguito Function ID HR. La 0.2.3 ha corretto quel percorso, ma il tentativo successivo si è
 fermato fail-closed allo stage `DIC_EMAIL`: il placeholder pubblico corrispondeva sia al componente
 padre sia all'input nativo. La 0.2.4 restringe il target all'unico input nativo nel contenitore
-pubblico `data-testid="login-email"`. Questa correzione è coperta sinteticamente ma non è ancora
-stata verificata live; sessione e tenant restano non verificati end-to-end sul target.
+pubblico `data-testid="login-email"`. Il tentativo server 0.2.4 ha inviato la password una sola
+volta, ma ha classificato come inattesa la callback DIC legittima e si è fermato con exit 78.
+Una successiva verifica manuale autorizzata, in browser fresco e in sola lettura, ha accettato le
+credenziali con un solo submit e ha osservato password TeamSystem → callback DIC esatta → dashboard
+→ route e marker esatti della lista dipendenti. L'evidenza è `LIVE_AUTHENTICATED` soltanto per il
+flusso manuale: adapter headless, attestazione tenant e vault server non sono ancora verificati.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
@@ -89,7 +96,11 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    il placeholder che nella 0.2.3 risolveva anche il componente padre. Il submit DIC
    usa prima il `data-testid` e poi il fallback pubblico verificato
    `button`/`Accedi` esatto.
-5. Probe di sessione e autenticazione sono serializzati dalla stessa coda e
+5. Dopo l'unico submit password, la route DIC esatta `/it/callback` è ammessa soltanto come stato
+   transitorio, con query opaca mai ispezionata o registrata. Il polling continua entro il budget
+   residuo; fragment, porta esplicita, userinfo, host somigliante, trailing slash e path aggiuntivi
+   sono rifiutati. Non esiste un secondo submit automatico.
+6. Probe di sessione e autenticazione sono serializzati dalla stessa coda e
    acquisiscono lo stesso lock browser, ma vengono eseguiti una sola volta. Il
    valore predefinito usa 60 secondi per il flusso e un guard esterno di 65
    secondi; un timeout o errore di trasporto non ritenta le credenziali.
@@ -97,15 +108,16 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    usa soltanto il tempo residuo dello stesso budget e ricontrolla la deadline
    prima di dichiarare successo; un superamento viene classificato allo stage
    `SESSION_PROBE`.
-6. `PasswordExpired`, CAPTCHA o un passaggio interattivo non supportato
+7. `PasswordExpired`, CAPTCHA o un passaggio interattivo non supportato
    interrompono il flusso con un errore tipizzato che richiede intervento umano.
-7. Qualunque campo MFA visibile interrompe il flusso con `DicMfaRequiredError`; questa versione
+8. Qualunque campo MFA visibile interrompe il flusso con `DicMfaRequiredError`; questa versione
    non compila né invia codici MFA e non usa controlli passwordless non osservati.
-8. Dopo il submit, l'adapter ripete il probe sulla route fissa e richiede marker
-   autenticato e corrispondenza esatta del tenant prima di persistere la sessione. Se il click può
-   essere partito ma completamento, tenant probe o persistenza del vault non sono dimostrabili,
-   restituisce `DicAuthOutcomeUnknownError` allo stage `CREDENTIAL_SUBMIT`: l'operatore non deve
-   ritentare automaticamente.
+9. Dopo il submit, l'adapter ripete il probe sulla route fissa e attende il marker autenticato con
+   polling limitato durante la stessa cattura tenant, usando soltanto il budget residuo. Marker e
+   corrispondenza esatta del tenant sono entrambi obbligatori prima di persistere la sessione. Se
+   il click può essere partito ma completamento, tenant probe o persistenza del vault non sono
+   dimostrabili, restituisce `DicAuthOutcomeUnknownError` allo stage `CREDENTIAL_SUBMIT`:
+   l'operatore non deve ritentare automaticamente.
 
 ## Attestazione tenant passiva
 
@@ -166,9 +178,10 @@ salvare o invalidare lo stato. Il bootstrap non-mock collega settings, vault,
 browser context e persistenza: carica lo storage state cifrato prima di creare il
 context, esegue il probe fisso con attestazione passiva e lo salva nuovamente solo
 dopo che l'adapter ha verificato autenticazione e tenant. Questa composizione è
-testata localmente; non è ancora stata verificata con un vault live perché il
-tentativo 0.2.2 successivo al rinnovo password si è fermato durante l'hydration
-pre-autenticazione e quello 0.2.3 allo stage `DIC_EMAIL`, prima dell'autenticazione.
+testata localmente; non è ancora stata verificata con un vault live. I tentativi 0.2.2 e 0.2.3 si
+sono fermati prima del submit password; la 0.2.4 ha raggiunto la callback DIC dopo un singolo
+submit, ma l'ha rifiutata fail-closed. Il successivo login manuale fresco ha confermato il flusso,
+non la composizione headless, l'attestazione tenant o la persistenza del vault sul server.
 Un errore di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
@@ -202,9 +215,12 @@ runtime. Può quindi contattare DIC e TeamSystem e attivare MFA/CAPTCHA. Dopo il
 rinnovo della password, il tentativo 0.2.2 si è fermato fail-closed prima
 dell'autenticazione per hydration incompleta. Il tentativo 0.2.3 ha superato quel punto ma si è
 fermato allo stage `DIC_EMAIL` per l'ambiguità padre/input del placeholder. La 0.2.4 usa il target
-nativo univoco, ma non equivale ancora a un esito live positivo. Distribuirla prima di eseguire,
-una sola volta, un nuovo check autorizzato con bot fermo e write disabilitate. In assenza del flag
-il codice live non viene invocato.
+nativo univoco, ha effettuato un solo submit e ha poi rifiutato la callback DIC legittima con exit
+78. La 0.2.5 corregge esclusivamente questo stato transitorio e l'attesa bounded del marker.
+Distribuire la 0.2.5 prima di eseguire, una sola volta, un nuovo check autorizzato con bot fermo e
+write disabilitate. In assenza del flag il codice live non viene invocato. Il successo manuale nel
+browser fresco non sostituisce questo gate: finché il comando non restituisce autenticazione e
+tenant verificati e non persiste il vault, il servizio non va avviato.
 
 ## Invalidazione e rotazione
 
@@ -248,6 +264,11 @@ risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con
 il comando di servizio `run` usa 78 per qualunque `DicAuthenticationError`, così l'unit systemd con
 `RestartPreventExitStatus=78` non avvia un nuovo tentativo. Fermare l'automazione, non rilanciare
 in loop e verificare lo stato dell'account con una procedura umana autorizzata.
+
+Il caso osservato nella 0.2.4 è stato ricondotto alla callback DIC legittima non ancora
+allowlistata, non allo user agent: la 0.2.5 conserva lo user agent Chromium nativo e non introduce
+spoofing. Un nuovo `CREDENTIAL_SUBMIT` dopo l'aggiornamento resta comunque un esito sconosciuto e
+impone nuovamente lo stop, senza tentativi aggiuntivi.
 
 In caso di errore:
 
