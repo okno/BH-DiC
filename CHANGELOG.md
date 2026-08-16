@@ -5,6 +5,25 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-16
+
+### Fixed
+
+- Il campo e-mail DIC usa ora l'unico `input` nativo sotto il contenitore pubblico
+  `data-testid="login-email"`. Nella 0.2.3 il lookup per placeholder risolveva sia il componente
+  padre sia l'input nativo e il check live si fermava correttamente allo stage `DIC_EMAIL`, prima
+  dell'autenticazione.
+- L'unit systemd per Debian 12 sostituisce la direttiva non supportata
+  `ConditionPathIsRegularFile` con `ConditionPathExists` e un `ExecCondition` che richiede un file
+  regolare. `doctor.sh` continua a verificare separatamente modalità `0600` di `.env` e validità
+  della configurazione.
+
+### Changed
+
+- Il gate DIC resta non completato: nessuna sessione, attestazione tenant o Function ID è stata
+  verificata live. Dopo il deployment della 0.2.4 l'operatore deve eseguire esattamente un nuovo
+  `dic-auth-check --live` autorizzato, con bot fermo e write disabilitate.
+
 ## [0.2.3] - 2026-08-16
 
 ### Fixed
@@ -97,7 +116,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/okno/BH-DiC/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/okno/BH-DiC/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/okno/BH-DiC/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/okno/BH-DiC/compare/v0.2.0...v0.2.1

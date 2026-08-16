@@ -212,6 +212,9 @@ class AuthFlowPage:
         self.dic_email = FlowLocator(
             present=lambda: self._url == f"{DIC_ORIGIN}/it/login",
         )
+        self.dic_email_placeholder_matches = DuplicateVisibleLocator(
+            present=lambda: self._url == f"{DIC_ORIGIN}/it/login",
+        )
         self.dic_submit = FlowLocator(
             present=lambda: self._url == f"{DIC_ORIGIN}/it/login",
             on_click=lambda: self._set_url(f"{IDENTITY_ORIGIN}/Account/LoginEmail?flow=x"),
@@ -288,7 +291,7 @@ class AuthFlowPage:
 
     def get_by_placeholder(self, text: str):
         if text == "Inserisci la tua e-mail":
-            return self.dic_email
+            return self.dic_email_placeholder_matches
         return self.missing
 
     def get_by_test_id(self, test_id: str):
@@ -300,6 +303,7 @@ class AuthFlowPage:
 
     def locator(self, selector: str):
         return {
+            "[data-testid='login-email'] input": self.dic_email,
             "#EmailAddress_Email": self.identity_email,
             "#submitEmailBtn": self.identity_email_submit,
             "#selectPassword": self.identity_password,
@@ -487,6 +491,17 @@ async def test_exact_dic_and_teamsystem_login_flow_attests_tenant() -> None:
         "about:blank",
         f"{DIC_ORIGIN}/it/app/employees/list",
     ]
+
+
+@pytest.mark.asyncio
+async def test_dic_email_fill_uses_native_input_despite_ambiguous_placeholder() -> None:
+    page = AuthFlowPage()
+
+    await authenticator(page).authenticate(credentials())
+
+    assert await page.dic_email_placeholder_matches.count() == 2
+    assert page.dic_email_placeholder_matches.filled == []
+    assert page.dic_email.filled == ["synthetic@example.invalid"]
 
 
 @pytest.mark.asyncio

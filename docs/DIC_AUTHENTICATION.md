@@ -25,8 +25,11 @@ la schermata `PasswordExpired`. La password TeamSystem è stata poi rinnovata ne
 flusso umano e il secret locale è stato aggiornato. Il primo
 `dic-auth-check --live` della release 0.2.2 si è fermato prima dell'autenticazione per una race di
 hydration classificata `DicUiChangedError`: non ha creato un vault e non ha
-eseguito Function ID HR. La release 0.2.3 corregge il percorso con test sintetici;
-sessione e tenant devono ancora essere verificati end-to-end sul target.
+eseguito Function ID HR. La 0.2.3 ha corretto quel percorso, ma il tentativo successivo si è
+fermato fail-closed allo stage `DIC_EMAIL`: il placeholder pubblico corrispondeva sia al componente
+padre sia all'input nativo. La 0.2.4 restringe il target all'unico input nativo nel contenitore
+pubblico `data-testid="login-email"`. Questa correzione è coperta sinteticamente ma non è ancora
+stata verificata live; sessione e tenant restano non verificati end-to-end sul target.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
@@ -81,8 +84,11 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    scadenza o più controlli visibili fallisce chiuso.
 4. `authenticate()` segue soltanto la sequenza allowlisted DIC → `LoginEmail` →
    `LoginPassword`, compilando i segreti direttamente nei controlli previsti.
-   Non espone primitive di navigazione arbitrarie. Il submit DIC usa prima il
-   `data-testid` e poi il fallback pubblico verificato `button`/`Accedi` esatto.
+   Non espone primitive di navigazione arbitrarie. Il campo e-mail DIC usa l'unico
+   input nativo sotto il contenitore pubblico `data-testid="login-email"`, evitando
+   il placeholder che nella 0.2.3 risolveva anche il componente padre. Il submit DIC
+   usa prima il `data-testid` e poi il fallback pubblico verificato
+   `button`/`Accedi` esatto.
 5. Probe di sessione e autenticazione sono serializzati dalla stessa coda e
    acquisiscono lo stesso lock browser, ma vengono eseguiti una sola volta. Il
    valore predefinito usa 60 secondi per il flusso e un guard esterno di 65
@@ -162,7 +168,8 @@ context, esegue il probe fisso con attestazione passiva e lo salva nuovamente so
 dopo che l'adapter ha verificato autenticazione e tenant. Questa composizione è
 testata localmente; non è ancora stata verificata con un vault live perché il
 tentativo 0.2.2 successivo al rinnovo password si è fermato durante l'hydration
-pre-autenticazione. Un errore di persistenza dopo autenticazione verificata non viene interpretato
+pre-autenticazione e quello 0.2.3 allo stage `DIC_EMAIL`, prima dell'autenticazione.
+Un errore di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
 ## Comando di verifica autenticazione
@@ -193,8 +200,11 @@ route read-only fissa, esegue il login allowlisted solo se necessario, verifica
 marker autenticato e attestazione tenant, persiste il vault e chiude sempre il
 runtime. Può quindi contattare DIC e TeamSystem e attivare MFA/CAPTCHA. Dopo il
 rinnovo della password, il tentativo 0.2.2 si è fermato fail-closed prima
-dell'autenticazione per hydration incompleta; la correzione 0.2.3 non equivale a
-un esito live positivo. In assenza del flag il codice live non viene invocato.
+dell'autenticazione per hydration incompleta. Il tentativo 0.2.3 ha superato quel punto ma si è
+fermato allo stage `DIC_EMAIL` per l'ambiguità padre/input del placeholder. La 0.2.4 usa il target
+nativo univoco, ma non equivale ancora a un esito live positivo. Distribuirla prima di eseguire,
+una sola volta, un nuovo check autorizzato con bot fermo e write disabilitate. In assenza del flag
+il codice live non viene invocato.
 
 ## Invalidazione e rotazione
 

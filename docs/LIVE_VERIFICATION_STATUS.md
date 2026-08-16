@@ -8,8 +8,8 @@
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
 | Discord | setup guild-scoped documentato; `LIVE_DISCORD_UNVERIFIED` | app/token/installazione, Channel ID `#mng-ai`, ruoli e registrazione |
-| DIC | password rinnovata; struttura login e contratto tenant osservati read-only; check 0.2.2 fermato durante hydration pre-auth; funzioni applicative `NEEDS_VALIDATION` | release 0.2.3, `dic-auth-check --live`, vault cifrato e smoke read-only autorizzato |
-| Debian deployment | preparazione runtime `VERIFIED`; servizio `STOPPED` | verifica DIC, registrazione comandi, avvio controllato e restore drill |
+| DIC | password rinnovata; struttura login e contratto tenant osservati read-only; check 0.2.2 fermato durante hydration pre-auth e check 0.2.3 fermato a `DIC_EMAIL` per il target padre/input duplicato; funzioni applicative `NEEDS_VALIDATION` | deployment 0.2.4, esattamente un `dic-auth-check --live` autorizzato, vault cifrato e smoke read-only autorizzato |
+| Debian deployment | preparazione runtime `VERIFIED`; servizio `STOPPED`; unit 0.2.4 ancora da distribuire | unit Debian 12 aggiornata, verifica DIC, registrazione comandi, avvio controllato e restore drill |
 
 Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata: non attesta
 Discord o DIC. Il doctor Debian attesta i prerequisiti controllati, non il login DIC, il gateway
@@ -38,10 +38,14 @@ Sono stati eseguiti soltanto una ricognizione DIC autorizzata in sola lettura e 
 infrastrutturali descritti sopra. La ricognizione ha confermato il flusso di login federato e il
 contratto first-party usato dal tenant guard. La password TeamSystem è stata rinnovata e il secret
 locale aggiornato, ma `dic-auth-check --live` 0.2.2 si è fermato prima dell'autenticazione per una
-race di hydration e non ha creato un vault. La correzione 0.2.3 usa attese bounded/route-aware,
-stage redatti e un solo tentativo di status/autenticazione. Un esito ambiguo dopo il submit viene
-fermato con `CREDENTIAL_SUBMIT`/exit 78 e l'unit systemd non lo riavvia automaticamente. Questi
-controlli sintetici non sono ancora evidenza live.
+race di hydration e non ha creato un vault. La 0.2.3 ha introdotto attese bounded/route-aware,
+stage redatti e un solo tentativo di status/autenticazione; il tentativo live successivo si è
+fermato fail-closed allo stage `DIC_EMAIL`, perché il placeholder corrispondeva sia al componente
+padre sia all'input nativo. La 0.2.4 restringe il campo all'unico input nativo nel contenitore
+pubblico `data-testid="login-email"`, ma questa correzione non è ancora evidenza live. Un esito
+ambiguo dopo il submit viene fermato con `CREDENTIAL_SUBMIT`/exit 78 e l'unit systemd non lo
+riavvia automaticamente. Il bot resta fermo e le write disabilitate; soltanto dopo il deployment
+0.2.4 va eseguito esattamente un nuovo check live autorizzato.
 Nessuna Function ID DIC è quindi classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono
 `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY` e `DISABLED_BY_DEFAULT`, anche quando il relativo
 controllo era visibile nella baseline. `TESTED_WITH_MOCK` indica test sintetici

@@ -3,7 +3,9 @@
 > Stato al 16 agosto 2026: il runtime sul target Debian è preparato e il bot è **STOPPED**.
 > Doctor offline/online e Groq sono verificati. La password TeamSystem è stata rinnovata, ma il
 > check live 0.2.2 si è fermato prima dell'autenticazione per una race di hydration e non ha creato
-> un vault verificato. Distribuire la 0.2.3 e completare il gate DIC prima di avviare il servizio.
+> un vault verificato; quello 0.2.3 si è fermato allo stage `DIC_EMAIL` per l'ambiguità tra
+> componente padre e input nativo. Distribuire la 0.2.4 e completare il gate DIC prima di avviare
+> il servizio.
 
 ## Prerequisiti
 
@@ -28,9 +30,12 @@ Scegliere **systemd** oppure gli script PID. L'unit di esempio usa
 Questa pagina descrive sotto la modalità script PID; per l'installazione systemd vedere la
 [guida end-to-end](INSTALLATION.md#9-scegliere-un-solo-gestore-di-processo).
 
-L'unit systemd 0.2.3 abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Il comando `run`
+L'unit systemd 0.2.4 abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Il comando `run`
 usa 78 per ogni errore di autenticazione, quindi systemd non deve trasformarlo in nuovi tentativi
-di login. Verificare la direttiva nell'unit realmente installata prima di abilitarla.
+di login. Su Debian 12 usa inoltre `ConditionPathExists` e un `ExecCondition` con
+`/usr/bin/test -f`, perché `ConditionPathIsRegularFile` non è supportata. Questi controlli non
+sostituiscono `doctor.sh`, che verifica modalità `0600` di `.env` e configurazione valida.
+Ricopiare e verificare l'unit realmente installata prima di abilitarla.
 
 ## Avvio background
 
@@ -118,7 +123,7 @@ usare `kill -9` manualmente e non eliminare PID/lock senza verificare il process
 
 ## Sequenza di ripresa sul target
 
-Dopo l'aggiornamento alla release 0.2.3, mantenere le write disabilitate e il bot fermo:
+Dopo l'aggiornamento alla release 0.2.4, mantenere le write disabilitate e il bot fermo:
 
 ```bash
 cd /opt/bh-dic
@@ -139,8 +144,10 @@ stati completati. Eseguire una sola verifica live autorizzata:
 
 `encrypted_session_invalidated=false` non è un errore: indica che non esisteva un vault da
 eliminare. La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le
-credenziali. Se il check restituisce JSON con `error_type`/`stage`, non trasformarlo in un loop e
-non avviare il bot.
+credenziali; la 0.2.4 usa per l'e-mail DIC l'unico input nativo sotto il contenitore pubblico
+`data-testid="login-email"`, invece del placeholder che corrispondeva anche al componente padre.
+Eseguire il check live esattamente una volta e soltanto dopo il deployment 0.2.4. Se restituisce
+JSON con `error_type`/`stage`, non trasformarlo in un loop e non avviare il bot.
 
 Se `dic-auth-check --live` restituisce `DicAuthOutcomeUnknownError` con stage
 `CREDENTIAL_SUBMIT`, l'exit code è 78: il submit può essere partito, mentre completamento, tenant
@@ -162,8 +169,9 @@ fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; 
 l'avvio e non attesta il tenant DIC.
 
 Al 16 agosto 2026 la preparazione e il provider check sono riusciti; il tentativo DIC 0.2.2 si è
-fermato durante l'hydration pre-autenticazione. La correzione 0.2.3 è coperta da test sintetici,
-ma deve ancora superare il check live: nessun read/write DIC live è stato completato e il bot
-resta fermo.
+fermato durante l'hydration pre-autenticazione e il tentativo 0.2.3 allo stage `DIC_EMAIL` per il
+target padre/input duplicato. La correzione 0.2.4 è coperta da test sintetici, ma deve ancora
+superare il check live: autenticazione, tenant e Function ID DIC non sono verificati, nessun
+read/write DIC live è stato completato e il bot resta fermo con write disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

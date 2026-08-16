@@ -9,13 +9,14 @@
 - nessuna Function ID DIC read o write verificata live;
 - password TeamSystem rinnovata nel flusso umano e secret `.env` aggiornato;
 - `dic-auth-check --live` 0.2.2 fermato fail-closed prima dell'autenticazione da una race di
-  hydration; vault, sessione e tenant non verificati;
+  hydration;
+- tentativo 0.2.3 fermato fail-closed allo stage `DIC_EMAIL`, perché il placeholder pubblico
+  risolveva sia il componente padre sia l'input nativo; vault, sessione e tenant non verificati;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-I gate sintetici della release 0.2.3 comprendono 561 test e sono registrati
-nell'implementation report. Sul target sono
-stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
-Function ID DIC.
+I gate sintetici della release 0.2.4 comprendono 562 test e sono registrati
+nell'implementation report. Sul target sono stati eseguiti solo i controlli operativi riportati
+sopra; nessun test live ha eseguito una Function ID DIC.
 
 ## Runbook giornaliero
 
@@ -83,8 +84,8 @@ Il check offline non contatta la rete:
 ```
 
 La password TeamSystem è stata rinnovata e il secret locale aggiornato. Dopo aver distribuito la
-release 0.2.3, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e
-eseguire una sola volta il controllo live esplicitamente autorizzato:
+release 0.2.4, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e
+eseguire esattamente una volta il controllo live esplicitamente autorizzato:
 
 ```bash
 .venv/bin/python -m bh_dic invalidate-session
@@ -99,7 +100,9 @@ risultano verificati. Un risultato `encrypted_session_invalidated=false` indica 
 il vault non esisteva.
 
 Nella 0.2.3 i controlli di login attendono l'hydration entro un budget condiviso, soltanto sulle
-route esatte e con un solo controllo visibile. Session status e autenticazione usano un'unica
+route esatte e con un solo controllo visibile. La 0.2.4 restringe il campo e-mail DIC all'unico
+input nativo sotto il contenitore pubblico `data-testid="login-email"`, eliminando l'ambiguità
+padre/input osservata nel tentativo 0.2.3. Session status e autenticazione usano un'unica
 esecuzione serializzata: timeout o errori di trasporto non ritentano le credenziali. Gli errori
 sono JSON con i soli campi `error_type` e `stage`; non estrarre messaggi interni, URL o DOM e non
 eseguire il comando in loop. `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` con exit code 78
@@ -148,8 +151,12 @@ catena. Vedere [Audit](AUDIT.md).
 `--force` è una scelta esplicita successiva a diagnosi, non il default.
 
 In modalità systemd l'unit installata deve includere `RestartPreventExitStatus=78`: `run` usa 78
-per ogni errore di autenticazione, impedendo a `Restart=on-failure` di rilanciare il login. Dopo un
-update dell'unit, usare `systemd-analyze verify` e `systemctl daemon-reload` a servizio fermo.
+per ogni errore di autenticazione, impedendo a `Restart=on-failure` di rilanciare il login. Su
+Debian 12 l'unit 0.2.4 usa `ConditionPathExists=/opt/bh-dic/.env` più
+`ExecCondition=/usr/bin/test -f /opt/bh-dic/.env`, non la direttiva non supportata
+`ConditionPathIsRegularFile`. `doctor.sh` resta il controllo che impone modalità `0600` di `.env`
+e configurazione valida. Dopo un update dell'unit, ricopiarla, usare `systemd-analyze verify` e
+`systemctl daemon-reload` a servizio fermo.
 
 ### Backup e restore
 

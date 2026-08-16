@@ -111,7 +111,7 @@ DEFAULT_SELECTORS = SelectorRegistry(
             test_id("app-sidebar"),
             css("nav a[href='/it/app/employees/list']"),
         ),
-        "auth.dic_email": (placeholder("Inserisci la tua e-mail"),),
+        "auth.dic_email": (css("[data-testid='login-email'] input"),),
         "auth.dic_submit": (
             test_id("login-submit"),
             role("button", "Accedi", exact=True),

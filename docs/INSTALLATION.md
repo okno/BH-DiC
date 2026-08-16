@@ -6,8 +6,10 @@ specialistici collegati approfondiscono i singoli controlli.
 
 > Stato al 16 agosto 2026: il runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati; il
 > bot è fermo. La password TeamSystem è stata rinnovata e il secret locale aggiornato; il check
-> DIC 0.2.2 si è però fermato prima dell'autenticazione per una race di hydration. Non esiste
-> ancora un vault autenticato e nessuna Function ID DIC è stata collaudata live. Tutte le write
+> DIC 0.2.2 si è fermato prima dell'autenticazione per una race di hydration e quello 0.2.3 allo
+> stage `DIC_EMAIL`, perché il placeholder risolveva sia il componente padre sia l'input nativo.
+> La 0.2.4 corregge il selettore ma non è ancora stata verificata live. Non esiste ancora un vault
+> autenticato e nessuna Function ID DIC è stata collaudata live. Tutte le write
 > devono restare `DISABLED_BY_POLICY`; questa guida non autorizza l'avvio.
 
 ## 1. Decisioni prima dell'installazione
@@ -279,8 +281,9 @@ sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check
 
 Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale,
 aggiornare `DIC_PASSWORD` localmente senza mostrarla e invalidare l'eventuale sessione precedente.
-Sul target documentato questi due passaggi sono già stati completati. Distribuire almeno la
-release 0.2.3 e, con autorizzazione esplicita alla rete DIC, eseguire una sola verifica:
+Sul target documentato questi due passaggi sono già stati completati. Distribuire la release
+0.2.4 e, soltanto dopo il deployment, con autorizzazione esplicita alla rete DIC, eseguire una
+sola verifica:
 
 ```bash
 sudo -u bh-dic -H .venv/bin/python -m bh_dic invalidate-session
@@ -295,7 +298,9 @@ budget residuo e segnala `SESSION_PROBE` se non può concludersi entro la deadli
 Function ID HR. Password scaduta, MFA/CAPTCHA, redirect
 inatteso o attestazione non valida impongono stop. Dalla 0.2.3 il polling dei controlli è limitato,
 route-aware e richiede un solo controllo visibile; status e autenticazione sono eseguiti una volta
-sola, senza retry automatico delle credenziali. Un errore mostra soltanto JSON
+sola, senza retry automatico delle credenziali. Nella 0.2.4 il campo e-mail DIC è inoltre ristretto
+all'unico input nativo sotto il contenitore pubblico `data-testid="login-email"`: non usa il
+placeholder che nella 0.2.3 corrispondeva anche al componente padre. Un errore mostra soltanto JSON
 `error_type`/`stage`: non stampare eccezioni interne, HTML o URL e non ripetere il comando in loop.
 `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` usa exit code 78 e indica che il submit può essere
 partito senza che completamento, tenant o vault siano dimostrabili: fermarsi e verificare con una
@@ -317,6 +322,9 @@ sudo install -o root -g root -m 0644 \
   /opt/bh-dic/infrastructure/systemd/bh-dic.service.example \
   /etc/systemd/system/bh-dic.service
 grep -qxF 'RestartPreventExitStatus=78' /etc/systemd/system/bh-dic.service
+grep -qxF 'ConditionPathExists=/opt/bh-dic/.env' /etc/systemd/system/bh-dic.service
+grep -qxF 'ExecCondition=/usr/bin/test -f /opt/bh-dic/.env' /etc/systemd/system/bh-dic.service
+! grep -q '^ConditionPathIsRegularFile=' /etc/systemd/system/bh-dic.service
 sudo systemd-analyze verify /etc/systemd/system/bh-dic.service
 sudo systemctl daemon-reload
 ```
@@ -325,6 +333,11 @@ sudo systemctl daemon-reload
 restituisce 78 per ogni errore di autenticazione e systemd non deve riavviare automaticamente il
 processo, perché ciò potrebbe reinviare credenziali. Dopo ogni aggiornamento del template,
 ricopiare e rivalidare l'unit a servizio fermo prima di abilitarla.
+
+Su Debian 12 `ConditionPathIsRegularFile` non è una direttiva systemd supportata. L'unit 0.2.4 usa
+quindi `ConditionPathExists` come condizione di unit e `/usr/bin/test -f` come `ExecCondition` del
+servizio. Questi controlli provano esistenza e tipo del file; non sostituiscono `doctor.sh`, che
+continua a richiedere `.env` in modalità `0600` e una configurazione runtime valida.
 
 La preparazione termina qui con il servizio disabled/stopped. Dopo autorizzazione distinta:
 

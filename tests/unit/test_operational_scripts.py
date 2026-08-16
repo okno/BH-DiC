@@ -151,7 +151,10 @@ def test_systemd_example_is_hardened_and_not_self_enabling() -> None:
     expected = (
         "User=bh-dic",
         "Group=bh-dic",
+        "ConditionPathExists=/opt/bh-dic/.env",
         "EnvironmentFile=/opt/bh-dic/.env",
+        "ExecCondition=/usr/bin/test -f /opt/bh-dic/.env",
+        "ExecStartPre=/opt/bh-dic/scripts/doctor.sh --quiet",
         "ExecStart=/opt/bh-dic/scripts/run-foreground.sh",
         "RestartPreventExitStatus=78",
         "UMask=0077",
@@ -162,6 +165,7 @@ def test_systemd_example_is_hardened_and_not_self_enabling() -> None:
         "ReadWritePaths=/opt/bh-dic/var",
     )
     assert all(setting in text for setting in expected)
+    assert "ConditionPathIsRegularFile=" not in text
     assert "systemctl enable" not in text
     assert "systemctl start" not in text
 

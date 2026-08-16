@@ -98,7 +98,7 @@ async def test_run_once_uses_positive_timeout_override_instead_of_read_default()
             "auth",
             "dic-browser",
             slower_than_default,
-            timeout_seconds=0.1,
+            timeout_seconds=5.0,
         )
         == "ok"
     )

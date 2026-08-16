@@ -4,7 +4,7 @@ Documentation=https://github.com/OWNER/BH-DiC
 Wants=network-online.target
 After=network-online.target
 ConditionPathIsDirectory=/opt/bh-dic
-ConditionPathIsRegularFile=/opt/bh-dic/.env
+ConditionPathExists=/opt/bh-dic/.env
 
 [Service]
 Type=simple
@@ -12,6 +12,7 @@ User=bh-dic
 Group=bh-dic
 WorkingDirectory=/opt/bh-dic
 EnvironmentFile=/opt/bh-dic/.env
+ExecCondition=/usr/bin/test -f /opt/bh-dic/.env
 ExecStartPre=/opt/bh-dic/scripts/doctor.sh --quiet
 ExecStart=/opt/bh-dic/scripts/run-foreground.sh
 Restart=on-failure

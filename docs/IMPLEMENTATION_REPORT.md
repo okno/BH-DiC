@@ -37,7 +37,9 @@ source è stata aggiunta.
 Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
 TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato; il check DIC headless
 0.2.2 si è però fermato fail-closed prima dell'autenticazione per una race di hydration e non ha
-creato un vault. Nessuna Function ID DIC read/write è stata eseguita.
+creato un vault. Il tentativo 0.2.3 ha superato l'hydration ma si è fermato fail-closed allo stage
+`DIC_EMAIL`, perché il placeholder pubblico individuava sia il componente padre sia l'input nativo.
+Autenticazione, tenant e Function ID DIC restano non verificati live.
 
 ## Implementazione
 
@@ -60,8 +62,13 @@ Completati nel codice e testati con risorse sintetiche:
   `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT`, exit 78 e restart systemd inibito;
 - probe di sessione ripristinata confinato al budget residuo del login e classificato
   `SESSION_PROBE` quando non può dichiarare successo entro la deadline;
+- correzione 0.2.4 del campo e-mail DIC, ristretto all'unico input nativo sotto il contenitore
+  pubblico `data-testid="login-email"`, con regressione sintetica per il caso padre/input duplicato;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
+- unit systemd 0.2.4 compatibile con Debian 12: `ConditionPathExists` più
+  `ExecCondition=/usr/bin/test -f` al posto della direttiva non supportata
+  `ConditionPathIsRegularFile`; `doctor.sh` conserva i gate `.env` `0600`/configurazione;
 - documentazione sicurezza, privacy, operazioni, Wazuh, deployment e troubleshooting.
 
 Stato funzionale:
@@ -79,23 +86,24 @@ Stato funzionale:
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — release 0.2.3
+## Test e gate — release 0.2.4
 
-I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.3, senza
-avviare bot/browser e senza chiamare Discord, DIC o provider. Provano soltanto i confini coperti da
-fixture sintetiche; non trasformano alcuna integrazione in `LIVE_VERIFIED`.
+I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.4, senza
+avviare bot/browser applicativi e senza chiamare Discord, DIC autenticato o provider. L'ispezione
+del login DIC ha riguardato soltanto il DOM pubblico e non ha compilato campi. Questi gate non
+trasformano alcuna integrazione in `LIVE_VERIFIED`.
 
 | Comando | Risultato |
 |---|---|
 | `ruff format --check .` | PASS: 185 file già formattati |
 | `ruff check .` | PASS: zero issue |
 | `mypy src` | PASS: 108 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 561 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 561 test, 1 warning esterno `discord.py/audioop` |
-| `coverage report --show-missing --fail-under=80` | PASS: 86%; 8.405 statement / 915 miss, 2.524 branch / 486 partial |
+| `pytest` (pytest 9.0.3) | PASS: 562 test, 1 warning esterno `discord.py/audioop` |
+| `coverage run --branch -m pytest` | PASS: 562 test, 1 warning esterno `discord.py/audioop` |
+| `coverage report --show-missing --fail-under=80` | PASS: 86%; 8.405 statement / 916 miss, 2.524 branch / 487 partial |
 | `bandit -q -r src` | PASS: nessun issue riportato |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS: nessuna vulnerabilità nota nel lock |
-| `gitleaks git . --log-opts v0.2.2..HEAD --redact --no-banner` | Da registrare al gate di consegna 0.2.3 |
+| `gitleaks git --staged . --redact --no-banner` | PASS: nessun leak nel contenuto candidato |
 | parsing YAML/XML docs/security | PASS |
 | scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
 | 22 script `bash -n` + contratti/lifecycle ops | PASS: 32 casi; start fail-closed e status/stop sintetici inclusi |
@@ -138,12 +146,15 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
 - nessuna Function ID DIC write/read live eseguita; processo bot target fermo;
 - l'unit systemd impedisce il restart su exit 78; il comando `run` usa tale codice per ogni errore
-  di autenticazione, evitando nuovi login automatici.
+  di autenticazione, evitando nuovi login automatici; su Debian 12 l'unit 0.2.4 usa
+  `ConditionPathExists` più un `ExecCondition` di file regolare, mentre `doctor.sh` verifica
+  modalità `0600` e configurazione.
 
 ## Problemi residui
 
 - password TeamSystem rinnovata, ma autenticazione, tenant e creazione vault devono ancora
-  superare `dic-auth-check --live` con la correzione 0.2.3;
+  superare esattamente un `dic-auth-check --live` autorizzato dopo il deployment della correzione
+  0.2.4; il tentativo 0.2.3 è terminato a `DIC_EMAIL` prima dell'autenticazione;
 - Discord gateway e registrazione comandi non ancora verificati end-to-end;
 - Groq/modello verificati live; OpenAI e llama restano non verificati;
 - selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;
