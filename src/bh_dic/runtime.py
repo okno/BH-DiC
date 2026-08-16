@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from bh_dic.approvals.storage import ApprovalRepository, SqlAlchemyApprovalRepos
 from bh_dic.audit.service import AuditService
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
-from bh_dic.dic.auth import DicSessionManager
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage, DicSessionManager
 from bh_dic.dic.browser import AsyncChromiumSession, BrowserLaunchOptions
 from bh_dic.dic.mock import MockDicAdapter
 from bh_dic.dic.models import DicCredentials
@@ -45,6 +46,15 @@ from bh_dic.services.browser_runtime import (
 from bh_dic.services.dic_service import DicService
 
 _MOCK_SECRET = b"BH-DiC synthetic mock key only!!"
+
+
+async def _close_browser_without_masking_primary(
+    browser_session: AsyncChromiumSession,
+) -> None:
+    try:
+        await browser_session.close()
+    except (asyncio.CancelledError, Exception):
+        return
 
 
 class RepositoryPendingViewSource(PendingViewSource):
@@ -192,10 +202,18 @@ async def _adapter(
                 totp=settings.dic_totp_secret,
             )
         )
-        await session_manager.persist(browser_session)
+        persist_failed = False
+        try:
+            await session_manager.persist(browser_session)
+        except asyncio.CancelledError:
+            persist_failed = True
+        except Exception:
+            persist_failed = True
+        if persist_failed:
+            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
         return live_adapter, browser_session, session_manager
-    except Exception:
-        await browser_session.close()
+    except BaseException:
+        await _close_browser_without_masking_primary(browser_session)
         raise
 
 

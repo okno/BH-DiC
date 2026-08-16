@@ -5,6 +5,32 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-16
+
+### Fixed
+
+- Il login DIC attende ora in modo limitato l'hydration dei controlli sulle sole route esatte
+  consentite, rifiuta controlli visibili ambigui e mantiene il CAPTCHA sotto verifica durante
+  l'attesa. Il pulsante DIC conserva il `data-testid` e aggiunge il fallback semantico pubblico
+  verificato sul ruolo `button` con nome esatto `Accedi`.
+- Probe di sessione e autenticazione passano dalla coda browser con un solo tentativo e un budget
+  dedicato pari al timeout di login più cinque secondi; timeout o errori di trasporto non provocano
+  un nuovo invio automatico delle credenziali.
+- `dic-auth-check` restituisce per gli errori soltanto JSON con tipo e stage appartenente a un
+  insieme chiuso, senza messaggi provider, URL, selettori, tenant, credenziali o contenuti DOM.
+- Se il submit della credenziale può essere arrivato a TeamSystem ma completamento, tenant probe o
+  persistenza del vault non sono dimostrabili, il risultato è
+  `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` con exit code 78 e nessun retry. Il comando
+  `run` usa lo stesso exit code per ogni errore di autenticazione e l'unit systemd impedisce il
+  restart automatico su 78.
+
+### Changed
+
+- La documentazione operativa registra il rinnovo umano della password TeamSystem e
+  l'aggiornamento del secret locale. Il tentativo live con la 0.2.2 si è fermato prima
+  dell'autenticazione per una race di hydration; sessione, tenant e Function ID DIC restano da
+  verificare live, con bot fermo e write disabilitate.
+
 ## [0.2.2] - 2026-08-16
 
 ### Fixed
@@ -71,7 +97,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/okno/BH-DiC/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/okno/BH-DiC/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/okno/BH-DiC/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/okno/BH-DiC/releases/tag/v0.2.0

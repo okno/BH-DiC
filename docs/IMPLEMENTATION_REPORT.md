@@ -34,9 +34,10 @@ source è stata aggiunta.
 | Doctor | offline e online riusciti |
 | Bot target | `STOPPED`; nessun avvio di produzione eseguito |
 
-Il provider Groq e il modello configurato hanno superato il probe live chiuso. Il login DIC
-headless si è fermato fail-closed sulla password TeamSystem scaduta e non ha creato un vault;
-nessuna Function ID DIC read/write è stata eseguita.
+Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
+TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato; il check DIC headless
+0.2.2 si è però fermato fail-closed prima dell'autenticazione per una race di hydration e non ha
+creato un vault. Nessuna Function ID DIC read/write è stata eseguita.
 
 ## Implementazione
 
@@ -53,6 +54,12 @@ Completati nel codice e testati con risorse sintetiche:
 - audit append-only HMAC e verifica catena;
 - adapter mock completo, Page Object e adapter Playwright; login federato con allowlist esatta,
   probe di sessione restaurata e attestazione tenant passiva first-party;
+- autenticazione 0.2.3 con polling bounded e route-aware dei controlli visibili univoci, fallback
+  DIC pubblico `Accedi`, stage diagnostici chiusi e status/login serializzati a tentativo singolo
+  senza retry delle credenziali; gli esiti non dimostrabili dopo il submit usano
+  `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT`, exit 78 e restart systemd inibito;
+- probe di sessione ripristinata confinato al budget residuo del login e classificato
+  `SESSION_PROBE` quando non può dichiarare successo entro la deadline;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
 - documentazione sicurezza, privacy, operazioni, Wazuh, deployment e troubleshooting.
@@ -72,9 +79,9 @@ Stato funzionale:
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — release 0.2.2
+## Test e gate — release 0.2.3
 
-I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.2, senza
+I risultati seguenti sono stati osservati il 16 agosto 2026 sul worktree candidato 0.2.3, senza
 avviare bot/browser e senza chiamare Discord, DIC o provider. Provano soltanto i confini coperti da
 fixture sintetiche; non trasformano alcuna integrazione in `LIVE_VERIFIED`.
 
@@ -83,12 +90,12 @@ fixture sintetiche; non trasformano alcuna integrazione in `LIVE_VERIFIED`.
 | `ruff format --check .` | PASS: 185 file già formattati |
 | `ruff check .` | PASS: zero issue |
 | `mypy src` | PASS: 108 source file, zero issue |
-| `pytest` (pytest 9.0.3) | PASS: 518 test, 1 warning esterno `discord.py/audioop` |
-| `coverage run --branch -m pytest` | PASS: 518 test |
-| `coverage report --show-missing --fail-under=80` | PASS: 86% branch-aware (8.111 statement, 2.442 branch), soglia 80% |
+| `pytest` (pytest 9.0.3) | PASS: 561 test, 1 warning esterno `discord.py/audioop` |
+| `coverage run --branch -m pytest` | PASS: 561 test, 1 warning esterno `discord.py/audioop` |
+| `coverage report --show-missing --fail-under=80` | PASS: 86%; 8.405 statement / 915 miss, 2.524 branch / 486 partial |
 | `bandit -q -r src` | PASS: nessun issue riportato |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS: nessuna vulnerabilità nota nel lock |
-| `gitleaks git . --log-opts v0.2.1..HEAD --redact --no-banner` | PASS: gitleaks 8.30.1, 1 commit/circa 4,7 KB, nessun finding |
+| `gitleaks git . --log-opts v0.2.2..HEAD --redact --no-banner` | Da registrare al gate di consegna 0.2.3 |
 | parsing YAML/XML docs/security | PASS |
 | scansione pattern secret sui docs/config | PASS mirato; non sostituisce gitleaks repository-wide |
 | 22 script `bash -n` + contratti/lifecycle ops | PASS: 32 casi; start fail-closed e status/stop sintetici inclusi |
@@ -129,11 +136,14 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
-- nessuna Function ID DIC write/read live eseguita; processo bot target fermo.
+- nessuna Function ID DIC write/read live eseguita; processo bot target fermo;
+- l'unit systemd impedisce il restart su exit 78; il comando `run` usa tale codice per ogni errore
+  di autenticazione, evitando nuovi login automatici.
 
 ## Problemi residui
 
-- password TeamSystem scaduta: autenticazione DIC e creazione vault bloccate fino all'azione umana;
+- password TeamSystem rinnovata, ma autenticazione, tenant e creazione vault devono ancora
+  superare `dic-auth-check --live` con la correzione 0.2.3;
 - Discord gateway e registrazione comandi non ancora verificati end-to-end;
 - Groq/modello verificati live; OpenAI e llama restano non verificati;
 - selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;

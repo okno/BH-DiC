@@ -153,6 +153,7 @@ def test_systemd_example_is_hardened_and_not_self_enabling() -> None:
         "Group=bh-dic",
         "EnvironmentFile=/opt/bh-dic/.env",
         "ExecStart=/opt/bh-dic/scripts/run-foreground.sh",
+        "RestartPreventExitStatus=78",
         "UMask=0077",
         "NoNewPrivileges=true",
         "ProtectSystem=strict",

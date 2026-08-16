@@ -112,7 +112,10 @@ DEFAULT_SELECTORS = SelectorRegistry(
             css("nav a[href='/it/app/employees/list']"),
         ),
         "auth.dic_email": (placeholder("Inserisci la tua e-mail"),),
-        "auth.dic_submit": (test_id("login-submit"),),
+        "auth.dic_submit": (
+            test_id("login-submit"),
+            role("button", "Accedi", exact=True),
+        ),
         "auth.teamsystem_email": (css("#EmailAddress_Email"),),
         "auth.teamsystem_email_submit": (css("#submitEmailBtn"),),
         "auth.teamsystem_password": (css("#selectPassword"),),

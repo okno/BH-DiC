@@ -21,11 +21,12 @@ inatteso falliscono chiuso. Il percorso passwordless non viene usato. La route
 fail-closed che richiede rinnovo umano.
 
 Una ricognizione live autorizzata in sola lettura ha osservato questa struttura e
-la schermata `PasswordExpired`. Una singola submission della password è arrivata
-a tale schermata, quindi il login headless finale non è stato completato e non è
-stato creato un vault. Nessuna funzione HR read/write è stata eseguita. I
-controlli descritti sotto sono coperti da test sintetici e devono ancora essere
-verificati end-to-end con una credenziale TeamSystem valida.
+la schermata `PasswordExpired`. La password TeamSystem è stata poi rinnovata nel
+flusso umano e il secret locale è stato aggiornato. Il primo
+`dic-auth-check --live` della release 0.2.2 si è fermato prima dell'autenticazione per una race di
+hydration classificata `DicUiChangedError`: non ha creato un vault e non ha
+eseguito Function ID HR. La release 0.2.3 corregge il percorso con test sintetici;
+sessione e tenant devono ancora essere verificati end-to-end sul target.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
@@ -46,7 +47,7 @@ Le variabili DIC supportate sono:
 | `DIC_HEADLESS` | Modalità browser | `true` per impostazione predefinita. |
 | `DIC_LOCALE` | Locale browser | Valore predefinito `it-IT`. |
 | `DIC_TIMEZONE` | Fuso browser | Nome IANA valido; predefinito `Europe/Rome`. |
-| `DIC_LOGIN_TIMEOUT_SECONDS` | Timeout login | Da 5 a 300 secondi; predefinito 60. |
+| `DIC_LOGIN_TIMEOUT_SECONDS` | Budget login | Da 5 a 300 secondi; predefinito 60. È condiviso dall'intero flusso e protetto da un limite esterno con cinque secondi di margine. |
 | `DIC_NAVIGATION_TIMEOUT_SECONDS` | Timeout navigazione | Da 5 a 180 secondi; predefinito 30. |
 | `DIC_MAX_CONCURRENT_BROWSER_OPERATIONS` | Concorrenza | Predefinito 1; intervallo validato 1-4. |
 | `DIC_SESSION_STATE_PATH` | Vault cifrato | Predefinito `./var/session/dic_session.enc`; il vault richiede un path assoluto dopo la risoluzione. |
@@ -74,16 +75,31 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    richiesta di autenticazione. La route dipendenti, il marker autenticato e una
    attestazione tenant valida producono `AUTHENTICATED`; qualunque altra
    combinazione fallisce chiuso.
-3. Se serve un nuovo login, `authenticate()` segue soltanto la sequenza
-   allowlisted DIC → `LoginEmail` → `LoginPassword`, compilando i segreti
-   direttamente nei controlli previsti. Non espone primitive di navigazione
-   arbitrarie.
-4. `PasswordExpired`, CAPTCHA o un passaggio interattivo non supportato
+3. Se serve un nuovo login, i controlli vengono cercati entro un solo budget
+   limitato, ricontrollando a ogni polling la route esatta, il CAPTCHA e
+   l'unicità del controllo visibile. Un cambio di origine/path, zero controlli a
+   scadenza o più controlli visibili fallisce chiuso.
+4. `authenticate()` segue soltanto la sequenza allowlisted DIC → `LoginEmail` →
+   `LoginPassword`, compilando i segreti direttamente nei controlli previsti.
+   Non espone primitive di navigazione arbitrarie. Il submit DIC usa prima il
+   `data-testid` e poi il fallback pubblico verificato `button`/`Accedi` esatto.
+5. Probe di sessione e autenticazione sono serializzati dalla stessa coda e
+   acquisiscono lo stesso lock browser, ma vengono eseguiti una sola volta. Il
+   valore predefinito usa 60 secondi per il flusso e un guard esterno di 65
+   secondi; un timeout o errore di trasporto non ritenta le credenziali.
+   Se il login incontra una route applicativa già ripristinata, il relativo probe
+   usa soltanto il tempo residuo dello stesso budget e ricontrolla la deadline
+   prima di dichiarare successo; un superamento viene classificato allo stage
+   `SESSION_PROBE`.
+6. `PasswordExpired`, CAPTCHA o un passaggio interattivo non supportato
    interrompono il flusso con un errore tipizzato che richiede intervento umano.
-5. Qualunque campo MFA visibile interrompe il flusso con `DicMfaRequiredError`; questa versione
+7. Qualunque campo MFA visibile interrompe il flusso con `DicMfaRequiredError`; questa versione
    non compila né invia codici MFA e non usa controlli passwordless non osservati.
-6. Dopo il submit, l'adapter ripete il probe sulla route fissa e richiede marker
-   autenticato e corrispondenza esatta del tenant prima di persistere la sessione.
+8. Dopo il submit, l'adapter ripete il probe sulla route fissa e richiede marker
+   autenticato e corrispondenza esatta del tenant prima di persistere la sessione. Se il click può
+   essere partito ma completamento, tenant probe o persistenza del vault non sono dimostrabili,
+   restituisce `DicAuthOutcomeUnknownError` allo stage `CREDENTIAL_SUBMIT`: l'operatore non deve
+   ritentare automaticamente.
 
 ## Attestazione tenant passiva
 
@@ -145,7 +161,9 @@ browser context e persistenza: carica lo storage state cifrato prima di creare i
 context, esegue il probe fisso con attestazione passiva e lo salva nuovamente solo
 dopo che l'adapter ha verificato autenticazione e tenant. Questa composizione è
 testata localmente; non è ancora stata verificata con un vault live perché il
-login autorizzato si è fermato sulla password scaduta.
+tentativo 0.2.2 successivo al rinnovo password si è fermato durante l'hydration
+pre-autenticazione. Un errore di persistenza dopo autenticazione verificata non viene interpretato
+come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
 ## Comando di verifica autenticazione
 
@@ -173,9 +191,10 @@ Solo un operatore autorizzato può richiedere esplicitamente il controllo live:
 `--live` costruisce il runtime browser, prova prima il ripristino mediante la
 route read-only fissa, esegue il login allowlisted solo se necessario, verifica
 marker autenticato e attestazione tenant, persiste il vault e chiude sempre il
-runtime. Può quindi contattare DIC e TeamSystem e attivare MFA/CAPTCHA. Il tentativo
-osservato si è fermato fail-closed su `PasswordExpired`: non ha prodotto vault né
-eseguito Function ID DIC. In assenza del flag il codice live non viene invocato.
+runtime. Può quindi contattare DIC e TeamSystem e attivare MFA/CAPTCHA. Dopo il
+rinnovo della password, il tentativo 0.2.2 si è fermato fail-closed prima
+dell'autenticazione per hydration incompleta; la correzione 0.2.3 non equivale a
+un esito live positivo. In assenza del flag il codice live non viene invocato.
 
 ## Invalidazione e rotazione
 
@@ -202,9 +221,23 @@ questa corrispondenza l'adapter rifiuta la sessione.
 ## Diagnostica senza segreti
 
 È sicuro registrare solo stato astratto ed errori tipizzati: browser disponibile,
-sessione autenticata/non autenticata/scaduta, tenant configurato sì/no e route
-attesa. Non registrare valori di username, password, TOTP, chiave Fernet, cookie,
-header, HTML autenticato o `storage_state`.
+sessione autenticata/non autenticata/scaduta, tenant configurato sì/no e stage
+chiuso. Non registrare valori di username, password, TOTP, chiave Fernet, cookie,
+header, URL, selettori, HTML autenticato o `storage_state`.
+
+Gli errori del comando sono JSON e contengono esclusivamente `error_type` e uno
+stage tra `DIC_EMAIL`, `DIC_SUBMIT`, `TEAMSYSTEM_EMAIL`,
+`TEAMSYSTEM_EMAIL_SUBMIT`, `TEAMSYSTEM_CREDENTIAL`,
+`TEAMSYSTEM_CREDENTIAL_SUBMIT`, `CREDENTIAL_SUBMIT`, `SESSION_PROBE` e
+`UNCLASSIFIED`. Non mostrare il messaggio
+interno dell'eccezione per ottenere maggiori dettagli e non attivare trace o
+screenshot sul tenant live senza un'autorizzazione separata.
+
+`CREDENTIAL_SUBMIT` significa che l'invio della credenziale può avere raggiunto l'IdP, ma il
+risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con exit code 78. Anche
+il comando di servizio `run` usa 78 per qualunque `DicAuthenticationError`, così l'unit systemd con
+`RestartPreventExitStatus=78` non avvia un nuovo tentativo. Fermare l'automazione, non rilanciare
+in loop e verificare lo stato dell'account con una procedura umana autorizzata.
 
 In caso di errore:
 
@@ -212,7 +245,9 @@ In caso di errore:
 2. verificare solo la presenza, non il valore, delle variabili obbligatorie;
 3. verificare proprietà e permessi del path del vault;
 4. invalidare una sessione scaduta o illeggibile;
-5. classificare password scaduta, CAPTCHA/MFA o redirect inatteso come azione
+5. usare lo stage chiuso per individuare il solo passaggio da verificare, senza
+   stampare DOM, URL o valori dei campi e senza ampliare i selettori;
+6. classificare password scaduta, CAPTCHA/MFA o redirect inatteso come azione
    umana richiesta, senza usare passwordless o allargare l'allowlist;
-6. classificare attestazione tenant assente, invalida o diversa come errore di autorizzazione, senza
+7. classificare attestazione tenant assente, invalida o diversa come errore di autorizzazione, senza
    tentare altre aziende.

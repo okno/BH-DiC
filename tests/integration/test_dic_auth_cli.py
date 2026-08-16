@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,8 +11,19 @@ import pytest
 from pydantic import SecretStr
 from typer.testing import CliRunner
 
+import bh_dic.runtime as runtime_module
 from bh_dic import cli
 from bh_dic.config import AppSettings
+from bh_dic.dic.auth import (
+    DicAuthCaptchaRequiredError,
+    DicAuthCompletionError,
+    DicAuthMfaRequiredError,
+    DicAuthOutcomeUnknownError,
+    DicAuthStage,
+    DicAuthUiChangedError,
+    PlaywrightAuthenticator,
+)
+from bh_dic.dic.errors import DicPasswordExpiredError
 from bh_dic.dic.models import SessionState, SessionStatus, StoredBrowserSession
 from bh_dic.dic.session_vault import FernetSessionVault
 
@@ -179,3 +191,206 @@ def test_live_flag_is_explicit_and_can_be_tested_without_external_access(
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["mode"] == "live"
     live_check.assert_awaited_once_with(settings)
+
+
+def test_live_failure_outputs_only_closed_stage_and_error_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
+    live_check = AsyncMock(side_effect=DicAuthUiChangedError(DicAuthStage.DIC_EMAIL))
+    monkeypatch.setattr(cli, "_dic_auth_check_live", live_check)
+
+    result = runner.invoke(cli.app, ["dic-auth-check", "--live"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr) == {
+        "error_type": "DicAuthUiChangedError",
+        "stage": "DIC_EMAIL",
+    }
+
+
+def test_live_unknown_outcome_uses_stable_nonrestartable_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
+    monkeypatch.setattr(
+        cli,
+        "_dic_auth_check_live",
+        AsyncMock(side_effect=DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)),
+    )
+
+    result = runner.invoke(cli.app, ["dic-auth-check", "--live"])
+
+    assert result.exit_code == cli.DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE == 78
+    assert json.loads(result.stderr) == {
+        "error_type": "DicAuthOutcomeUnknownError",
+        "stage": "CREDENTIAL_SUBMIT",
+    }
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_stage"),
+    [
+        (DicPasswordExpiredError("private-startup-auth-marker"), "UNCLASSIFIED"),
+        (DicAuthUiChangedError(DicAuthStage.DIC_EMAIL), "DIC_EMAIL"),
+        (DicAuthCaptchaRequiredError(DicAuthStage.DIC_EMAIL), "DIC_EMAIL"),
+        (
+            DicAuthMfaRequiredError(DicAuthStage.TEAMSYSTEM_CREDENTIAL_SUBMIT),
+            "TEAMSYSTEM_CREDENTIAL_SUBMIT",
+        ),
+        (
+            DicAuthCompletionError(DicAuthStage.TEAMSYSTEM_CREDENTIAL_SUBMIT),
+            "TEAMSYSTEM_CREDENTIAL_SUBMIT",
+        ),
+        (
+            DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT),
+            "CREDENTIAL_SUBMIT",
+        ),
+    ],
+)
+def test_run_uses_nonrestartable_exit_for_every_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: Exception,
+    expected_stage: str,
+) -> None:
+    settings = _settings(tmp_path)
+    sensitive = "private-startup-auth-marker"
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
+    monkeypatch.setattr(cli, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_gateway", AsyncMock(side_effect=failure))
+
+    result = runner.invoke(cli.app, ["run"])
+
+    assert result.exit_code == cli.DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE == 78
+    assert json.loads(result.stderr) == {
+        "error_type": type(failure).__name__,
+        "stage": expected_stage,
+    }
+    assert sensitive not in result.output
+
+
+def test_password_click_failure_flows_through_runtime_cleanup_to_run_exit_78(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    sensitive = "private-integrated-click-marker"
+    events: list[str] = []
+
+    class FailingPasswordSubmit:
+        clicks = 0
+
+        async def click(self) -> None:
+            self.clicks += 1
+            raise RuntimeError(sensitive)
+
+    submit = FailingPasswordSubmit()
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            pass
+
+        def load_storage_state(self) -> None:
+            return None
+
+        async def persist(self, _session: object) -> None:
+            raise AssertionError("unknown outcome must not be persisted")
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, _state: object) -> object:
+            return object()
+
+        async def close(self) -> None:
+            events.append("browser-close")
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **_kwargs: object) -> None:
+            pass
+
+        async def ensure_authenticated(self, _credentials: object) -> None:
+            auth = PlaywrightAuthenticator(  # type: ignore[arg-type]
+                object(),
+                "https://secure.dipendentincloud.it",
+                expected_tenant_id="123456789",
+            )
+            auth._flow_deadline = time.monotonic() + 5
+            await auth._click_control(
+                submit,  # type: ignore[arg-type]
+                DicAuthStage.TEAMSYSTEM_CREDENTIAL_SUBMIT,
+                outcome_unknown_on_failure=True,
+            )
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    async def run_gateway(_settings: AppSettings) -> None:
+        await runtime_module._adapter(
+            _settings,
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+        )
+
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
+    monkeypatch.setattr(cli, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_gateway", run_gateway)
+
+    result = runner.invoke(cli.app, ["run"])
+
+    assert result.exit_code == cli.DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE == 78
+    assert json.loads(result.stderr) == {
+        "error_type": "DicAuthOutcomeUnknownError",
+        "stage": "CREDENTIAL_SUBMIT",
+    }
+    assert submit.clicks == 1
+    assert events == ["browser-close"]
+    assert sensitive not in result.output
+
+
+def test_live_unclassified_failure_never_outputs_exception_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _settings(tmp_path)
+    sensitive = "private-provider-message"
+    monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
+    monkeypatch.setattr(
+        cli,
+        "_dic_auth_check_live",
+        AsyncMock(side_effect=RuntimeError(sensitive)),
+    )
+
+    result = runner.invoke(cli.app, ["dic-auth-check", "--live"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr) == {
+        "error_type": "RuntimeError",
+        "stage": "UNCLASSIFIED",
+    }
+    assert sensitive not in result.output
+
+
+def test_configuration_failure_uses_same_private_unclassified_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive = "private-configuration-message"
+    monkeypatch.setattr(
+        cli,
+        "_settings",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError(sensitive)),
+    )
+
+    result = runner.invoke(cli.app, ["dic-auth-check"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr) == {
+        "error_type": "ValueError",
+        "stage": "UNCLASSIFIED",
+    }
+    assert sensitive not in result.output

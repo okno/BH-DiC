@@ -17,7 +17,11 @@ from typing import TypeVar
 from playwright.async_api import Error as PlaywrightError
 from pydantic import JsonValue
 
-from bh_dic.dic.auth import PlaywrightAuthenticator
+from bh_dic.dic.auth import (
+    DicAuthOutcomeUnknownError,
+    DicAuthStage,
+    PlaywrightAuthenticator,
+)
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
     DicAuthenticationError,
@@ -153,6 +157,7 @@ class PlaywrightDicAdapter:
             expected_tenant_id=expected_tenant_id,
             login_timeout_ms=login_timeout_ms,
         )
+        self._auth_timeout_seconds = self._auth.login_timeout_seconds + 5
         self._employees = EmployeesListPage(page, base_url)
         self._summary = EmployeeSummaryPage(page, base_url)
         self._roles = EmployeeRolesPage(page, base_url)
@@ -214,13 +219,31 @@ class PlaywrightDicAdapter:
             return current
         if credentials is None:
             raise DicAuthenticationError("DIC credentials are required for a new session")
-        return await self._coordinator.run_read(
-            "authenticate", "dic-browser", lambda: self._auth.authenticate(credentials)
-        )
+        cancelled = False
+        authenticated: SessionStatus | None = None
+        try:
+            authenticated = await self._coordinator.run_once(
+                "authenticate",
+                "dic-browser",
+                lambda: self._auth.authenticate(credentials),
+                timeout_seconds=self._auth_timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            cancelled = True
+        if cancelled:
+            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+        if authenticated is None:
+            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+        return authenticated
 
     async def session_status(self) -> SessionStatus:
         self._ensure_open()
-        return await self._coordinator.run_read("session_status", "dic-browser", self._auth.status)
+        return await self._coordinator.run_once(
+            "session_status",
+            "dic-browser",
+            self._auth.status,
+            timeout_seconds=self._auth_timeout_seconds,
+        )
 
     async def list_employees(self, query: EmployeeListQuery) -> EmployeeListResult:
         return await self._read("employees.list", lambda: self._employees.list(query))

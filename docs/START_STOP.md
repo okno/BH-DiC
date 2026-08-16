@@ -1,8 +1,9 @@
 # Start e stop
 
 > Stato al 16 agosto 2026: il runtime sul target Debian è preparato e il bot è **STOPPED**.
-> Doctor offline/online e Groq sono verificati; la verifica DIC headless è bloccata dalla password
-> TeamSystem scaduta e dall'assenza di un vault. Non avviare ancora il servizio.
+> Doctor offline/online e Groq sono verificati. La password TeamSystem è stata rinnovata, ma il
+> check live 0.2.2 si è fermato prima dell'autenticazione per una race di hydration e non ha creato
+> un vault verificato. Distribuire la 0.2.3 e completare il gate DIC prima di avviare il servizio.
 
 ## Prerequisiti
 
@@ -26,6 +27,10 @@ Scegliere **systemd** oppure gli script PID. L'unit di esempio usa
 `systemctl` e `journalctl`. Non affiancare `start.sh`/`stop.sh` a un servizio systemd attivo.
 Questa pagina descrive sotto la modalità script PID; per l'installazione systemd vedere la
 [guida end-to-end](INSTALLATION.md#9-scegliere-un-solo-gestore-di-processo).
+
+L'unit systemd 0.2.3 abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Il comando `run`
+usa 78 per ogni errore di autenticazione, quindi systemd non deve trasformarlo in nuovi tentativi
+di login. Verificare la direttiva nell'unit realmente installata prima di abilitarla.
 
 ## Avvio background
 
@@ -113,7 +118,7 @@ usare `kill -9` manualmente e non eliminare PID/lock senza verificare il process
 
 ## Sequenza di ripresa sul target
 
-Dopo l'aggiornamento alla release correttiva, mantenere le write disabilitate e il bot fermo:
+Dopo l'aggiornamento alla release 0.2.3, mantenere le write disabilitate e il bot fermo:
 
 ```bash
 cd /opt/bh-dic
@@ -123,14 +128,25 @@ cd /opt/bh-dic
 .venv/bin/python -m bh_dic dic-auth-check
 ```
 
-Un amministratore deve completare fuori dal bot il cambio della password TeamSystem scaduta e
-aggiornare `DIC_PASSWORD` localmente senza mostrarla. Poi:
+Il rinnovo umano della password TeamSystem e l'aggiornamento locale di `DIC_PASSWORD` sono già
+stati completati. Eseguire una sola verifica live autorizzata:
 
 ```bash
 .venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ./scripts/status.sh
 ```
+
+`encrypted_session_invalidated=false` non è un errore: indica che non esisteva un vault da
+eliminare. La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le
+credenziali. Se il check restituisce JSON con `error_type`/`stage`, non trasformarlo in un loop e
+non avviare il bot.
+
+Se `dic-auth-check --live` restituisce `DicAuthOutcomeUnknownError` con stage
+`CREDENTIAL_SUBMIT`, l'exit code è 78: il submit può essere partito, mentre completamento, tenant
+probe o persistenza del vault non sono dimostrabili. Fermarsi e verificare umanamente lo stato
+dell'account/sessione; non ripetere il comando. Lo stesso codice impedisce il restart systemd
+automatico quando l'errore di autenticazione emerge durante `run`.
 
 Solo se il check live attesta autenticazione e tenant, e dopo autorizzazione separata:
 
@@ -145,7 +161,9 @@ I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. 
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 16 agosto 2026 la preparazione e il provider check sono riusciti; la sequenza si ferma prima di
-`dic-auth-check --live`. Nessun read/write DIC live è stato completato e il bot resta fermo.
+Al 16 agosto 2026 la preparazione e il provider check sono riusciti; il tentativo DIC 0.2.2 si è
+fermato durante l'hydration pre-autenticazione. La correzione 0.2.3 è coperta da test sintetici,
+ma deve ancora superare il check live: nessun read/write DIC live è stato completato e il bot
+resta fermo.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

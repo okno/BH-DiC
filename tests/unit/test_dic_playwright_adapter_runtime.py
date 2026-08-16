@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import JsonValue, SecretStr
 
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
 from bh_dic.dic.catalog import MUTATING_FUNCTIONS
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
@@ -51,6 +53,7 @@ from bh_dic.dic.models import (
 from bh_dic.dic.pages import VerifiedUploadPayload
 from bh_dic.dic.playwright_adapter import PlaywrightDicAdapter, _WriteBaseline
 from bh_dic.logging import JsonFormatter
+from bh_dic.services.browser_runtime import BrowserCoordinator, CircuitBreaker, ReadRetryPolicy
 
 
 class UnusedSyntheticPage:
@@ -61,9 +64,15 @@ class DirectCoordinator:
     def __init__(self) -> None:
         self.write_error: Exception | None = None
         self.closed = False
+        self.once_calls: list[tuple[str, float | None]] = []
 
     async def run_read(self, name, lock_key, operation):
         del name, lock_key
+        return await operation()
+
+    async def run_once(self, name, lock_key, operation, *, timeout_seconds=None):
+        del lock_key
+        self.once_calls.append((name, timeout_seconds))
         return await operation()
 
     async def run_write(self, name, lock_key, operation):
@@ -155,6 +164,166 @@ async def test_health_authentication_and_close_are_fail_closed() -> None:
     assert (await adapter.health()).ready is False
     with pytest.raises(DicValidationError, match="closed"):
         await adapter.session_status()
+
+
+@pytest.mark.asyncio
+async def test_auth_operations_use_single_run_with_login_budget_override() -> None:
+    coordinator = DirectCoordinator()
+    adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
+        UnusedSyntheticPage(),
+        coordinator=coordinator,  # type: ignore[arg-type]
+        expected_tenant_id="123456789",
+        login_timeout_ms=60_000,
+    )
+    adapter._auth = _auth(SessionState.UNKNOWN)
+    credentials = DicCredentials(
+        username="synthetic",
+        password=SecretStr("synthetic-password"),
+    )
+
+    result = await adapter.ensure_authenticated(credentials)
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert coordinator.once_calls == [
+        ("session_status", 65.0),
+        ("authenticate", 65.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auth_transport_failure_after_dispatch_is_never_retried() -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(
+            attempts=3,
+            initial_delay_seconds=0,
+            maximum_delay_seconds=0,
+            operation_timeout_seconds=1,
+        ),
+        circuit_breaker=CircuitBreaker(failure_threshold=10),
+    )
+    adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
+        UnusedSyntheticPage(),
+        coordinator=coordinator,
+        expected_tenant_id="123456789",
+        login_timeout_ms=5_000,
+    )
+    auth = _auth(SessionState.UNKNOWN)
+    auth.authenticate = AsyncMock(
+        side_effect=DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+    )
+    adapter._auth = auth
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await adapter.ensure_authenticated(
+            DicCredentials(
+                username="synthetic",
+                password=SecretStr("synthetic-password"),
+            )
+        )
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    auth.authenticate.assert_awaited_once()
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_external_queue_wait_cancellation_after_auth_dispatch_is_unknown() -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(operation_timeout_seconds=5),
+        circuit_breaker=CircuitBreaker(failure_threshold=10),
+    )
+    adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
+        UnusedSyntheticPage(),
+        coordinator=coordinator,
+        expected_tenant_id="123456789",
+        login_timeout_ms=5_000,
+    )
+    click_started = asyncio.Event()
+    release_worker = asyncio.Event()
+    status_calls = 0
+    authenticate_calls = 0
+    clicks = 0
+
+    class QueueOwnedAuth:
+        async def status(self) -> SessionStatus:
+            nonlocal status_calls
+            status_calls += 1
+            return SessionStatus(state=SessionState.UNKNOWN)
+
+        async def authenticate(self, _credentials: DicCredentials) -> SessionStatus:
+            nonlocal authenticate_calls, clicks
+            authenticate_calls += 1
+            clicks += 1
+            click_started.set()
+            await release_worker.wait()
+            return SessionStatus(state=SessionState.AUTHENTICATED)
+
+    adapter._auth = QueueOwnedAuth()  # type: ignore[assignment]
+    operation = asyncio.create_task(
+        asyncio.wait_for(
+            adapter.ensure_authenticated(
+                DicCredentials(
+                    username="synthetic",
+                    password=SecretStr("synthetic-password"),
+                )
+            ),
+            timeout=0.05,
+        )
+    )
+    await asyncio.wait_for(click_started.wait(), timeout=1)
+
+    try:
+        with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+            await operation
+        assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert status_calls == 1
+        assert authenticate_calls == 1
+        assert clicks == 1
+    finally:
+        release_worker.set()
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_external_session_status_cancellation_remains_precredential() -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(operation_timeout_seconds=5),
+        circuit_breaker=CircuitBreaker(failure_threshold=10),
+    )
+    adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
+        UnusedSyntheticPage(),
+        coordinator=coordinator,
+        expected_tenant_id="123456789",
+        login_timeout_ms=5_000,
+    )
+    status_started = asyncio.Event()
+    release_worker = asyncio.Event()
+    authenticate_calls = 0
+
+    class QueueOwnedAuth:
+        async def status(self) -> SessionStatus:
+            status_started.set()
+            await release_worker.wait()
+            return SessionStatus(state=SessionState.UNKNOWN)
+
+        async def authenticate(self, _credentials: DicCredentials) -> SessionStatus:
+            nonlocal authenticate_calls
+            authenticate_calls += 1
+            return SessionStatus(state=SessionState.AUTHENTICATED)
+
+    adapter._auth = QueueOwnedAuth()  # type: ignore[assignment]
+    operation = asyncio.create_task(asyncio.wait_for(adapter.session_status(), timeout=0.05))
+    await asyncio.wait_for(status_started.wait(), timeout=1)
+
+    try:
+        with pytest.raises(TimeoutError):
+            await operation
+        assert authenticate_calls == 0
+    finally:
+        release_worker.set()
+        await adapter.close()
 
 
 @pytest.mark.asyncio

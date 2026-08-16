@@ -256,6 +256,40 @@ class BrowserCoordinator:
 
         return await self.queue.submit(lock_key, execute)
 
+    async def run_once(
+        self,
+        name: str,
+        lock_key: str,
+        operation: Callable[[], Awaitable[T]],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> T:
+        """Run one serialized browser operation without automatic retry."""
+
+        del name
+        timeout = (
+            self.read_retry.operation_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        if timeout <= 0:
+            raise ValueError("operation timeout must be positive")
+
+        async def execute_once() -> T:
+            await self.circuit_breaker.before_call()
+            try:
+                result = await asyncio.wait_for(operation(), timeout=timeout)
+            except Exception as exc:
+                if self._circuit_failure(exc):
+                    await self.circuit_breaker.record_failure()
+                else:
+                    await self.circuit_breaker.record_success()
+                raise
+            await self.circuit_breaker.record_success()
+            return result
+
+        return await self.queue.submit(lock_key, execute_once)
+
     async def run_write(self, name: str, lock_key: str, operation: Callable[[], Awaitable[T]]) -> T:
         del name
 

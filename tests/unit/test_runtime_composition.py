@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -12,6 +13,7 @@ from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.approvals.storage import ApprovalRepository
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
 from bh_dic.dic.browser import AsyncChromiumSession
 from bh_dic.dic.mock import MockDicAdapter
 from bh_dic.dic.protocol import DipendentiInCloudAdapter
@@ -226,6 +228,177 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
             missing_credentials, force_mock_components=False, state_digest_key=b"s" * 32
         )
     assert events[-1] == "browser-close"
+
+
+@pytest.mark.asyncio
+async def test_authenticated_session_persistence_failure_is_nonrepeatable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive = "private-session-persistence-marker"
+    events: list[str] = []
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            pass
+
+        def load_storage_state(self) -> None:
+            return None
+
+        async def persist(self, _session: object) -> None:
+            events.append("persist")
+            raise RuntimeError(sensitive)
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, _state: object) -> object:
+            return object()
+
+        async def close(self) -> None:
+            events.append("browser-close")
+            raise RuntimeError("private-browser-close-marker")
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **_kwargs: object) -> None:
+            pass
+
+        async def ensure_authenticated(self, _credentials: object) -> None:
+            events.append("authenticate")
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await runtime_module._adapter(
+            _live_settings(),
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+        )
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert sensitive not in str(caught.value)
+    assert "private-browser-close-marker" not in str(caught.value)
+    assert events == ["authenticate", "persist", "browser-close"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_session_persistence_is_nonrepeatable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    persist_started = asyncio.Event()
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            pass
+
+        def load_storage_state(self) -> None:
+            return None
+
+        async def persist(self, _session: object) -> None:
+            events.append("persist")
+            persist_started.set()
+            await asyncio.Event().wait()
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, _state: object) -> object:
+            return object()
+
+        async def close(self) -> None:
+            events.append("browser-close")
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **_kwargs: object) -> None:
+            pass
+
+        async def ensure_authenticated(self, _credentials: object) -> None:
+            events.append("authenticate")
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    operation = asyncio.create_task(
+        asyncio.wait_for(
+            runtime_module._adapter(
+                _live_settings(),
+                force_mock_components=False,
+                state_digest_key=b"s" * 32,
+            ),
+            timeout=0.05,
+        )
+    )
+    await asyncio.wait_for(persist_started.wait(), timeout=1)
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await operation
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert events == ["authenticate", "persist", "browser-close"]
+
+
+@pytest.mark.asyncio
+async def test_pre_submit_cancellation_still_closes_browser_and_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    auth_started = asyncio.Event()
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            pass
+
+        def load_storage_state(self) -> None:
+            return None
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, _state: object) -> object:
+            return object()
+
+        async def close(self) -> None:
+            events.append("browser-close")
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **_kwargs: object) -> None:
+            pass
+
+        async def ensure_authenticated(self, _credentials: object) -> None:
+            auth_started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    operation = asyncio.create_task(
+        runtime_module._adapter(
+            _live_settings(),
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+        )
+    )
+    await asyncio.wait_for(auth_started.wait(), timeout=1)
+    operation.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    assert events == ["browser-close"]
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ EnvironmentFile=/opt/bh-dic/.env
 ExecStartPre=/opt/bh-dic/scripts/doctor.sh --quiet
 ExecStart=/opt/bh-dic/scripts/run-foreground.sh
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=5s
 TimeoutStartSec=90s
 TimeoutStopSec=30s

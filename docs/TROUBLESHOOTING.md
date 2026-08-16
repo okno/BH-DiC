@@ -9,8 +9,10 @@ Partire sempre da stato e log redatti:
 ./scripts/audit-verify.sh
 ```
 
-Non avviare il bot o abilitare write per diagnosticare. Il runtime Debian è preparato, ma il bot
-target è fermo finché autenticazione e tenant DIC non sono verificati.
+Non avviare il bot o abilitare write per diagnosticare. Il runtime Debian è preparato e la
+password TeamSystem è stata rinnovata nel flusso umano, ma il bot target resta fermo finché
+autenticazione e tenant DIC non sono verificati. Il fallimento 0.2.2 è avvenuto prima
+dell'autenticazione durante l'hydration dei controlli e non prova un rifiuto della nuova password.
 
 | Sintomo | Verifica | Azione sicura |
 |---|---|---|
@@ -24,7 +26,9 @@ target è fermo finché autenticazione e tenant DIC non sono verificati.
 | timeout/quota provider | log router, account provider, `model-check` offline/live autorizzato | verificare `MODEL_PROVIDER`, modello e chiave; retry limitato, mai bypassare intent validation |
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
-| login DIC fallisce | route DIC/TeamSystem, password scaduta, sessione, MFA/CAPTCHA | rinnovo password ed escalation umana; invalidare il vault, mai usare passwordless o ampliare l'allowlist |
+| login DIC fallisce | JSON `error_type`/`stage`, route DIC/TeamSystem, sessione, MFA/CAPTCHA | usare solo lo stage chiuso; invalidare il vault quando pertinente; mai stampare l'errore interno né usare passwordless o ampliare l'allowlist |
+| `DicAuthUiChangedError` durante login | stage `DIC_*` o `TEAMSYSTEM_*`, release installata | distribuire almeno 0.2.3 e ripetere una sola verifica autorizzata; zero/multipli controlli o route diversa restano fail-closed |
+| `DicAuthOutcomeUnknownError`, exit 78 | stage `CREDENTIAL_SUBMIT`; invio forse partito ma completamento/tenant/vault non dimostrabili | non ritentare; mantenere bot fermo, verificare account/sessione con procedura umana e fare escalation |
 | attestazione tenant fallisce | route fissa, risposta first-party, schema/ID configurato | mantenere il bot fermo; nessun fallback su nome o DOM, patchare solo con nuova evidenza redatta |
 | UI drift/selettore rotto | route/page object, trace protetto | smoke read-only e patch testata; nessuna write live |
 | database locked | processi, WAL, filesystem | fermare processo concorrente; non cancellare WAL/SHM |
@@ -38,6 +42,30 @@ target è fermo finché autenticazione e tenant DIC non sono verificati.
 | esito `UNKNOWN_*` | correlation/action ID, postcondizione | riconciliare; nessun retry automatico |
 | disco pieno | `df -h`, `du -sh var/*` | stop sicuro, retention/backup; non cancellare audit arbitrariamente |
 | SSH host key cambiata | fingerprint fuori banda | fermarsi e coinvolgere amministratore; mai disabilitare checking |
+
+## Stage chiusi dell'autenticazione DIC
+
+`dic-auth-check --live` non restituisce messaggi provider, URL, selettori o DOM. Gli stage hanno
+soltanto questo significato operativo:
+
+| Stage | Confine verificato | Azione sicura |
+|---|---|---|
+| `DIC_EMAIL`, `DIC_SUBMIT` | pagina login DIC esatta | verificare release 0.2.3 e disponibilità del sito; non aggiungere click o selettori generici |
+| `TEAMSYSTEM_EMAIL`, `TEAMSYSTEM_EMAIL_SUBMIT` | passaggio e-mail TeamSystem esatto | verificare eventuale CAPTCHA/MFA o manutenzione IdP con procedura umana |
+| `TEAMSYSTEM_CREDENTIAL`, `TEAMSYSTEM_CREDENTIAL_SUBMIT` | passaggio credenziale TeamSystem esatto | non ripetere automaticamente la password; verificare stato account tramite il flusso umano |
+| `CREDENTIAL_SUBMIT` | esito post-submit non dimostrabile | trattare exit 78 come stop non riavviabile; nessun nuovo login automatico o manuale senza revisione |
+| `SESSION_PROBE` | verifica bounded di una sessione ripristinata già sulla route applicativa | non considerare autenticata una risposta oltre deadline; lasciare bot fermo e verificare sessione/tenant senza nuovi submit |
+| `UNCLASSIFIED` | errore non attribuibile a uno stage pubblico | fermare il bot, preservare solo log redatti ed effettuare escalation |
+
+Il polling introdotto nella 0.2.3 è limitato dal budget di login, ricontrolla route/CAPTCHA e
+rifiuta controlli visibili ambigui. Non compensare un errore aumentando indiscriminatamente i
+timeout o lanciando il comando in loop.
+
+L'unit systemd distribuita deve contenere `RestartPreventExitStatus=78`. Il comando `run` usa 78
+per tutti gli errori di autenticazione, mentre `dic-auth-check --live` lo usa per l'esito ambiguo
+post-submit. Se la direttiva manca nell'unit installata, mantenere il servizio disabled/stopped,
+aggiornare l'unit dalla release approvata, verificare con `systemd-analyze verify` ed eseguire
+`systemctl daemon-reload`; non avviare per provare la correzione.
 
 ## Stale PID/lock
 

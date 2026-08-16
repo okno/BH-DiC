@@ -55,6 +55,91 @@ async def test_reads_retry_but_writes_are_never_retried() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [TimeoutError(), ConnectionError("synthetic")])
+async def test_run_once_never_retries_transport_failures(failure: Exception) -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(
+            attempts=3,
+            initial_delay_seconds=0,
+            maximum_delay_seconds=0,
+            operation_timeout_seconds=1,
+        ),
+        circuit_breaker=CircuitBreaker(failure_threshold=10),
+    )
+    calls = 0
+
+    async def fail_once() -> None:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    with pytest.raises(type(failure)):
+        await coordinator.run_once("auth", "dic-browser", fail_once)
+
+    assert calls == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_run_once_uses_positive_timeout_override_instead_of_read_default() -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(operation_timeout_seconds=0.001),
+    )
+    calls = 0
+
+    async def slower_than_default() -> str:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return "ok"
+
+    assert (
+        await coordinator.run_once(
+            "auth",
+            "dic-browser",
+            slower_than_default,
+            timeout_seconds=0.1,
+        )
+        == "ok"
+    )
+    assert calls == 1
+    with pytest.raises(ValueError, match="timeout"):
+        await coordinator.run_once(
+            "auth",
+            "dic-browser",
+            slower_than_default,
+            timeout_seconds=0,
+        )
+    assert calls == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_run_once_timeout_cancels_one_invocation_without_retry() -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(attempts=3, operation_timeout_seconds=1),
+        circuit_breaker=CircuitBreaker(failure_threshold=10),
+    )
+    calls = 0
+
+    async def too_slow() -> None:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(1)
+
+    with pytest.raises(TimeoutError):
+        await coordinator.run_once(
+            "auth",
+            "dic-browser",
+            too_slow,
+            timeout_seconds=0.001,
+        )
+
+    assert calls == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
 async def test_keyed_lock_serializes_same_target_even_with_multiple_workers() -> None:
     queue = BrowserOperationQueue(workers=2)
     active = 0

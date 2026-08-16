@@ -20,6 +20,8 @@ from bh_dic.audit.service import AuditService
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.database.migrations import run_migrations_async
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
+from bh_dic.dic.errors import DicAuthenticationError
 from bh_dic.dic.models import SessionState, StoredBrowserSession
 from bh_dic.dic.session_vault import FernetSessionVault, resolve_session_vault_path
 from bh_dic.discord.checks import DiscordActor
@@ -49,6 +51,8 @@ app = typer.Typer(
 files_app = typer.Typer(help="Inspect quarantined file metadata without printing content.")
 app.add_typer(files_app, name="files")
 
+DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE = 78
+
 
 def _run[T](awaitable: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(awaitable)
@@ -61,6 +65,31 @@ def _emit(value: object) -> None:
 def _fail(message: str, *, code: int = 1) -> Never:
     typer.echo(message, err=True)
     raise typer.Exit(code)
+
+
+def _dic_auth_failure(exc: Exception, *, code: int | None = None) -> Never:
+    stage = getattr(exc, "stage", DicAuthStage.UNCLASSIFIED)
+    if not isinstance(stage, DicAuthStage):
+        stage = DicAuthStage.UNCLASSIFIED
+    _fail(
+        json.dumps(
+            {
+                "error_type": type(exc).__name__,
+                "stage": stage.value,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        code=(
+            code
+            if code is not None
+            else (
+                DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE
+                if isinstance(exc, DicAuthOutcomeUnknownError)
+                else 1
+            )
+        ),
+    )
 
 
 def _validate_local_dic_session(session: StoredBrowserSession) -> None:
@@ -131,11 +160,18 @@ async def _dic_auth_check_live(settings: AppSettings) -> dict[str, object]:
         await runtime.close()
 
 
-def _settings(*, mock: bool = False, data_dir: Path | None = None) -> AppSettings:
+def _settings(
+    *,
+    mock: bool = False,
+    data_dir: Path | None = None,
+    report_error: bool = True,
+) -> AppSettings:
     if not mock:
         try:
             return AppSettings()
         except Exception as exc:
+            if not report_error:
+                raise
             _fail(
                 "Configurazione non valida; confronta .env con .env.example "
                 f"({type(exc).__name__})."
@@ -395,6 +431,8 @@ def run_command(
         _run(_run_gateway(settings))
     except KeyboardInterrupt:
         typer.echo("Arresto richiesto.")
+    except DicAuthenticationError as exc:
+        _dic_auth_failure(exc, code=DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE)
     except Exception as exc:
         _fail(f"Avvio rifiutato ({type(exc).__name__}); consulta i log redatti.")
 
@@ -533,11 +571,11 @@ def dic_auth_check(
 ) -> None:
     """Verify local DIC auth readiness; network/browser access requires --live."""
 
-    settings = _settings()
     try:
+        settings = _settings(report_error=False)
         result = _run(_dic_auth_check_live(settings)) if live else _dic_auth_check_offline(settings)
     except Exception as exc:
-        _fail(f"Verifica autenticazione DIC fallita ({type(exc).__name__}).")
+        _dic_auth_failure(exc)
     _emit(result)
 
 

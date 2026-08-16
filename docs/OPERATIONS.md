@@ -7,10 +7,13 @@
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
 - processo bot sul target fermo;
 - nessuna Function ID DIC read o write verificata live;
-- autenticazione DIC bloccata dalla password TeamSystem scaduta e da vault assente;
+- password TeamSystem rinnovata nel flusso umano e secret `.env` aggiornato;
+- `dic-auth-check --live` 0.2.2 fermato fail-closed prima dell'autenticazione da una race di
+  hydration; vault, sessione e tenant non verificati;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-I gate offline della release 0.2.2 sono registrati nell'implementation report. Sul target sono
+I gate sintetici della release 0.2.3 comprendono 561 test e sono registrati
+nell'implementation report. Sul target sono
 stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
 Function ID DIC.
 
@@ -79,11 +82,12 @@ Il check offline non contatta la rete:
 .venv/bin/python -m bh_dic dic-auth-check
 ```
 
-Dopo che un amministratore ha completato il cambio password TeamSystem e aggiornato il secret in
-locale, mantenere il bot fermo e le write disabilitate, quindi eseguire il controllo live
-esplicitamente autorizzato:
+La password TeamSystem è stata rinnovata e il secret locale aggiornato. Dopo aver distribuito la
+release 0.2.3, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e
+eseguire una sola volta il controllo live esplicitamente autorizzato:
 
 ```bash
+.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ```
 
@@ -91,7 +95,16 @@ Il comando ripristina prima un eventuale vault, prova la route applicativa fissa
 l'attestazione passiva dell'azienda corrente. Se serve login, accetta redirect soltanto verso le
 origini TeamSystem esatte previste. Qualunque mismatch, risposta mancante, password scaduta,
 MFA/CAPTCHA o redirect inatteso fallisce chiuso. Non avviare il bot finché sessione e tenant non
-risultano verificati.
+risultano verificati. Un risultato `encrypted_session_invalidated=false` indica semplicemente che
+il vault non esisteva.
+
+Nella 0.2.3 i controlli di login attendono l'hydration entro un budget condiviso, soltanto sulle
+route esatte e con un solo controllo visibile. Session status e autenticazione usano un'unica
+esecuzione serializzata: timeout o errori di trasporto non ritentano le credenziali. Gli errori
+sono JSON con i soli campi `error_type` e `stage`; non estrarre messaggi interni, URL o DOM e non
+eseguire il comando in loop. `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` con exit code 78
+indica che il submit può essere partito ma completamento, tenant o vault non sono dimostrabili:
+fermare il runbook e verificare umanamente, senza un nuovo login.
 
 ### Log
 
@@ -133,6 +146,10 @@ catena. Vedere [Audit](AUDIT.md).
 ```
 
 `--force` è una scelta esplicita successiva a diagnosi, non il default.
+
+In modalità systemd l'unit installata deve includere `RestartPreventExitStatus=78`: `run` usa 78
+per ogni errore di autenticazione, impedendo a `Restart=on-failure` di rilanciare il login. Dopo un
+update dell'unit, usare `systemd-analyze verify` e `systemctl daemon-reload` a servizio fermo.
 
 ### Backup e restore
 
