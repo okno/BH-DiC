@@ -78,11 +78,15 @@ Discord.
 
 ### Autenticazione DIC
 
-Il check offline non contatta la rete:
+Il check offline non contatta la rete e valida soltanto un vault già presente:
 
 ```bash
 .venv/bin/python -m bh_dic dic-auth-check
 ```
+
+Se il vault non esiste (prima installazione, rotazione o invalidazione), il fallimento è atteso e
+non attesta nulla sul login. In quel caso procedere soltanto con l'unico check live autorizzato
+descritto sotto.
 
 La password TeamSystem è stata rinnovata e il secret locale aggiornato. Dopo aver distribuito la
 release 0.2.5, mantenere il bot fermo e le write disabilitate, invalidare l'eventuale vault e

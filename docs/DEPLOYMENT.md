@@ -70,10 +70,14 @@ Con le write ancora disabilitate:
 ```bash
 ./scripts/doctor.sh --online
 .venv/bin/python -m bh_dic model-check --live
-.venv/bin/python -m bh_dic dic-auth-check
+.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ./scripts/status.sh
 ```
+
+Il check DIC senza `--live` valida soltanto un vault già esistente. Su una prima installazione o
+dopo `invalidate-session` fallisce correttamente perché non esiste ancora alcuna sessione cifrata;
+non usarlo come prerequisito del bootstrap live.
 
 Il controllo live deve terminare con autenticazione e tenant verificati e deve lasciare un vault
 cifrato valido. Un redirect fuori dall'allowlist esatta DIC/TeamSystem, un tenant non attestabile,

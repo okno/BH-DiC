@@ -274,11 +274,16 @@ dei due comandi prova login DIC, selettori live o deployment completo.
 
 ### Gate DIC prima dell'attivazione
 
-Con servizio fermo e tutte le write disabilitate, il controllo offline è sempre il primo passo:
+Con servizio fermo e tutte le write disabilitate, il controllo offline è utile soltanto quando
+esiste già un vault cifrato da validare:
 
 ```bash
 sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check
 ```
+
+Su una prima installazione, dopo una rotazione credenziali o dopo `invalidate-session`, l'assenza
+del vault fa fallire correttamente questo comando: non è un errore di login e non deve precedere il
+bootstrap live.
 
 Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale,
 aggiornare `DIC_PASSWORD` localmente senza mostrarla e invalidare l'eventuale sessione precedente.

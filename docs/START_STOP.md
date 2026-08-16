@@ -13,13 +13,14 @@ cd /opt/bh-dic
 test -x ./scripts/start.sh
 ./scripts/doctor.sh
 .venv/bin/python -m bh_dic model-check
-.venv/bin/python -m bh_dic dic-auth-check
 ./scripts/status.sh
 ```
 
 `doctor.sh` deve terminare con exit code 0; `.env` deve essere `0600`, la configurazione valida,
 il database migrato, Chromium presente e ClamAV disponibile quando richiesto. Mantenere
 `ENABLE_WRITE_ACTIONS=false` e `MODEL_STORE=false`.
+Se esiste già un vault, `dic-auth-check` senza `--live` può validarlo localmente; su una prima
+installazione o dopo invalidazione fallisce correttamente e non è un prerequisito del bootstrap.
 
 ## Un solo gestore di processo
 
@@ -129,7 +130,6 @@ cd /opt/bh-dic
 ./scripts/doctor.sh
 ./scripts/doctor.sh --online
 .venv/bin/python -m bh_dic model-check --live
-.venv/bin/python -m bh_dic dic-auth-check
 ```
 
 Il rinnovo umano della password TeamSystem e l'aggiornamento locale di `DIC_PASSWORD` sono già
