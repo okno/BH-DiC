@@ -555,9 +555,11 @@ def _contract_projection(value: object) -> tuple[str | None, bool | None, date |
         raise _failure("invalid current contract schema")
     _strict_int(value["id"], minimum=1)
     hours_type = _bounded_text(value["hours_type"], maximum=128)
-    percentage = _strict_int(value["part_time_percentage"])
-    if percentage > 100:
-        raise _failure("invalid current contract schema")
+    raw_percentage = value["part_time_percentage"]
+    if raw_percentage is not None:
+        percentage = _strict_int(raw_percentage)
+        if percentage > 100:
+            raise _failure("invalid current contract schema")
     permanent = _strict_bool(value["permanent"])
     valid_from = _strict_date(value["valid_from"])
     valid_to = _strict_date(value["valid_to"])

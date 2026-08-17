@@ -156,9 +156,9 @@ Function ID HR a verificate.
 | `ruff format --check .` | PASS, 196 file |
 | `ruff check .` | PASS |
 | `mypy src` | PASS, 114 file sorgente |
-| `pytest` | PASS, 777 test; un warning `audioop` di terza parte |
-| `coverage run --branch -m pytest` | PASS, 777 test |
-| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.287 statement; 3.224 branch) |
+| `pytest` | PASS, 787 test; un warning `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 787 test |
+| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.289 statement; 3.226 branch) |
 | `bandit -q -r src` | PASS, 18.931 linee di codice; zero issue |
 | `python -m pip check` | PASS, nessuna dipendenza rotta |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note |

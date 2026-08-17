@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 from urllib.parse import urlencode
 
@@ -242,12 +243,63 @@ async def test_passive_employee_response_maps_only_redacted_stable_projection() 
     assert item.tax_code_redacted == "***********3456"
     assert item.payroll_number == "****0001"
     assert item.group_name == "Front desk"
+    assert item.current_contract_valid_from is not None
+    assert item.current_contract_valid_to is not None
     assert item.current_contract_valid_from.isoformat() == "2026-01-01"
     assert item.current_contract_valid_to.isoformat() == "2026-09-30"
     rendered = repr(result)
     assert "Alice" not in rendered
     assert "Alice" not in result.model_dump_json()
     assert "SYNTHETIC123456" not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("percentage", [None, 0, 100])
+async def test_current_contract_accepts_nullable_percentage_and_integer_boundaries(
+    percentage: int | None,
+) -> None:
+    query = _query()
+    document = _document(query)
+    document["data"][0]["current_contract"]["part_time_percentage"] = percentage
+
+    result = await employee_list_result_from_response(
+        _Response(url=_url(query), document=document), query
+    )
+
+    assert result.total == 1
+    assert result.items[0].current_contract_valid_from == date(2026, 1, 1)
+    assert result.items[0].current_contract_valid_to == date(2026, 9, 30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("percentage", "reason"),
+    [
+        (True, "invalid response schema"),
+        ("PRIVATE_CONTRACT_PERCENTAGE_MARKER", "invalid response schema"),
+        (50.0, "invalid response schema"),
+        (-1, "invalid response schema"),
+        (101, "invalid current contract schema"),
+        ([], "invalid response schema"),
+        ({}, "invalid response schema"),
+    ],
+)
+async def test_current_contract_rejects_invalid_percentage_without_private_exception_chain(
+    percentage: object,
+    reason: str,
+) -> None:
+    query = _query()
+    document = _document(query)
+    document["data"][0]["current_contract"]["part_time_percentage"] = percentage
+
+    with pytest.raises(DicUiChangedError, match=reason) as captured:
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert "PRIVATE_CONTRACT_PERCENTAGE_MARKER" not in repr(captured.value)
 
 
 @pytest.mark.asyncio

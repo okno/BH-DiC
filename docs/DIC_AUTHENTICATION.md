@@ -210,6 +210,8 @@ Lo schema root chiuso comprende soltanto `current_page`, `data`, `first_page_url
 `last_page`, `last_page_url`, `links`, `next_page_url`, `path`, `per_page`, `prev_page_url`, `to` e
 `total`. Ogni riga deve rispettare il contratto dipendente noto; `current_contract` ammette
 esattamente `hours_type`, `id`, `part_time_percentage`, `permanent`, `valid_from` e `valid_to`.
+La chiave `part_time_percentage` è obbligatoria ma nullable; quando non è `null` deve essere un
+intero JSON stretto compreso tra 0 e 100 inclusi (`bool`, float e stringhe sono rifiutati).
 Campi o tipi inattesi, date non ISO, company ID difforme, ID duplicati o paginazione instabile
 producono un errore generico senza body o PII.
 

@@ -47,6 +47,9 @@ stable public API is declared.
   UI validata, cambiando soltanto `page`; link precedente/successivo, pagina attiva e limiti sono
   correlati deterministicamente. Origin, porta, userinfo, fragment, path e query continuano a
   essere verificati secondo il rispettivo contratto esatto.
+- Allineato il contratto di `current_contract.part_time_percentage` alla struttura osservata con
+  diagnostica live minimizzata: la chiave resta obbligatoria, accetta `null` e, se valorizzata,
+  richiede un intero stretto nell'intervallo 0-100, senza registrare dati tenant o PII.
 
 ### Security
 
@@ -65,7 +68,7 @@ stable public API is declared.
 
 ### Verification
 
-- Gate locali completi: 777 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
+- Gate locali completi: 787 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
   Bandit, dependency audit, YAML, script shell, documentazione e link locali verdi. Deployment
   Debian della 0.3.0, migrazione sul target e smoke Discord/DIC restano `PENDING`. Non promuovere
   le nuove letture a `LIVE_READ_VERIFIED` prima delle evidenze separate.
