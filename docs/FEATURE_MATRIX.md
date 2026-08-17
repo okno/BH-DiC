@@ -15,8 +15,9 @@ non deve essere mantenuta come secondo catalogo runtime.
   sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
 - Nessuna Function ID DIC live è stata eseguita. Il runtime Debian e Groq sono verificati
-  separatamente, ma il bot target è fermo e DIC resta `NEEDS_VALIDATION` finché password, vault,
-  autenticazione e tenant non superano il check live.
+  separatamente. L'ultimo servizio pre-0.2.7 si è fermato prima del gateway; la 0.2.7 mantiene
+  Discord online in stato `DEGRADED` senza login implicito, ma DIC resta `NEEDS_VALIDATION` finché
+  il nuovo vault completo e il tenant non superano il check live sul target.
 
 “Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
 Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il

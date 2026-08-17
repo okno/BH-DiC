@@ -34,7 +34,7 @@ problemi residui. Nessuna licenza open source è stata aggiunta.
 | Database server | SQLite presente e migrazione alla head verificata |
 | Antivirus | ClamAV attivo; socket `0660` e scansione applicativa riuscita |
 | Doctor | offline e online riusciti |
-| Bot target | systemd `active/running`; `NRestarts=0` al controllo di avvio |
+| Bot target | ultimo avvio pre-0.2.7 fermato con exit 78 a `TEAMSYSTEM_EMAIL`; candidato 0.2.7 non ancora distribuito |
 
 Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
 TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato. I check DIC headless
@@ -42,10 +42,12 @@ TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato. I 
 volta, ma ha rifiutato fail-closed la callback DIC legittima con exit 78. Un successivo accesso
 manuale autorizzato, in browser fresco e in sola lettura, ha accettato le credenziali con un solo
 submit e raggiunto callback, dashboard, route e marker esatti della lista dipendenti. Dopo il
-deployment 0.2.5, un singolo `dic-auth-check --live` ha attestato sessione `AUTHENTICATED`, tenant
-`VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile. Il comando guild-scoped è stato registrato e il
-gateway ha risposto; il primo smoke è stato negato dal gate RBAC prima del dispatch. Nessuna
-Function ID DIC resta verificata live.
+deployment 0.2.5, un singolo `dic-auth-check --live` ha attestato sessione `AUTHENTICATED` e tenant
+`VERIFIED_BY_ADAPTER` nel processo corrente. Il comando guild-scoped è stato registrato e il
+gateway ha risposto; il primo smoke è stato negato dal gate RBAC prima del dispatch. Il riavvio
+successivo ha evidenziato che il vault non conservava `sessionStorage` e si è fermato sulla route
+TeamSystem password diretta, prima del gateway. La correzione 0.2.7 è testata sinteticamente ma non
+ancora distribuita. Nessuna Function ID DIC resta verificata live.
 
 ## Implementazione
 
@@ -76,6 +78,15 @@ Completati nel codice e testati con risorse sintetiche:
   marker autenticato atteso dentro la cattura tenant con route esatta e budget condiviso, mentre
   `/data/company/id` resta obbligatorio e il submit password resta singolo; lo user agent Chromium
   nativo resta invariato perché la verifica live non lo ha indicato come causa;
+- correzione 0.2.7 dell'ingresso TeamSystem: dopo il submit DIC sono ammesse soltanto le route
+  esatte `LoginEmail` o `LoginPassword`; prima del segreto l'identità del form password deve
+  coincidere con l'account configurato, senza esporre il valore in errori o log;
+- vault 0.2.7 esteso allo snapshot bounded `sessionStorage` della sola origine DIC, cifrato insieme
+  a cookie/localStorage, ripristinato una sola volta prima degli script applicativi e mai su altre
+  origini; vault legacy leggibili e valori opachi restano gestiti fail-closed;
+- avvio 0.2.7 separato dal login: il gateway non invia credenziali DIC, un vault mancante/scaduto o
+  illeggibile produce stato `DEGRADED` e le sole funzioni DIC falliscono chiuso; l'autenticazione e
+  la persistenza restano confinate a `dic-auth-check --live` esplicito;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
 - unit systemd 0.2.4 compatibile con Debian 12: `ConditionPathExists` più
@@ -94,13 +105,13 @@ Stato funzionale:
   sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
-- bot target attivo tramite systemd; nessuna modifica DIC di produzione.
+- bot target da aggiornare alla 0.2.7; nessuna modifica DIC di produzione.
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — release 0.2.6
+## Test e gate — release 0.2.7
 
-I gate completi del worktree candidato 0.2.6 sono stati eseguiti il 17 agosto 2026. Le verifiche live
+I gate completi del worktree candidato 0.2.7 sono stati eseguiti il 17 agosto 2026. Le verifiche live
 DIC, provider e Discord sono evidenze separate e non sostituiscono questi gate né promuovono le
 Function ID HR a verificate.
 
@@ -109,13 +120,13 @@ Function ID HR a verificate.
 | `ruff format --check .` | PASS, 186 file |
 | `ruff check .` | PASS |
 | `mypy src` | PASS, 108 file sorgente |
-| `pytest` | PASS, 579 test; un warning deprecazione `audioop` di terza parte |
-| `coverage run --branch -m pytest` | PASS, 579 test con branch coverage |
-| `coverage report --show-missing --fail-under=80` | PASS, totale 86% |
+| `pytest` | PASS, 614 test; un warning deprecazione `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 614 test con branch coverage |
+| `coverage report --show-missing --fail-under=80` | PASS, totale 86%: 8.643 statement, 940 miss, 2.606 branch, 499 partial |
 | `bandit -q -r src` | PASS, zero finding |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note; lock pinned non hashato segnalato come warning |
 | `gitleaks git --staged . --redact --no-banner` | PASS sul candidato staged, output redatto |
-| parsing YAML/XML docs/security | PASS, 5 YAML e 2 XML |
+| parsing configurazioni/workflow YAML | PASS, 5 file |
 | scansione secret sul diff tracciato | PASS, gitleaks 8.30.1 redatto |
 | script `bash -n` + contratti/lifecycle ops | PASS, 22 script; contratti inclusi nella suite |
 | link Markdown locali | PASS sui documenti modificati |
@@ -155,9 +166,11 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
-- nessuna Function ID DIC write/read live eseguita; processo bot target attivo tramite systemd;
-- l'unit systemd impedisce il restart su exit 78; il comando `run` usa tale codice per ogni errore
-  di autenticazione, evitando nuovi login automatici; su Debian 12 l'unit dalla 0.2.4 usa
+- nessuna Function ID DIC write/read live eseguita; ultimo processo target pre-0.2.7 fermato prima
+  del gateway, con avvio degradato 0.2.7 ancora da distribuire;
+- l'unit systemd impedisce il restart su exit 78; dalla 0.2.7 il comando `run` non esegue alcun
+  login automatico e il codice 78 resta per l'autenticazione esplicita incerta; su Debian 12
+  l'unit dalla 0.2.4 usa
   `ConditionPathExists` più un `ExecCondition` di file regolare, mentre `doctor.sh` verifica
   modalità `0600` e configurazione.
 

@@ -19,8 +19,10 @@ from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
     DicAuthenticationError,
     DicAuthorizationError,
+    DicCircuitOpenError,
     DicConfigurationError,
     DicReconciliationRequiredError,
+    DicUiChangedError,
     DicValidationError,
     DicWriteDisabledError,
 )
@@ -146,8 +148,16 @@ async def test_health_authentication_and_close_are_fail_closed() -> None:
 
     adapter._auth.status = AsyncMock(side_effect=DicAuthorizationError("synthetic tenant mismatch"))
     unavailable = await adapter.health()
-    assert unavailable.ready is True
+    assert unavailable.ready is False
     assert unavailable.authenticated is False
+    assert unavailable.browser_available is True
+
+    adapter._auth = _auth(SessionState.MISSING)
+    missing = await adapter.health()
+    assert missing.ready is False
+    assert missing.authenticated is False
+    assert missing.browser_available is True
+    assert missing.detail == "browser ready; authenticated tenant is unavailable"
 
     adapter._auth = _auth(SessionState.UNKNOWN)
     with pytest.raises(DicAuthenticationError, match="credentials are required"):
@@ -164,6 +174,32 @@ async def test_health_authentication_and_close_are_fail_closed() -> None:
     assert (await adapter.health()).ready is False
     with pytest.raises(DicValidationError, match="closed"):
         await adapter.session_status()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DicUiChangedError("private-ui-drift-marker"),
+        DicCircuitOpenError("private-circuit-marker"),
+        TimeoutError("private-timeout-marker"),
+    ],
+    ids=("ui-drift", "circuit-open", "timeout"),
+)
+@pytest.mark.asyncio
+async def test_health_reports_safe_degraded_status_for_expected_dic_failures(
+    failure: Exception,
+) -> None:
+    adapter, _ = _adapter()
+    adapter._auth = _auth()
+    adapter._auth.status = AsyncMock(side_effect=failure)
+
+    health = await adapter.health()
+
+    assert health.ready is False
+    assert health.authenticated is False
+    assert health.browser_available is True
+    assert health.detail == "browser ready; authenticated tenant is unavailable"
+    assert "private" not in repr(health).casefold()
 
 
 @pytest.mark.asyncio

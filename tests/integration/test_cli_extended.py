@@ -231,9 +231,11 @@ async def test_gateway_and_registration_lifecycles_close_on_every_path(
     monkeypatch.setattr(cli, "run_migrations_async", migrations)
 
     missing_runtime = SimpleNamespace(close=AsyncMock())
-    monkeypatch.setattr(cli, "build_runtime", AsyncMock(return_value=missing_runtime))
+    missing_runtime_builder = AsyncMock(return_value=missing_runtime)
+    monkeypatch.setattr(cli, "build_runtime", missing_runtime_builder)
     with pytest.raises(ValueError, match="DISCORD_BOT_TOKEN"):
         await cli._run_gateway(_settings())
+    missing_runtime_builder.assert_awaited_once_with(_settings())
     missing_runtime.close.assert_awaited_once_with()
 
     token_settings = _settings().model_copy(
@@ -243,8 +245,10 @@ async def test_gateway_and_registration_lifecycles_close_on_every_path(
         bot=SimpleNamespace(start=AsyncMock()),
         close=AsyncMock(),
     )
-    monkeypatch.setattr(cli, "build_runtime", AsyncMock(return_value=gateway_runtime))
+    gateway_runtime_builder = AsyncMock(return_value=gateway_runtime)
+    monkeypatch.setattr(cli, "build_runtime", gateway_runtime_builder)
     await cli._run_gateway(token_settings)
+    gateway_runtime_builder.assert_awaited_once_with(token_settings)
     gateway_runtime.bot.start.assert_awaited_once_with("synthetic-token", reconnect=True)
     gateway_runtime.close.assert_awaited_once_with()
 
@@ -256,8 +260,10 @@ async def test_gateway_and_registration_lifecycles_close_on_every_path(
         ),
         close=AsyncMock(),
     )
-    monkeypatch.setattr(cli, "build_runtime", AsyncMock(return_value=register_runtime))
+    register_runtime_builder = AsyncMock(return_value=register_runtime)
+    monkeypatch.setattr(cli, "build_runtime", register_runtime_builder)
     assert await cli._register(token_settings) == 2
+    register_runtime_builder.assert_awaited_once_with(token_settings, force_mock_components=True)
     register_runtime.bot.login.assert_awaited_once_with("synthetic-token")
     register_runtime.close.assert_awaited_once_with()
 

@@ -218,21 +218,29 @@ class BHApplicationCoordinator(InteractionCoordinator):
         del actor
         write_enabled = self.flags.enabled("ENABLE_WRITE_ACTIONS")
         health = await self.dic.adapter.health()
+        operational = health.ready and health.authenticated
         return InteractionResult(
             title="Stato BH-DiC",
             description="Stato operativo redatto.",
             fields=(
-                ResultField("Adapter", "READY" if health.ready else "DEGRADED", True),
+                ResultField("Adapter", "READY" if operational else "DEGRADED", True),
                 ResultField(
                     "Browser", "available" if health.browser_available else "mock/unavailable", True
                 ),
+                ResultField(
+                    "DIC tenant",
+                    "AUTHENTICATED" if health.authenticated else "UNAVAILABLE",
+                    True,
+                ),
                 ResultField("Write kill switch", "ENABLED" if write_enabled else "DISABLED", True),
             ),
+            success=operational,
         )
 
     async def health(self, actor: DiscordActor) -> InteractionResult:
         del actor
         health = await self.dic.adapter.health()
+        operational = health.ready and health.authenticated
         return InteractionResult(
             title="Health check",
             description=health.detail,
@@ -240,7 +248,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 ResultField("Ready", str(health.ready), True),
                 ResultField("Authenticated", str(health.authenticated), True),
             ),
-            success=health.ready,
+            success=operational,
         )
 
     async def pending(self, actor: DiscordActor) -> InteractionResult:

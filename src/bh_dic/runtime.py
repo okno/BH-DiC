@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -18,8 +19,9 @@ from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage, DicSessionManager
 from bh_dic.dic.browser import AsyncChromiumSession, BrowserLaunchOptions
+from bh_dic.dic.errors import DicSessionVaultError
 from bh_dic.dic.mock import MockDicAdapter
-from bh_dic.dic.models import DicCredentials
+from bh_dic.dic.models import DicCredentials, SessionState
 from bh_dic.dic.playwright_adapter import PlaywrightDicAdapter
 from bh_dic.dic.protocol import DipendentiInCloudAdapter
 from bh_dic.dic.session_vault import FernetSessionVault, resolve_session_vault_path
@@ -46,6 +48,7 @@ from bh_dic.services.browser_runtime import (
 from bh_dic.services.dic_service import DicService
 
 _MOCK_SECRET = b"BH-DiC synthetic mock key only!!"
+logger = logging.getLogger(__name__)
 
 
 async def _close_browser_without_masking_primary(
@@ -152,6 +155,7 @@ async def _adapter(
     *,
     force_mock_components: bool,
     state_digest_key: bytes,
+    authenticate_dic: bool,
 ) -> tuple[DipendentiInCloudAdapter, AsyncChromiumSession | None, DicSessionManager | None]:
     if settings.mock_mode or force_mock_components:
         mock_adapter = MockDicAdapter(state_digest_key=state_digest_key)
@@ -174,7 +178,20 @@ async def _adapter(
         )
     )
     try:
-        page = await browser_session.start(session_manager.load_storage_state())
+        try:
+            stored_session = session_manager.load_session()
+        except DicSessionVaultError:
+            if authenticate_dic:
+                raise
+            logger.warning(
+                "dic_session_restore_unavailable",
+                extra={"details": {"reason": "SESSION_VAULT_INVALID"}},
+            )
+            stored_session = None
+        page = await browser_session.start(
+            None if stored_session is None else stored_session.storage_state,
+            session_storage=(None if stored_session is None else stored_session.session_storage),
+        )
         browser_coordinator = BrowserCoordinator(
             queue=BrowserOperationQueue(workers=settings.dic_max_concurrent_browser_operations),
             read_retry=ReadRetryPolicy(
@@ -191,26 +208,29 @@ async def _adapter(
             live_writes_enabled=settings.enable_write_actions,
             state_digest_key=state_digest_key,
         )
-        username = settings.dic_username
-        password = settings.dic_password
-        if username is None or password is None:
-            raise ValueError("DIC credentials are required")
-        await live_adapter.ensure_authenticated(
-            DicCredentials(
-                username=username,
-                password=password,
-                totp=settings.dic_totp_secret,
+        if authenticate_dic:
+            username = settings.dic_username
+            password = settings.dic_password
+            if username is None or password is None:
+                raise ValueError("DIC credentials are required")
+            authenticated = await live_adapter.ensure_authenticated(
+                DicCredentials(
+                    username=username,
+                    password=password,
+                    totp=settings.dic_totp_secret,
+                )
             )
-        )
-        persist_failed = False
-        try:
-            await session_manager.persist(browser_session)
-        except asyncio.CancelledError:
-            persist_failed = True
-        except Exception:
-            persist_failed = True
-        if persist_failed:
-            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+            if authenticated.state is not SessionState.AUTHENTICATED:
+                raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+            persist_failed = False
+            try:
+                await session_manager.persist(browser_session)
+            except asyncio.CancelledError:
+                persist_failed = True
+            except Exception:
+                persist_failed = True
+            if persist_failed:
+                raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
         return live_adapter, browser_session, session_manager
     except BaseException:
         await _close_browser_without_masking_primary(browser_session)
@@ -232,8 +252,14 @@ async def build_runtime(
     settings: AppSettings,
     *,
     force_mock_components: bool = False,
+    authenticate_dic: bool = False,
 ) -> ApplicationRuntime:
-    """Build all boundaries without starting the Discord gateway."""
+    """Build all boundaries without starting Discord or implicitly submitting DIC credentials.
+
+    ``authenticate_dic`` is reserved for an explicit operator authentication command. The safe
+    default only restores the encrypted browser state, so Discord can remain available while an
+    expired or missing DIC session is reported as degraded.
+    """
 
     database = Database(settings.database_url)
     database.ensure_sqlite_parent()
@@ -264,6 +290,7 @@ async def build_runtime(
         settings,
         force_mock_components=force_mock_components,
         state_digest_key=state_digest_key,
+        authenticate_dic=authenticate_dic,
     )
     dic_service = DicService(adapter, flags, capabilities=capabilities)
     file_store = QuarantineStore((settings.data_dir / "uploads").resolve())

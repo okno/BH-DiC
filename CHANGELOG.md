@@ -5,6 +5,32 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-17
+
+### Fixed
+
+- Il login federato accetta soltanto i due ingressi TeamSystem esatti: `LoginEmail` seguito da
+  `LoginPassword`, oppure `LoginPassword` diretto quando DIC passa il `login_hint`. Il secondo
+  percorso non reinvia l'e-mail e il form password viene vincolato all'account configurato prima
+  di compilare il segreto; CAPTCHA, deadline globale, submit password singolo, callback esatta e
+  attestazione tenant restano obbligatori. Lo User-Agent Chromium nativo non cambia.
+- Il vault Fernet conserva anche lo snapshot bounded di `sessionStorage` della sola origine DIC,
+  oltre a cookie e `localStorage`. Il ripristino avviene una sola volta in un documento bootstrap
+  DIC sintetico intercettato localmente, prima della prima navigazione applicativa; non viene
+  ripetuto dopo refresh token o logout e non materializza il payload su altre origini. I vault
+  legacy restano leggibili e le chiavi/valori opachi non vengono normalizzati.
+- L'avvio del gateway non invia più implicitamente credenziali DIC. Se il vault manca, scade o è
+  illeggibile, Discord resta online in modalità degradata senza sovrascriverlo e le operazioni DIC
+  falliscono chiuso. Soltanto `dic-auth-check --live` può autenticare e persistere una nuova
+  sessione; un vault illeggibile continua a bloccare quel check esplicito.
+
+### Changed
+
+- `/bh status` e `/bh health` distinguono browser disponibile da tenant autenticato e riportano
+  esito degradato quando la sessione DIC non è verificata.
+- La guida Discord documenta sia il mapping strettamente `READ_ONLY` tramite `@everyone`, sia il
+  ruolo umano dedicato raccomandato per letture HR, mantenendo guild e canale allowlistati.
+
 ## [0.2.6] - 2026-08-17
 
 ### Fixed
@@ -154,7 +180,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/okno/BH-DiC/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/okno/BH-DiC/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/okno/BH-DiC/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/okno/BH-DiC/compare/v0.2.3...v0.2.4

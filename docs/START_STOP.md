@@ -1,8 +1,9 @@
 # Start e stop
 
-> Stato al 17 agosto 2026: il servizio systemd sul target Debian è `active/running` con
-> `NRestarts=0`. Doctor, Groq e check DIC headless sono verificati; il comando guild-scoped è
-> registrato e il gateway risponde. Il primo smoke è stato negato dal gate RBAC prima del dispatch.
+> Stato osservato al 17 agosto 2026: Doctor, Groq e un check DIC headless sono riusciti; il
+> comando guild-scoped è registrato. Un riavvio successivo della release precedente alla 0.2.7
+> si è fermato fail-closed su `TEAMSYSTEM_EMAIL`, lasciando il gateway offline. La 0.2.7 separa
+> l'avvio Discord dal login DIC e ripristina anche `sessionStorage` cifrato.
 
 ## Prerequisiti
 
@@ -28,9 +29,11 @@ Scegliere **systemd** oppure gli script PID. L'unit di esempio usa
 Questa pagina descrive sotto la modalità script PID; per l'installazione systemd vedere la
 [guida end-to-end](INSTALLATION.md#9-scegliere-un-solo-gestore-di-processo).
 
-L'unit systemd 0.2.4 abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Il comando `run`
-usa 78 per ogni errore di autenticazione, quindi systemd non deve trasformarlo in nuovi tentativi
-di login. Su Debian 12 usa inoltre `ConditionPathExists` e un `ExecCondition` con
+L'unit systemd abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Dalla 0.2.7 il comando
+`run` non invia credenziali DIC: una sessione mancante lascia il gateway online e degradato.
+L'exit 78 resta una protezione per gli esiti di autenticazione esplicita non dimostrabili e non
+deve mai trasformarsi in nuovi tentativi di login. Su Debian 12 l'unit usa inoltre
+`ConditionPathExists` e un `ExecCondition` con
 `/usr/bin/test -f`, perché `ConditionPathIsRegularFile` non è supportata. Questi controlli non
 sostituiscono `doctor.sh`, che verifica modalità `0600` di `.env` e configurazione valida.
 Ricopiare e verificare l'unit realmente installata prima di abilitarla.
@@ -121,7 +124,8 @@ usare `kill -9` manualmente e non eliminare PID/lock senza verificare il process
 
 ## Sequenza di ripresa sul target
 
-Dopo l'aggiornamento alla release 0.2.5, mantenere le write disabilitate e il bot fermo:
+Dopo l'aggiornamento alla release 0.2.7, mantenere le write disabilitate e fermare il servizio
+prima di creare o sostituire il vault:
 
 ```bash
 cd /opt/bh-dic
@@ -134,41 +138,47 @@ Il rinnovo umano della password TeamSystem e l'aggiornamento locale di `DIC_PASS
 stati completati. Eseguire una sola verifica live autorizzata:
 
 ```bash
-.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
-./scripts/status.sh
+systemctl start bh-dic.service
+systemctl is-active bh-dic.service
 ```
 
-`encrypted_session_invalidated=false` non è un errore: indica che non esisteva un vault da
-eliminare. La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le
+La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le
 credenziali; la 0.2.4 usa per l'e-mail DIC l'unico input nativo sotto il contenitore pubblico
 `data-testid="login-email"`, invece del placeholder che corrispondeva anche al componente padre.
 La 0.2.5 ammette la callback DIC esatta soltanto come transitoria bounded, senza leggere o
 registrare la query, e attende il marker entro lo stesso budget mantenendo obbligatorio il tenant.
-Eseguire il check live esattamente una volta e soltanto dopo il deployment 0.2.5. Se restituisce
-JSON con `error_type`/`stage`, non trasformarlo in un loop e non avviare il bot.
+La 0.2.7 accetta l'ingresso TeamSystem esatto sia su `LoginEmail` sia direttamente su
+`LoginPassword` quando DIC passa il `login_hint`; non cambia lo User-Agent e non aggiunge route
+generiche. Il vault conserva cifrati anche i token DIC in `sessionStorage`, così il riavvio può
+ripristinare la sessione completa. Eseguire il check live esattamente una volta. Se restituisce
+JSON con `error_type`/`stage`, non trasformarlo in un loop: il servizio può comunque essere
+avviato in modalità degradata per rispondere a status/health, ma nessuna funzione DIC sarà
+operativa finché una sessione non viene verificata.
 
 Se `dic-auth-check --live` restituisce `DicAuthOutcomeUnknownError` con stage
 `CREDENTIAL_SUBMIT`, l'exit code è 78: il submit può essere partito, mentre completamento, tenant
 probe o persistenza del vault non sono dimostrabili. Fermarsi e verificare umanamente lo stato
-dell'account/sessione; non ripetere il comando. Lo stesso codice impedisce il restart systemd
-automatico quando l'errore di autenticazione emerge durante `run`.
+dell'account/sessione; non ripetere il comando. Il normale `run` non esegue questo submit.
 
-Solo se il check live attesta autenticazione e tenant, e dopo autorizzazione separata:
+Dopo il check (riuscito oppure DIC degradato) avviare il gateway; se autenticazione e tenant sono
+attestati, eseguire poi lo smoke funzionale autorizzato. Con systemd usare esclusivamente
+`systemctl`/`journalctl`. La registrazione guild-scoped già completata non va ripetuta per una
+modifica di ruoli o `.env`:
 
 ```bash
-./scripts/register-commands.sh
-./scripts/start.sh
-./scripts/status.sh
-./scripts/logs.sh all --follow
+systemctl restart bh-dic.service
+systemctl status bh-dic.service --no-pager
+journalctl -u bh-dic.service -f -o cat
 ```
 
 I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. Il model-check live
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 17 agosto 2026 preparazione, provider e check headless sono riusciti: sessione `AUTHENTICATED`,
-tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile. Il servizio systemd è attivo; nessuna
+Al 17 agosto 2026 preparazione, provider e un check headless sono riusciti: sessione
+`AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`. Il successivo riavvio ha perso i token conservati
+solo in `sessionStorage` e il servizio pre-0.2.7 si è fermato su `TEAMSYSTEM_EMAIL`; nessuna
 Function ID read/write DIC live è stata completata e le write restano disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

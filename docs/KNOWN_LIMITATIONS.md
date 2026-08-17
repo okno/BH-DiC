@@ -21,11 +21,18 @@
 - `DIC_TOTP_SECRET` non è consumato dal flusso live corrente. Qualunque challenge MFA si ferma
   fail-closed e richiede una procedura umana autorizzata; nessun codice viene compilato o inviato.
 - CAPTCHA richiede sempre intervento umano e non viene aggirato.
-- La composizione settings → vault → browser context → persistenza è collegata e testata con
-  boundary sintetici. Il tentativo headless autorizzato sul server si è fermato perché la password
-  TeamSystem risulta scaduta; non è stato creato un vault autenticato.
-- Il probe di sessione restaurata e l'attestazione passiva tenant sono implementati e coperti da
-  test sintetici, ma non sono ancora stati verificati con un vault live sul server.
+- Un check headless 0.2.5 ha autenticato sessione e tenant nel processo corrente, ma il vault
+  precedente salvava soltanto cookie/localStorage. DIC conserva anche token federati in
+  `sessionStorage`, perciò il riavvio successivo li ha persi e si è fermato a `TEAMSYSTEM_EMAIL`.
+  La 0.2.7 cifra uno snapshot bounded della sola origine DIC e ne ripristina l'origine esatta prima
+  della navigazione; il nuovo formato resta da verificare sul server.
+- DIC può usare `login_hint` e saltare `LoginEmail`. La 0.2.7 ammette soltanto le route TeamSystem
+  esatte `LoginEmail`/`LoginPassword` e, prima di compilare il segreto, richiede che l'identità
+  esposta dal form password coincida con quella configurata. Qualunque assenza, ambiguità o
+  mismatch fallisce chiuso.
+- Il gateway 0.2.7 non invia credenziali DIC all'avvio. Un vault mancante, scaduto o illeggibile
+  lascia Discord disponibile in stato `DEGRADED`; il check esplicito resta fail-closed e non
+  sovrascrive automaticamente un vault illeggibile.
 - L'identificatore aziendale non è disponibile in un marker DOM stabile. L'adapter richiede quindi
   la risposta first-party prevista durante la navigazione controllata; risposta assente, ambigua,
   malformata o difforme fallisce chiuso.
@@ -102,8 +109,9 @@ semantica, permessi e postcondizioni.
 - La riconciliazione può essere eseguita anche dopo kill switch o scadenza
   dell'approvazione, ma richiede comunque accesso read al tenant.
 - Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
-  offline/online sono stati verificati sul Debian target. Il servizio è fermo; login DIC, vault,
-  gateway Discord, restore drill e comportamento applicativo sotto carico restano separati.
+  offline/online sono stati verificati sul Debian target. Login DIC/tenant e gateway Discord hanno
+  avuto successi storici separati, ma l'ultimo servizio pre-0.2.7 si è fermato prima del gateway;
+  il nuovo restore vault, l'avvio degradato, il restore drill e il carico reale restano da verificare.
 
 ## Criterio per rimuovere una limitazione
 

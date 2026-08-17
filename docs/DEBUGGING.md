@@ -2,8 +2,9 @@
 
 Il debug deve preservare gli stessi confini di produzione. Non disabilitare TLS, host-key
 checking, RBAC, redazione, ClamAV, audit o feature flag per ottenere un test verde. Usare solo
-dati sintetici; nel workspace locale il processo bot è assente, mentre lo stato sul target è
-`UNVERIFIED`. Nessun flusso live è stato eseguito durante questa sessione di Fase 2.
+dati sintetici. Sul target sono stati verificati separatamente provider, autenticazione/tenant e
+trasporto Discord, senza eseguire Function ID HR; l'ultimo servizio pre-0.2.7 si è fermato prima
+del gateway. La correzione 0.2.7 resta da distribuire e verificare live.
 
 ## Modalità DEBUG locale
 

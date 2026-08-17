@@ -6,12 +6,13 @@ Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello sele
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 17 agosto 2026: Debian 12, Groq `openai/gpt-oss-120b` e il check DIC headless sono
-> verificati. `dic-auth-check --live` ha restituito sessione `AUTHENTICATED` e tenant
-> `VERIFIED_BY_ADAPTER`; il vault cifrato è utilizzabile dal servizio. systemd risulta
-> `active/running` con `NRestarts=0`; il comando guild-scoped è registrato e il gateway risponde.
-> Il primo smoke Discord è stato negato dal gate RBAC prima del dispatch: nessuna Function ID read o
-> write è stata collaudata sul tenant live e tutte le write restano `DISABLED_BY_POLICY`.
+> Stato al 17 agosto 2026: Debian 12 e Groq `openai/gpt-oss-120b` sono verificati. Un check DIC
+> headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; un riavvio
+> successivo della release precedente alla 0.2.7 ha però perso lo stato federato e si è fermato
+> fail-closed a `TEAMSYSTEM_EMAIL`, lasciando il gateway offline. La 0.2.7 separa l'avvio Discord
+> dal login DIC e conserva cifrato anche `sessionStorage`; è verificata sinteticamente ma non ancora
+> sul target. Il primo smoke Discord storico è stato negato dal gate RBAC prima del dispatch:
+> nessuna Function ID live è collaudata e tutte le write restano `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 
@@ -43,7 +44,8 @@ ma la persona non modifica policy o superficie operativa.
 - kill switch globale `ENABLE_WRITE_ACTIONS=false` e flag specifici tutti `false`;
 - preview, conferma monouso hashata, TTL, idempotenza, A1/A2 distinti e riconciliazione;
 - adapter mock deterministico e adapter Playwright con tenant guard basato su attestazione
-  passiva first-party; le funzioni HR Playwright non sono ancora validate live;
+  passiva first-party, vault cifrato cookie/localStorage/`sessionStorage` e avvio Discord degradabile
+  senza submit implicito di credenziali; le funzioni HR Playwright non sono ancora validate live;
 - audit HMAC append-only, cifratura dei parametri pending e log JSON redatti;
 - quarantena UUID, hash/deduplica, MIME/estensione, ClamAV fail-closed e retention;
 - persistenza async SQLite/PostgreSQL, migrazioni Alembic e test sintetici.
@@ -72,8 +74,9 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). Il servizio Debian è attivo e le integrazioni di autenticazione e
-trasporto sono verificate; resta da correggere la mappatura RBAC prima dello smoke read-only.
+[Deployment](docs/DEPLOYMENT.md). L'ultima istanza osservata si è fermata prima del gateway su una
+release precedente alla 0.2.7; dopo l'aggiornamento occorre rigenerare una volta il vault completo,
+avviare systemd e correggere la mappatura RBAC prima dello smoke read-only.
 
 ## Configurazione e operatività
 
@@ -130,8 +133,11 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.
 - Gli esempi YAML non sostituiscono il catalogo e i controlli nel codice.
-- Il servizio sul target è attivo; prima di qualunque smoke read-only verificare il ruolo Discord
-  dell'operatore. La creazione del bot o l'ownership del guild non sostituiscono la mappa RBAC.
+- Dalla 0.2.7 il gateway Discord non invia credenziali DIC durante l'avvio: se la sessione cifrata
+  è assente, scaduta o illeggibile resta online in modalità `DEGRADED`, mentre le funzioni DIC
+  falliscono chiuso e il vault non viene sovrascritto.
+- Prima di qualunque smoke read-only verificare il ruolo Discord dell'operatore. La creazione del
+  bot o l'ownership del guild non sostituiscono la mappa RBAC.
 
 Approfondimenti: [architettura di sicurezza](docs/SECURITY_ARCHITECTURE.md),
 [privacy](docs/PRIVACY_GDPR.md), [audit](docs/AUDIT.md),
@@ -145,7 +151,8 @@ Setup e confini delle integrazioni: [autenticazione DIC](docs/DIC_AUTHENTICATION
 [stato di verifica live](docs/LIVE_VERIFICATION_STATUS.md) e
 [limitazioni note](docs/KNOWN_LIMITATIONS.md).
 
-La repository è pubblica per scelta esplicita del titolare e contiene soltanto sorgenti,
-configurazioni di esempio e fixture sintetiche. Segreti, identificatori operativi, stato runtime e
-PII devono restare fuori da Git. La pubblicazione del codice non aggiunge automaticamente una
-licenza open source: non aggiungerne una senza autorizzazione.
+La repository è pubblica per scelta esplicita del titolare. Il tree tracciato corrente contiene
+soltanto sorgenti, configurazioni di esempio e fixture sintetiche; l'implementation report segnala
+separatamente un'identità e-mail nei metadati Git storici. Segreti, identificatori operativi, stato runtime e
+PII devono restare fuori da Git. La pubblicazione del codice non aggiunge automaticamente
+una licenza open source: non aggiungerne una senza autorizzazione.

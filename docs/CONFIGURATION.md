@@ -151,6 +151,12 @@ Mappare soltanto ruoli già approvati. Il catalogo normativo RBAC è
 esempio operativo restrict-only, non viene caricato automaticamente dal runtime e non può
 ampliare il catalogo.
 
+Essere owner del server o creatore dell'app non crea alcun bypass applicativo. Per consentire a
+ogni membro del solo canale allowlistato i comandi informativi, Discord assegna a `@everyone` lo
+stesso ID del guild e si può impostare `DISCORD_READONLY_ROLE_IDS=<DISCORD_GUILD_ID>`. Per dati HR
+usare invece un ruolo umano dedicato in `DISCORD_HR_READ_ROLE_IDS`; non mappare `@everyone` a
+write/admin. Procedura completa: [Configurazione Discord](DISCORD_SETUP.md).
+
 Analogamente, [redaction.example.yaml](../config/redaction.example.yaml) documenta il profilo
 atteso: i controlli effettivi sono nel codice di logging, security e provider. Modificare il file
 YAML da solo non modifica la redazione runtime.

@@ -4,9 +4,10 @@ Questa procedura prepara un'applicazione Discord slash-only limitata al guild e 
 allowlistati nella configurazione locale. I relativi ID non sono conservati nella repository e
 devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarli.
 
-> Stato al 17 agosto 2026: installazione guild-scoped, registrazione del comando e risposta del
-> gateway sono verificate. Il primo smoke è stato negato dal gate RBAC prima del dispatch; occorre
-> correggere il ruolo dell'operatore senza ampliare guild o canale. Le istruzioni seguono la
+> Stato al 17 agosto 2026: installazione guild-scoped e registrazione sono verificate; il gateway
+> ha risposto prima che un riavvio pre-0.2.7 si fermasse nel bootstrap DIC. Dopo la distribuzione
+> 0.2.7 deve rispondere anche con DIC `DEGRADED`. Il primo smoke storico è stato negato dal gate
+> RBAC prima del dispatch; occorre correggere i ruoli senza ampliare guild o canale. Le istruzioni seguono la
 > documentazione Discord ufficiale
 > per [creare l'app e il bot](https://docs.discord.com/developers/quick-start/getting-started),
 > [OAuth2](https://docs.discord.com/developers/topics/oauth2) e [application
@@ -109,6 +110,40 @@ DISCORD_SYSTEM_ADMIN_ROLE_IDS=<ID_LIST>
 Usare interi positivi separati da virgole. La presenza nel canale non autorizza operazioni HR:
 scope e ruoli vengono ricontrollati dall'applicazione. Applicare least privilege e separazione dei
 compiti; il richiedente non può approvare la propria azione e A2 deve essere distinto da A1.
+
+### Consentire i comandi a tutti i membri del solo canale
+
+Discord assegna al ruolo predefinito `@everyone` lo stesso snowflake del guild. Se l'obiettivo è
+permettere a ogni membro che può vedere il canale allowlistato di usare soltanto comandi
+informativi e aggregati, impostare localmente:
+
+```dotenv
+DISCORD_READONLY_ROLE_IDS=<DISCORD_GUILD_ID>
+```
+
+Il gate continua a negare DM, thread, bot, webhook, altro guild e altro canale. Questa mappa non
+abilita letture HR individuali. Per `/bh ask` con funzioni HR ordinarie creare invece un ruolo
+umano dedicato, per esempio `BH-DiC HR Read`, assegnarlo a tutti e soli i membri ammessi e copiarne
+l'ID in `DISCORD_HR_READ_ROLE_IDS`. Aggiungere lo stesso ID a
+`DISCORD_BALANCE_ROLE_IDS` soltanto se quelle persone devono vedere anche i bilanci: la mappa
+balance è un entitlement aggiuntivo e da sola non supera il gate.
+
+Non mappare `@everyone` a `HR_WRITE`, IAM, document operator, approver, security admin o system
+admin. Mappare `@everyone` a `HR_READ` è tecnicamente possibile, ma estende automaticamente i dati
+HR a ogni membro presente o futuro che ottenga accesso al canale ed è quindi sconsigliato.
+
+Nel client Discord configurare inoltre i due livelli nativi:
+
+1. in **Server Settings → Integrations → BH-DiC → Manage**, consentire il ruolo umano (oppure
+   `@everyone` per il profilo strettamente `READ_ONLY`) e il solo canale allowlistato; negare
+   **All Channels** se si vuole nascondere i comandi altrove e mantenere i sottocomandi synced;
+2. in **Edit Channel → Permissions**, concedere agli utenti **View Channel** e
+   **Use Application Commands**; concedere **Attach Files** soltanto a chi usa `/bh upload`;
+3. al ruolo del bot concedere soltanto **View Channel**, **Send Messages** ed **Embed Links**.
+
+Una modifica ai ruoli assegnati nel client Discord ha effetto dalla richiesta successiva. Una
+modifica alle mappe nel `.env` richiede il riavvio del servizio, ma non una nuova installazione né
+una nuova registrazione degli slash command.
 
 Prima della produzione verificare con account sintetici almeno: nessun ruolo, sola lettura,
 approvatore, ruolo errato, DM, altro canale, thread, webhook e bot.

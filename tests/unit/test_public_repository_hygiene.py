@@ -41,6 +41,7 @@ def _tracked_public_text_corpus() -> str:
         ROOT / "AGENTS.md",
         ROOT / "Makefile",
         ROOT / "README.md",
+        ROOT / "CHANGELOG.md",
         ROOT / "SECURITY.md",
         ROOT / "pyproject.toml",
     )
@@ -108,6 +109,8 @@ def test_documented_live_status_matches_the_observed_transport_and_auth_gates() 
     for path in status_files:
         text = path.read_text(encoding="utf-8")
         assert "VERIFIED_BY_ADAPTER" in text, path
-        assert "active/running" in text, path
-        assert "NRestarts=0" in text, path
+        assert "0.2.7" in text, path
+        assert "TEAMSYSTEM_EMAIL" in text, path
+        assert "sessionStorage" in text, path
+        assert "DEGRADED" in text, path
         assert "RBAC" in text, path

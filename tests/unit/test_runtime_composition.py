@@ -15,7 +15,9 @@ from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
 from bh_dic.dic.browser import AsyncChromiumSession
+from bh_dic.dic.errors import DicSessionVaultError
 from bh_dic.dic.mock import MockDicAdapter
+from bh_dic.dic.models import SessionState, SessionStatus
 from bh_dic.dic.protocol import DipendentiInCloudAdapter
 from bh_dic.discord.bot import BHDiCBot
 from bh_dic.files.repository import SqlAlchemyUploadRepository
@@ -152,7 +154,10 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, browser, manager = await runtime_module._adapter(
-        _mock_settings(), force_mock_components=False, state_digest_key=b"s" * 32
+        _mock_settings(),
+        force_mock_components=False,
+        state_digest_key=b"s" * 32,
+        authenticate_dic=False,
     )
     assert isinstance(adapter, MockDicAdapter)
     assert browser is None and manager is None
@@ -160,6 +165,7 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
 
     events: list[str] = []
     adapter_options: dict[str, object] = {}
+    restored_session_storage = object()
 
     class FakeVault:
         def __init__(self, path: object, key: object) -> None:
@@ -169,9 +175,12 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
         def __init__(self, _vault: object) -> None:
             pass
 
-        def load_storage_state(self) -> dict[str, object] | None:
+        def load_session(self) -> object:
             events.append("load")
-            return {"cookies": []}
+            return SimpleNamespace(
+                storage_state={"cookies": []},
+                session_storage=restored_session_storage,
+            )
 
         async def persist(self, _session: object) -> None:
             events.append("persist")
@@ -182,7 +191,8 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
         def __init__(self, _options: object) -> None:
             pass
 
-        async def start(self, state: object) -> object:
+        async def start(self, state: object, *, session_storage: object = None) -> object:
+            assert session_storage is restored_session_storage
             events.append(f"start:{bool(state)}")
             return object()
 
@@ -194,8 +204,9 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
         def __init__(self, _page: object, **kwargs: object) -> None:
             adapter_options.update(kwargs)
 
-        async def ensure_authenticated(self, credentials: object) -> None:
+        async def ensure_authenticated(self, credentials: object) -> SessionStatus:
             events.append(f"authenticate:{bool(credentials)}")
+            return SessionStatus(state=SessionState.AUTHENTICATED)
 
         async def close(self) -> None:
             events.append("adapter-close")
@@ -206,26 +217,167 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
 
     live_adapter, live_browser, live_manager = await runtime_module._adapter(
-        _live_settings(), force_mock_components=False, state_digest_key=b"s" * 32
+        _live_settings(),
+        force_mock_components=False,
+        state_digest_key=b"s" * 32,
+        authenticate_dic=False,
     )
     assert type(cast(Any, live_adapter)) is FakeLiveAdapter
     assert isinstance(live_browser, FakeBrowser)
     assert isinstance(live_manager, FakeSessionManager)
     assert adapter_options["login_timeout_ms"] == 60_000
-    assert events[-1] == "persist"
+    assert events[-2:] == ["load", "start:True"]
+    assert not any(event.startswith("authenticate:") for event in events)
+    assert "persist" not in events
+
+    await runtime_module._adapter(
+        _live_settings(),
+        force_mock_components=False,
+        state_digest_key=b"s" * 32,
+        authenticate_dic=True,
+    )
+    assert events[-2:] == ["authenticate:True", "persist"]
 
     missing_key = _live_settings().model_copy(update={"dic_session_encryption_key": None})
     with pytest.raises(ValueError, match="DIC_SESSION_ENCRYPTION_KEY"):
         await runtime_module._adapter(
-            missing_key, force_mock_components=False, state_digest_key=b"s" * 32
+            missing_key,
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+            authenticate_dic=False,
         )
 
     missing_credentials = _live_settings().model_copy(
         update={"dic_username": None, "dic_password": None}
     )
+    passive_adapter, passive_browser, passive_manager = await runtime_module._adapter(
+        missing_credentials,
+        force_mock_components=False,
+        state_digest_key=b"s" * 32,
+        authenticate_dic=False,
+    )
+    assert type(cast(Any, passive_adapter)) is FakeLiveAdapter
+    assert isinstance(passive_browser, FakeBrowser)
+    assert isinstance(passive_manager, FakeSessionManager)
     with pytest.raises(ValueError, match="DIC credentials"):
         await runtime_module._adapter(
-            missing_credentials, force_mock_components=False, state_digest_key=b"s" * 32
+            missing_credentials,
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+            authenticate_dic=True,
+        )
+    assert events[-1] == "browser-close"
+
+
+@pytest.mark.asyncio
+async def test_unverified_live_authentication_is_never_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            pass
+
+        def load_session(self) -> None:
+            return None
+
+        async def persist(self, _session: object) -> None:
+            events.append("persist")
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, _state: object, *, session_storage: object = None) -> object:
+            assert session_storage is None
+            return object()
+
+        async def close(self) -> None:
+            events.append("browser-close")
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **_kwargs: object) -> None:
+            pass
+
+        async def ensure_authenticated(self, _credentials: object) -> SessionStatus:
+            events.append("authenticate-unverified")
+            return SessionStatus(state=SessionState.UNKNOWN)
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await runtime_module._adapter(
+            _live_settings(),
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+            authenticate_dic=True,
+        )
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    assert events == ["authenticate-unverified", "browser-close"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_session_vault_degrades_passive_gateway_but_blocks_explicit_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            pass
+
+        def load_session(self) -> None:
+            raise DicSessionVaultError("PRIVATE-VAULT-DETAIL")
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, state: object, *, session_storage: object = None) -> object:
+            assert state is None
+            assert session_storage is None
+            events.append("browser-start")
+            return object()
+
+        async def close(self) -> None:
+            events.append("browser-close")
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **_kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    with caplog.at_level("WARNING", logger="bh_dic.runtime"):
+        adapter, browser, manager = await runtime_module._adapter(
+            _live_settings(),
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+            authenticate_dic=False,
+        )
+
+    assert type(cast(Any, adapter)) is FakeLiveAdapter
+    assert isinstance(browser, FakeBrowser)
+    assert isinstance(manager, FakeSessionManager)
+    assert events == ["browser-start"]
+    assert any(record.message == "dic_session_restore_unavailable" for record in caplog.records)
+    assert "PRIVATE-VAULT-DETAIL" not in caplog.text
+
+    with pytest.raises(DicSessionVaultError, match="PRIVATE-VAULT-DETAIL"):
+        await runtime_module._adapter(
+            _live_settings(),
+            force_mock_components=False,
+            state_digest_key=b"s" * 32,
+            authenticate_dic=True,
         )
     assert events[-1] == "browser-close"
 
@@ -241,7 +393,7 @@ async def test_authenticated_session_persistence_failure_is_nonrepeatable(
         def __init__(self, _vault: object) -> None:
             pass
 
-        def load_storage_state(self) -> None:
+        def load_session(self) -> None:
             return None
 
         async def persist(self, _session: object) -> None:
@@ -252,7 +404,8 @@ async def test_authenticated_session_persistence_failure_is_nonrepeatable(
         def __init__(self, _options: object) -> None:
             pass
 
-        async def start(self, _state: object) -> object:
+        async def start(self, _state: object, *, session_storage: object = None) -> object:
+            assert session_storage is None
             return object()
 
         async def close(self) -> None:
@@ -263,8 +416,9 @@ async def test_authenticated_session_persistence_failure_is_nonrepeatable(
         def __init__(self, _page: object, **_kwargs: object) -> None:
             pass
 
-        async def ensure_authenticated(self, _credentials: object) -> None:
+        async def ensure_authenticated(self, _credentials: object) -> SessionStatus:
             events.append("authenticate")
+            return SessionStatus(state=SessionState.AUTHENTICATED)
 
     monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
     monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
@@ -276,6 +430,7 @@ async def test_authenticated_session_persistence_failure_is_nonrepeatable(
             _live_settings(),
             force_mock_components=False,
             state_digest_key=b"s" * 32,
+            authenticate_dic=True,
         )
 
     assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
@@ -297,7 +452,7 @@ async def test_cancelled_session_persistence_is_nonrepeatable(
         def __init__(self, _vault: object) -> None:
             pass
 
-        def load_storage_state(self) -> None:
+        def load_session(self) -> None:
             return None
 
         async def persist(self, _session: object) -> None:
@@ -309,7 +464,8 @@ async def test_cancelled_session_persistence_is_nonrepeatable(
         def __init__(self, _options: object) -> None:
             pass
 
-        async def start(self, _state: object) -> object:
+        async def start(self, _state: object, *, session_storage: object = None) -> object:
+            assert session_storage is None
             return object()
 
         async def close(self) -> None:
@@ -319,8 +475,9 @@ async def test_cancelled_session_persistence_is_nonrepeatable(
         def __init__(self, _page: object, **_kwargs: object) -> None:
             pass
 
-        async def ensure_authenticated(self, _credentials: object) -> None:
+        async def ensure_authenticated(self, _credentials: object) -> SessionStatus:
             events.append("authenticate")
+            return SessionStatus(state=SessionState.AUTHENTICATED)
 
     monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
     monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
@@ -333,6 +490,7 @@ async def test_cancelled_session_persistence_is_nonrepeatable(
                 _live_settings(),
                 force_mock_components=False,
                 state_digest_key=b"s" * 32,
+                authenticate_dic=True,
             ),
             timeout=0.05,
         )
@@ -359,14 +517,15 @@ async def test_pre_submit_cancellation_still_closes_browser_and_propagates(
         def __init__(self, _vault: object) -> None:
             pass
 
-        def load_storage_state(self) -> None:
+        def load_session(self) -> None:
             return None
 
     class FakeBrowser:
         def __init__(self, _options: object) -> None:
             pass
 
-        async def start(self, _state: object) -> object:
+        async def start(self, _state: object, *, session_storage: object = None) -> object:
+            assert session_storage is None
             return object()
 
         async def close(self) -> None:
@@ -390,6 +549,7 @@ async def test_pre_submit_cancellation_still_closes_browser_and_propagates(
             _live_settings(),
             force_mock_components=False,
             state_digest_key=b"s" * 32,
+            authenticate_dic=True,
         )
     )
     await asyncio.wait_for(auth_started.wait(), timeout=1)
@@ -442,8 +602,10 @@ async def test_build_runtime_live_requester_resolver_rechecks_member_roles(
         *,
         force_mock_components: bool,
         state_digest_key: bytes,
+        authenticate_dic: bool,
     ) -> tuple[DipendentiInCloudAdapter, None, None]:
         assert force_mock_components is False
+        assert authenticate_dic is False
         assert len(state_digest_key) == 32
         return mock_adapter, None, None
 

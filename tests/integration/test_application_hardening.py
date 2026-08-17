@@ -285,7 +285,7 @@ async def test_unsupported_help_and_degraded_health_paths(monkeypatch: pytest.Mo
         assert help_result.description == "Nessuna funzione disponibile per i ruoli correnti."
 
         degraded = HealthStatus(
-            ready=False,
+            ready=True,
             authenticated=False,
             browser_available=True,
             detail="synthetic degraded",
@@ -295,7 +295,9 @@ async def test_unsupported_help_and_degraded_health_paths(monkeypatch: pytest.Mo
         health = await harness.coordinator.health(_actor())
         assert status.fields[0].value == "DEGRADED"
         assert status.fields[1].value == "available"
-        assert status.fields[2].value == "DISABLED"
+        assert status.fields[2].value == "UNAVAILABLE"
+        assert status.fields[3].value == "DISABLED"
+        assert not status.success
         assert health.description == "synthetic degraded"
         assert not health.success
     finally:

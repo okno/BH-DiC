@@ -4,12 +4,12 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato al 17 agosto 2026: runtime Debian 12, Groq `openai/gpt-oss-120b` e check DIC headless sono
-> verificati. La 0.2.5 ha restituito sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault
-> cifrato utilizzabile. systemd è `active/running` con `NRestarts=0`; il comando guild-scoped è
-> registrato e il gateway risponde. Il primo smoke Discord è stato negato dal gate RBAC prima del
-> dispatch, quindi nessuna Function ID DIC è stata collaudata live. Tutte le write devono restare
-> `DISABLED_BY_POLICY`.
+> Stato al 17 agosto 2026: runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati. La 0.2.5
+> ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER` nel processo corrente; un
+> riavvio successivo pre-0.2.7 ha perso lo stato federato non incluso nel vecchio vault e si è
+> fermato a `TEAMSYSTEM_EMAIL`, prima del gateway. La 0.2.7 corregge il vault e separa Discord dal
+> login DIC; è testata sinteticamente ma non ancora distribuita. Nessuna Function ID DIC è stata
+> collaudata live e tutte le write devono restare `DISABLED_BY_POLICY`.
 
 ## 1. Decisioni prima dell'installazione
 
@@ -272,7 +272,7 @@ Function ID e accetta soltanto `unsupported_request`; non costruisce Discord, DI
 esegue tool. `LIVE_VERIFIED` vale esclusivamente per il provider/modello in quel momento. Nessuno
 dei due comandi prova login DIC, selettori live o deployment completo.
 
-### Gate DIC prima dell'attivazione
+### Gate DIC per abilitare le funzioni DIC
 
 Con servizio fermo e tutte le write disabilitate, il controllo offline è utile soltanto quando
 esiste già un vault cifrato da validare:
@@ -281,20 +281,17 @@ esiste già un vault cifrato da validare:
 sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check
 ```
 
-Su una prima installazione, dopo una rotazione credenziali o dopo `invalidate-session`, l'assenza
+Su una prima installazione o dopo un'invalidazione intenzionale, l'assenza
 del vault fa fallire correttamente questo comando: non è un errore di login e non deve precedere il
 bootstrap live.
 
-Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale,
-aggiornare `DIC_PASSWORD` localmente senza mostrarla e invalidare l'eventuale sessione precedente.
-Sul target documentato questi due passaggi sono già stati completati. Distribuire la release
-0.2.5 e, soltanto dopo il deployment, con autorizzazione esplicita alla rete DIC, eseguire una
-sola verifica:
+Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale e
+aggiornare `DIC_PASSWORD` localmente senza mostrarla. Non invalidare preventivamente un vault
+leggibile soltanto per l'upgrade: la 0.2.7 può convertirlo al formato completo. Distribuire la
+release 0.2.7 e, con autorizzazione esplicita alla rete DIC, eseguire una sola verifica:
 
 ```bash
-sudo -u bh-dic -H .venv/bin/python -m bh_dic invalidate-session
 sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check --live
-sudo -u bh-dic -H ./scripts/status.sh
 ```
 
 Il check live prova prima una sessione restaurata mediante la route fissa della lista dipendenti,
@@ -315,7 +312,15 @@ invariato. Un errore mostra soltanto JSON
 `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` usa exit code 78 e indica che il submit può essere
 partito senza che completamento, tenant o vault siano dimostrabili: fermarsi e verificare con una
 procedura umana, senza un nuovo login.
-Solo dopo esito autenticazione/tenant positivo:
+
+La 0.2.7 ammette l'ingresso TeamSystem soltanto sulle route esatte `LoginEmail` e
+`LoginPassword`; prima del segreto verifica che l'account del form coincida con
+`DIC_USERNAME`. Il vault cifra cookie/localStorage e lo snapshot bounded `sessionStorage` della
+sola origine DIC. Il normale gateway non invia credenziali: se la sessione è mancante, scaduta o
+non utilizzabile, Discord resta online `DEGRADED` e le funzioni DIC falliscono chiuso.
+
+La registrazione guild-scoped va eseguita una volta dopo l'installazione o quando cambiano schema
+dei comandi, application ID o guild; non va ripetuta per modifiche RBAC o `.env`:
 
 ```bash
 sudo -u bh-dic -H ./scripts/register-commands.sh
@@ -339,10 +344,10 @@ sudo systemd-analyze verify /etc/systemd/system/bh-dic.service
 sudo systemctl daemon-reload
 ```
 
-`RestartPreventExitStatus=78` è obbligatorio insieme a `Restart=on-failure`: il comando `run`
-restituisce 78 per ogni errore di autenticazione e systemd non deve riavviare automaticamente il
-processo, perché ciò potrebbe reinviare credenziali. Dopo ogni aggiornamento del template,
-ricopiare e rivalidare l'unit a servizio fermo prima di abilitarla.
+`RestartPreventExitStatus=78` resta una difesa aggiuntiva insieme a `Restart=on-failure`. Dalla
+0.2.7 il comando `run` non invia credenziali DIC; il codice 78 identifica soprattutto il check
+esplicito post-submit con esito incerto. Dopo ogni aggiornamento del template, ricopiare e
+rivalidare l'unit a servizio fermo prima di abilitarla.
 
 Su Debian 12 `ConditionPathIsRegularFile` non è una direttiva systemd supportata. L'unit dalla
 0.2.4 usa quindi `ConditionPathExists` come condizione di unit e `/usr/bin/test -f` come

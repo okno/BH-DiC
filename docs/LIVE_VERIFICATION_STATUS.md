@@ -7,9 +7,9 @@
 | OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
-| Discord | `LIVE_DISCORD_TRANSPORT_VERIFIED`: comando guild-scoped registrato e gateway responsivo; primo smoke negato dal gate RBAC prima del dispatch | Correggere il ruolo dell'operatore e ripetere un solo smoke read-only; nessuna Function ID ancora verificata |
-| DIC | check headless `LIVE_AUTHENTICATED`: sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile; funzioni applicative `NEEDS_VALIDATION` | Smoke read-only autorizzato dopo correzione RBAC; nessuna write live |
-| Debian deployment | runtime `VERIFIED`; servizio systemd `active/running`, `NRestarts=0` | Monitoraggio log, smoke RBAC/read-only e restore drill |
+| Discord | `LIVE_DISCORD_TRANSPORT_VERIFIED` storico: comando guild-scoped registrato e gateway responsivo; ultimo avvio pre-0.2.7 fermato prima del gateway | Distribuire 0.2.7, verificare `active/running`, correggere RBAC e ripetere un solo smoke read-only; nessuna Function ID ancora verificata |
+| DIC | check headless 0.2.5 `LIVE_AUTHENTICATED`: sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; il vault pre-0.2.7 non conservava `sessionStorage` | Rigenerare una volta il vault completo con 0.2.7; funzioni applicative `NEEDS_VALIDATION`, nessuna write live |
+| Debian deployment | prerequisiti runtime `VERIFIED`; ultimo servizio osservato fermato fail-closed con exit 78 a `TEAMSYSTEM_EMAIL` | Distribuire 0.2.7, verificare avvio Discord anche `DEGRADED`, log, smoke RBAC/read-only e restore drill |
 
 Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. DIC e trasporto
 Discord hanno evidenze live separate; nessuna di esse attesta una Function ID HR. Il doctor Debian
@@ -41,9 +41,14 @@ rifiutato fail-closed la callback DIC legittima, con `CREDENTIAL_SUBMIT`/exit 78
 automatico. Un successivo accesso manuale autorizzato in browser fresco ha accettato le
 credenziali con un solo submit e ha osservato la sequenza password TeamSystem → callback DIC esatta
 → dashboard → route e marker esatti della lista dipendenti. Dopo il deployment, un singolo check
-headless 0.2.5 ha verificato sessione, tenant e vault. La callback esatta resta ammessa soltanto come
-transitoria bounded; query opache non sono lette o registrate e tutte le varianti di route restano
-fail-closed. Il servizio systemd è attivo e le write restano disabilitate.
+headless 0.2.5 ha verificato sessione e tenant nel processo corrente. Un riavvio successivo ha
+mostrato che il vault precedente non conservava i token federati in `sessionStorage`; la route
+TeamSystem è passata direttamente a `LoginPassword`, mentre il codice pretendeva ancora
+`LoginEmail`, e systemd si è fermato con exit 78 prima del gateway. La 0.2.7 accetta soltanto le due
+route TeamSystem esatte, vincola l'identità prima del segreto, cifra anche lo snapshot bounded
+`sessionStorage` e mantiene Discord online in stato `DEGRADED` senza login implicito. Queste
+correzioni sono coperte sinteticamente ma restano da distribuire e verificare sul target. Le write
+restano disabilitate.
 Nessuna Function ID DIC è quindi classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono
 `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY` e `DISABLED_BY_DEFAULT`, anche quando il relativo
 controllo era visibile nella baseline. `TESTED_WITH_MOCK` indica test sintetici

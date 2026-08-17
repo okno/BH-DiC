@@ -163,7 +163,7 @@ async def test_live_helper_uses_adapter_status_and_always_closes_runtime(
 
     assert result["authentication"] == "LIVE_AUTHENTICATED"
     assert result["tenant_binding"] == "VERIFIED_BY_ADAPTER"
-    build_runtime.assert_awaited_once_with(settings)
+    build_runtime.assert_awaited_once_with(settings, authenticate_dic=True)
     adapter.session_status.assert_awaited_once_with()
     runtime.close.assert_awaited_once_with()
 
@@ -272,7 +272,7 @@ def test_run_uses_nonrestartable_exit_for_every_authentication_error(
     assert sensitive not in result.output
 
 
-def test_password_click_failure_flows_through_runtime_cleanup_to_run_exit_78(
+def test_password_click_failure_flows_through_runtime_cleanup_to_live_auth_exit_78(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -293,7 +293,7 @@ def test_password_click_failure_flows_through_runtime_cleanup_to_run_exit_78(
         def __init__(self, _vault: object) -> None:
             pass
 
-        def load_storage_state(self) -> None:
+        def load_session(self) -> None:
             return None
 
         async def persist(self, _session: object) -> None:
@@ -303,7 +303,8 @@ def test_password_click_failure_flows_through_runtime_cleanup_to_run_exit_78(
         def __init__(self, _options: object) -> None:
             pass
 
-        async def start(self, _state: object) -> object:
+        async def start(self, _state: object, *, session_storage: object = None) -> object:
+            assert session_storage is None
             return object()
 
         async def close(self) -> None:
@@ -331,18 +332,19 @@ def test_password_click_failure_flows_through_runtime_cleanup_to_run_exit_78(
     monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
     monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
 
-    async def run_gateway(_settings: AppSettings) -> None:
+    async def live_check(_settings: AppSettings) -> dict[str, object]:
         await runtime_module._adapter(
             _settings,
             force_mock_components=False,
             state_digest_key=b"s" * 32,
+            authenticate_dic=True,
         )
+        raise AssertionError("authentication failure must stop the live check")
 
     monkeypatch.setattr(cli, "_settings", lambda **_kwargs: settings)
-    monkeypatch.setattr(cli, "configure_logging", lambda **_kwargs: None)
-    monkeypatch.setattr(cli, "_run_gateway", run_gateway)
+    monkeypatch.setattr(cli, "_dic_auth_check_live", live_check)
 
-    result = runner.invoke(cli.app, ["run"])
+    result = runner.invoke(cli.app, ["dic-auth-check", "--live"])
 
     assert result.exit_code == cli.DIC_AUTH_OUTCOME_UNKNOWN_EXIT_CODE == 78
     assert json.loads(result.stderr) == {

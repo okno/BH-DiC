@@ -142,7 +142,7 @@ def _dic_auth_check_offline(settings: AppSettings) -> dict[str, object]:
 async def _dic_auth_check_live(settings: AppSettings) -> dict[str, object]:
     """Explicitly build the live adapter and verify its tenant-bound session."""
 
-    runtime = await build_runtime(settings)
+    runtime = await build_runtime(settings, authenticate_dic=True)
     try:
         status = await runtime.adapter.session_status()
         if status.state is not SessionState.AUTHENTICATED:

@@ -36,7 +36,14 @@ volta, ma ha classificato come inattesa la callback DIC legittima e si è fermat
 Una successiva verifica manuale autorizzata, in browser fresco e in sola lettura, ha accettato le
 credenziali con un solo submit e ha osservato password TeamSystem → callback DIC esatta → dashboard
 → route e marker esatti della lista dipendenti. Dopo il deployment 0.2.5, un singolo check headless
-ha restituito sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile.
+ha restituito sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e ha creato un vault cifrato,
+ma non ne ha dimostrato la durabilità al riavvio.
+Il riavvio successivo ha evidenziato due limiti ora corretti: DIC passa a TeamSystem un
+`login_hint`, quindi l'IdP può saltare direttamente a `LoginPassword`, e i token federati DIC
+risiedono in `sessionStorage`, che il solo `storage_state` Playwright non conserva. Dalla 0.2.7
+entrambe le transizioni TeamSystem esatte sono ammesse; prima del segreto il form è vincolato
+all'account configurato e il vault cifrato include anche lo snapshot bounded della sola origine
+DIC. Il normale gateway non invia credenziali e resta disponibile `DEGRADED` se il restore manca.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
@@ -90,7 +97,10 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    l'unicità del controllo visibile. Un cambio di origine/path, zero controlli a
    scadenza o più controlli visibili fallisce chiuso.
 4. `authenticate()` segue soltanto la sequenza allowlisted DIC → `LoginEmail` →
-   `LoginPassword`, compilando i segreti direttamente nei controlli previsti.
+   `LoginPassword` oppure DIC → `LoginPassword` quando TeamSystem usa il `login_hint` già
+   verificato. In quest'ultimo caso non compila né invia nuovamente l'e-mail. Ogni altra route
+   fallisce chiuso; il controllo password resta univoco e il submit resta singolo. I segreti sono
+   compilati direttamente nei controlli previsti.
    Non espone primitive di navigazione arbitrarie. Il campo e-mail DIC usa l'unico
    input nativo sotto il contenitore pubblico `data-testid="login-email"`, evitando
    il placeholder che nella 0.2.3 risolveva anche il componente padre. Il submit DIC
@@ -156,9 +166,11 @@ implementata e verificata, MFA live è una limitazione nota.
 
 ## Vault di sessione
 
-`FernetSessionVault` salva soltanto un modello `StoredBrowserSession`, contenente
-lo `storage_state`, gli istanti di autenticazione/scadenza e un eventuale hint
-redatto. Il file è cifrato con Fernet prima della scrittura.
+`FernetSessionVault` salva soltanto un modello `StoredBrowserSession`, contenente lo
+`storage_state`, lo snapshot `sessionStorage` della sola origine DIC, gli istanti di
+autenticazione/scadenza e un eventuale hint redatto. Il file è cifrato con Fernet prima della
+scrittura. I vault legacy privi di `sessionStorage` restano leggibili, ma possono richiedere un
+nuovo login esplicito prima di diventare riutilizzabili.
 
 Le proprietà implementate sono:
 
@@ -168,20 +180,30 @@ Le proprietà implementate sono:
 - nessun file temporaneo in chiaro;
 - rifiuto di vault illeggibili, alterati o cifrati con una chiave diversa;
 - rifiuto delle sessioni scadute;
-- invalidazione mediante eliminazione del solo file di sessione.
+- invalidazione mediante eliminazione del solo file di sessione;
+- massimo 64 entry `sessionStorage`, chiavi/valori e dimensione totale limitati, chiavi duplicate
+  rifiutate e origine fissata esattamente a `https://secure.dipendentincloud.it`;
+- ripristino one-shot in un documento bootstrap DIC vuoto, intercettato localmente senza risposta
+  di rete, prima della prima navigazione applicativa; il payload è passato come argomento solo su
+  quell'origine e non viene ripetuto dopo refresh token o logout.
 
 La semantica dei bit POSIX dipende dal filesystem e dall'host: sull'host Linux di
 destinazione va verificata con `stat` prima di considerarla operativa.
 
-`DicSessionManager` applica una durata predefinita di otto ore e può caricare,
-salvare o invalidare lo stato. Il bootstrap non-mock collega settings, vault,
-browser context e persistenza: carica lo storage state cifrato prima di creare il
-context, esegue il probe fisso con attestazione passiva e lo salva nuovamente solo
-dopo che l'adapter ha verificato autenticazione e tenant. Questa composizione è
-testata localmente; non è ancora stata verificata con un vault live. I tentativi 0.2.2 e 0.2.3 si
+`DicSessionManager` applica una durata predefinita di otto ore e può caricare, salvare o
+invalidare lo stato. Il bootstrap non-mock collega settings, vault e browser context: carica
+cookie/localStorage e ripristina una volta lo snapshot `sessionStorage` cifrato prima degli script
+applicativi. Soltanto
+il comando operatore esplicito `dic-auth-check --live` può inviare credenziali e persistere un
+nuovo snapshot, e lo fa solo dopo autenticazione e attestazione tenant verificate. Il normale
+gateway Discord non invia credenziali e non aggiorna il vault: se la sessione manca, scade o il
+vault è illeggibile, resta online in stato `DEGRADED`, preserva il file e le funzioni DIC falliscono
+chiuso. Il check esplicito continua invece a rifiutare un vault illeggibile finché l'operatore non
+decide se conservarlo o invalidarlo. Questa composizione è testata
+localmente. I tentativi 0.2.2 e 0.2.3 si
 sono fermati prima del submit password; la 0.2.4 ha raggiunto la callback DIC dopo un singolo
-submit, ma l'ha rifiutata fail-closed. Il successivo login manuale fresco ha confermato il flusso,
-non la composizione headless, l'attestazione tenant o la persistenza del vault sul server.
+submit, ma l'ha rifiutata fail-closed. Un successivo check headless ha confermato autenticazione e
+tenant nel contesto corrente; la 0.2.7 corregge il ripristino completo dopo il riavvio.
 Un errore di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
@@ -218,7 +240,8 @@ fermato allo stage `DIC_EMAIL` per l'ambiguità padre/input del placeholder. La 
 nativo univoco, ha effettuato un solo submit e ha poi rifiutato la callback DIC legittima con exit
 78. La 0.2.5 corregge esclusivamente questo stato transitorio e l'attesa bounded del marker.
 Il check autorizzato 0.2.5 è stato eseguito una sola volta con bot fermo e write disabilitate e ha
-verificato autenticazione, tenant e persistenza del vault. In assenza del flag il codice live non
+verificato autenticazione, tenant e scrittura del vault nel processo corrente; il riavvio ha poi
+evidenziato il campo `sessionStorage` mancante, corretto nella 0.2.7. In assenza del flag il codice live non
 viene invocato; per futuri rinnovi o invalidazioni resta obbligatoria la stessa procedura singola.
 
 ## Invalidazione e rotazione
@@ -259,10 +282,10 @@ interno dell'eccezione per ottenere maggiori dettagli e non attivare trace o
 screenshot sul tenant live senza un'autorizzazione separata.
 
 `CREDENTIAL_SUBMIT` significa che l'invio della credenziale può avere raggiunto l'IdP, ma il
-risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con exit code 78. Anche
-il comando di servizio `run` usa 78 per qualunque `DicAuthenticationError`, così l'unit systemd con
-`RestartPreventExitStatus=78` non avvia un nuovo tentativo. Fermare l'automazione, non rilanciare
-in loop e verificare lo stato dell'account con una procedura umana autorizzata.
+risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con exit code 78.
+Dalla 0.2.7 il normale comando di servizio `run` non invia credenziali DIC e può restare online
+`DEGRADED`; `RestartPreventExitStatus=78` rimane una difesa aggiuntiva. Fermare il check esplicito,
+non rilanciarlo in loop e verificare lo stato dell'account con una procedura umana autorizzata.
 
 Il caso osservato nella 0.2.4 è stato ricondotto alla callback DIC legittima non ancora
 allowlistata, non allo user agent: la 0.2.5 conserva lo user agent Chromium nativo e non introduce

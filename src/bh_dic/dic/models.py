@@ -398,8 +398,53 @@ class ReconciliationResult(StrictModel):
     detail: str = Field(max_length=512)
 
 
+class StoredSessionStorageEntry(StrictModel):
+    """One bounded browser sessionStorage entry."""
+
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    key: str = Field(max_length=256)
+    value: str = Field(max_length=32_768, repr=False)
+
+
+class StoredDicSessionStorage(StrictModel):
+    """Closed sessionStorage snapshot for the one trusted DIC origin."""
+
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    origin: Literal["https://secure.dipendentincloud.it"]
+    entries: tuple[StoredSessionStorageEntry, ...] = Field(max_length=64, repr=False)
+
+    @field_validator("entries", mode="before")
+    @classmethod
+    def normalize_json_entries(cls, value: object) -> object:
+        # JSON arrays are the canonical wire representation. Convert them before strict tuple
+        # validation so encrypted vaults can round-trip through model_validate_json().
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def validate_bounded_unique_entries(self) -> StoredDicSessionStorage:
+        seen: set[str] = set()
+        total_bytes = 0
+        for entry in self.entries:
+            key_bytes = len(entry.key.encode("utf-8"))
+            value_bytes = len(entry.value.encode("utf-8"))
+            if key_bytes > 256:
+                raise ValueError("DIC sessionStorage key is too large")
+            if value_bytes > 32_768:
+                raise ValueError("DIC sessionStorage value is too large")
+            if entry.key in seen:
+                raise ValueError("DIC sessionStorage contains duplicate keys")
+            seen.add(entry.key)
+            total_bytes += key_bytes + value_bytes
+        if total_bytes > 131_072:
+            raise ValueError("DIC sessionStorage snapshot is too large")
+        return self
+
+
 class StoredBrowserSession(StrictModel):
     storage_state: dict[str, JsonValue] = Field(repr=False)
+    session_storage: StoredDicSessionStorage | None = Field(default=None, repr=False)
     authenticated_at: datetime
     expires_at: datetime
     account_hint_redacted: str | None = Field(default=None, max_length=64)

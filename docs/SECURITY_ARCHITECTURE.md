@@ -44,7 +44,7 @@ replacement for application policy.
 | Discord | messages, attachments, role claims, webhook/bot events | guild/channel allowlist, logical RBAC, DM denial, rate limiting, normalization |
 | Model provider | model output and tool arguments | provider allowlist, strict schema, closed Function ID catalog, dynamic tool exposure, local policy recheck |
 | DIC website | text, DOM, dialogs, redirects | route allowlist, Page Objects, target/state verification, UI-drift errors |
-| Browser session | cookies and storage state | Fernet vault, `0600` file, `0700` directory, explicit invalidation |
+| Browser session | cookie, localStorage e sessionStorage DIC | vault Fernet exact-origin e bounded, restore one-shot, `0600` file, `0700` directory, invalidazione esplicita |
 | Local database | workflow state and audit metadata | encrypted pending parameters, minimal schema, SQLite WAL, CAS versioning |
 | Filesystem | attachment names and content | UUID paths, containment checks, `0600`, MIME detection, ClamAV, retention |
 | Logs/SIEM | exception and contextual data | structured JSON, recursive secret/PII redaction, target pseudonyms |

@@ -115,6 +115,55 @@ class DuplicateVisibleLocator(FlowLocator):
         return self
 
 
+class HiddenAccountValue(FlowLocator):
+    def __init__(
+        self,
+        value: str,
+        *,
+        index: int,
+        reads: list[int],
+        sensitive_error: str | None,
+    ) -> None:
+        super().__init__()
+        self.value = value
+        self.index = index
+        self.reads = reads
+        self.sensitive_error = sensitive_error
+
+    async def input_value(self) -> str:
+        self.reads.append(self.index)
+        if self.sensitive_error is not None:
+            raise RuntimeError(f"{self.sensitive_error}:{self.value}")
+        return self.value
+
+
+class HiddenAccountLocator(FlowLocator):
+    def __init__(
+        self,
+        values: tuple[str, ...],
+        *,
+        present: Callable[[], bool],
+        sensitive_error: str | None = None,
+    ) -> None:
+        super().__init__(present=present)
+        self.values = values
+        self.sensitive_error = sensitive_error
+        self.reads: list[int] = []
+
+    async def count(self) -> int:
+        return len(self.values) if self._present() else 0
+
+    def nth(self, index: int) -> HiddenAccountValue:
+        if not 0 <= index < len(self.values):
+            raise IndexError(index)
+        return HiddenAccountValue(
+            self.values[index],
+            index=index,
+            reads=self.reads,
+            sensitive_error=self.sensitive_error,
+        )
+
+
 class FailingFillLocator(FlowLocator):
     def __init__(self, sensitive_message: str, *, present: Callable[[], bool]) -> None:
         super().__init__(present=present)
@@ -196,6 +245,11 @@ class AuthFlowPage:
         stale_response: FakeResponse | None = None,
         dic_submit_via_role: bool = False,
         login_result: str = "login",
+        identity_accounts: tuple[str, ...] = (
+            "synthetic@example.invalid",
+            "synthetic@example.invalid",
+        ),
+        identity_account_read_error: str | None = None,
     ) -> None:
         self._url = "about:blank"
         self.authenticated = authenticated
@@ -233,6 +287,11 @@ class AuthFlowPage:
         self.identity_password_submit = FlowLocator(
             present=lambda: self._identity_path("/Account/LoginPassword"),
             on_click=self._finish_password,
+        )
+        self.identity_accounts = HiddenAccountLocator(
+            identity_accounts,
+            present=lambda: self._identity_path("/Account/LoginPassword"),
+            sensitive_error=identity_account_read_error,
         )
         self.captcha = FlowLocator(present=lambda: self.captcha_enabled)
         self.mfa = FlowLocator(
@@ -310,6 +369,7 @@ class AuthFlowPage:
             "[data-testid='login-email'] input": self.dic_email,
             "#EmailAddress_Email": self.identity_email,
             "#submitEmailBtn": self.identity_email_submit,
+            "#Login_Email": self.identity_accounts,
             "#selectPassword": self.identity_password,
             "#submitBtn": self.identity_password_submit,
             "dic-navbar": self.marker,
@@ -534,6 +594,150 @@ async def test_exact_dic_and_teamsystem_login_flow_attests_tenant() -> None:
         "about:blank",
         f"{DIC_ORIGIN}/it/app/employees/list",
     ]
+
+
+@pytest.mark.asyncio
+async def test_dic_login_hint_may_enter_exact_teamsystem_password_route_directly() -> None:
+    page = AuthFlowPage()
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value"
+        ),
+    )
+
+    result = await authenticator(page).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.dic_email.filled == ["synthetic@example.invalid"]
+    assert page.dic_submit.clicks == 1
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_accounts.reads == [0, 1]
+    assert page.identity_password.filled == ["synthetic-password"]
+    assert page.identity_password_submit.clicks == 1
+
+
+@pytest.mark.parametrize(
+    "identity_accounts",
+    [
+        (),
+        ("", ""),
+        ("different@example.invalid",),
+        ("synthetic@example.invalid", "different@example.invalid"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_direct_teamsystem_password_route_requires_exact_account_binding(
+    identity_accounts: tuple[str, ...],
+) -> None:
+    page = AuthFlowPage(identity_accounts=identity_accounts)
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value"
+        ),
+    )
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_email_then_password_route_requires_exact_account_binding() -> None:
+    page = AuthFlowPage(identity_accounts=("different@example.invalid",))
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL
+    assert page.identity_email.filled == ["synthetic@example.invalid"]
+    assert page.identity_email_submit.clicks == 1
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_teamsystem_account_binding_read_failure_is_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive = "private-identity-account-marker"
+    page = AuthFlowPage(identity_account_read_error=sensitive)
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value"
+        ),
+    )
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert sensitive not in str(caught.value)
+    assert sensitive not in caplog.text
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.parametrize(
+    "password_url",
+    [
+        "https://identity.teamsystem.com.evil.invalid/Account/LoginPassword",
+        "https://identity.teamsystem.com:443/Account/LoginPassword",
+        "https://user@identity.teamsystem.com/Account/LoginPassword",
+        f"{IDENTITY_ORIGIN}/Account/LoginPassword#fragment",
+        f"{IDENTITY_ORIGIN}/Account/LoginPassword/",
+        f"{IDENTITY_ORIGIN}/Account/LoginPassword/extra",
+    ],
+)
+@pytest.mark.asyncio
+async def test_dic_login_hint_rejects_nonexact_teamsystem_password_routes(
+    password_url: str,
+) -> None:
+    page = AuthFlowPage()
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(password_url),
+    )
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_EMAIL
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_direct_teamsystem_password_route_still_enforces_captcha_guard() -> None:
+    page = AuthFlowPage()
+
+    def enter_password_with_captcha() -> None:
+        page._set_url(f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=synthetic")
+        page.captcha_enabled = True
+
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=enter_password_with_captcha,
+    )
+
+    with pytest.raises(DicCaptchaRequiredError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_EMAIL  # type: ignore[attr-defined]
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
 
 
 @pytest.mark.parametrize(

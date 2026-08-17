@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -21,6 +21,7 @@ from bh_dic.dic.errors import (
     DicMfaRequiredError,
     DicPasswordExpiredError,
     DicSessionExpiredError,
+    DicSessionVaultError,
     DicUiChangedError,
 )
 from bh_dic.dic.models import (
@@ -28,6 +29,7 @@ from bh_dic.dic.models import (
     SessionState,
     SessionStatus,
     StoredBrowserSession,
+    StoredDicSessionStorage,
 )
 from bh_dic.dic.pages import EmployeesListPage, LocatorLike, LoginPage, PageLike
 from bh_dic.dic.session_vault import FernetSessionVault
@@ -38,6 +40,8 @@ _TEAMSYSTEM_ORIGIN = "https://identity.teamsystem.com"
 _TEAMSYSTEM_EMAIL_PATH = "/Account/LoginEmail"
 _TEAMSYSTEM_SECRET_ENTRY_PATH = "/Account/Login" + "Password"
 _TEAMSYSTEM_SECRET_RENEWAL_PATH = _TEAMSYSTEM_SECRET_ENTRY_PATH + "Expired"
+_TEAMSYSTEM_ACCOUNT_SELECTOR = "#Login_Email"
+_MAX_TEAMSYSTEM_ACCOUNT_CONTROLS = 4
 _DIC_AUTH_CALLBACK_PATH = "/it/callback"
 _CANONICAL_TENANT_ID = re.compile(r"[1-9][0-9]{0,18}")
 _AUTH_POLL_SECONDS = 0.1
@@ -103,6 +107,8 @@ class _AuthProbePending(Exception):
 
 class StorageStateProvider(Protocol):
     async def storage_state(self) -> dict[str, JsonValue]: ...
+
+    async def dic_session_storage(self) -> StoredDicSessionStorage: ...
 
 
 class PlaywrightAuthenticator:
@@ -468,6 +474,117 @@ class PlaywrightAuthenticator:
                 raise DicAuthUiChangedError(stage)
             await self._sleep(min(_AUTH_POLL_SECONDS, remaining))
 
+    async def _wait_for_teamsystem_entry_route(self) -> Literal["email", "password"]:
+        """Wait for one of the two exact TeamSystem credential-entry routes."""
+
+        stage = DicAuthStage.TEAMSYSTEM_EMAIL
+        deadline = self._control_deadline()
+        while True:
+            self._raise_if_deadline_reached(deadline, stage)
+            try:
+                self._raise_if_password_expired(self.page.url, stage)
+                on_email = self._is_exact_route(
+                    self.page.url,
+                    _TEAMSYSTEM_ORIGIN,
+                    _TEAMSYSTEM_EMAIL_PATH,
+                )
+                on_password = self._is_exact_route(
+                    self.page.url,
+                    _TEAMSYSTEM_ORIGIN,
+                    _TEAMSYSTEM_SECRET_ENTRY_PATH,
+                )
+                if (
+                    not on_email
+                    and not on_password
+                    and not self._is_exact_route(
+                        self.page.url,
+                        _DIC_ORIGIN,
+                        "/it/login",
+                    )
+                ):
+                    raise DicAuthUiChangedError(stage)
+            except DicAuthPasswordExpiredError:
+                raise
+            except DicAuthUiChangedError:
+                raise
+            except DicAuthenticationError:
+                raise DicAuthUiChangedError(stage) from None
+
+            await self._captcha_guard(stage, deadline=deadline)
+            if on_email:
+                return "email"
+            if on_password:
+                return "password"
+
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise DicAuthUiChangedError(stage)
+            await self._sleep(min(_AUTH_POLL_SECONDS, remaining))
+
+    async def _verify_teamsystem_account_binding(self, configured_username: str) -> None:
+        """Bind the password form to the configured account before filling its secret."""
+
+        stage = DicAuthStage.TEAMSYSTEM_CREDENTIAL
+        deadline = self._control_deadline()
+        self._raise_if_deadline_reached(deadline, stage)
+        if not self._poll_route_is_allowed(
+            stage,
+            _TEAMSYSTEM_ORIGIN,
+            _TEAMSYSTEM_SECRET_ENTRY_PATH,
+            (),
+        ):
+            raise DicAuthUiChangedError(stage)
+        await self._captcha_guard(stage, deadline=deadline)
+
+        account_probe_failed = False
+        try:
+            account_controls = self.page.locator(_TEAMSYSTEM_ACCOUNT_SELECTOR)
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise DicAuthUiChangedError(stage)
+            count = await asyncio.wait_for(account_controls.count(), timeout=remaining)
+        except Exception:
+            account_probe_failed = True
+            count = 0
+        if account_probe_failed:
+            raise DicAuthUiChangedError(stage)
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 1 <= count <= _MAX_TEAMSYSTEM_ACCOUNT_CONTROLS
+        ):
+            raise DicAuthUiChangedError(stage)
+
+        expected = configured_username.strip().casefold()
+        if not expected:
+            raise DicAuthUiChangedError(stage)
+        for index in range(count):
+            self._raise_if_deadline_reached(deadline, stage)
+            account_read_failed = False
+            try:
+                control = account_controls.nth(index)
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    raise DicAuthUiChangedError(stage)
+                observed = await asyncio.wait_for(control.input_value(), timeout=remaining)
+            except Exception:
+                account_read_failed = True
+                observed = None
+            if account_read_failed:
+                raise DicAuthUiChangedError(stage)
+            if not isinstance(observed, str) or observed.strip().casefold() != expected:
+                raise DicAuthUiChangedError(stage)
+
+        self._raise_if_deadline_reached(deadline, stage)
+        if not self._poll_route_is_allowed(
+            stage,
+            _TEAMSYSTEM_ORIGIN,
+            _TEAMSYSTEM_SECRET_ENTRY_PATH,
+            (),
+        ):
+            raise DicAuthUiChangedError(stage)
+        await self._captcha_guard(stage, deadline=deadline)
+
     def _control_deadline(self) -> float:
         control_deadline = self._monotonic() + self.login_timeout_seconds
         if self._flow_deadline is None:
@@ -659,29 +776,31 @@ class PlaywrightAuthenticator:
                     authenticated_at=self._authenticated_at,
                 )
 
-        teamsystem_email = await self._wait_for_control(
-            "auth.teamsystem_email",
-            DicAuthStage.TEAMSYSTEM_EMAIL,
-            origin=_TEAMSYSTEM_ORIGIN,
-            path=_TEAMSYSTEM_EMAIL_PATH,
-            pending_routes=((_DIC_ORIGIN, "/it/login"),),
-        )
-        await self._fill_control(
-            teamsystem_email,
-            credentials.username,
-            DicAuthStage.TEAMSYSTEM_EMAIL,
-        )
-        teamsystem_email_submit = await self._wait_for_control(
-            "auth.teamsystem_email_submit",
-            DicAuthStage.TEAMSYSTEM_EMAIL_SUBMIT,
-            origin=_TEAMSYSTEM_ORIGIN,
-            path=_TEAMSYSTEM_EMAIL_PATH,
-        )
-        await self._click_control(
-            teamsystem_email_submit,
-            DicAuthStage.TEAMSYSTEM_EMAIL_SUBMIT,
-        )
+        teamsystem_entry_route = await self._wait_for_teamsystem_entry_route()
+        if teamsystem_entry_route == "email":
+            teamsystem_email = await self._wait_for_control(
+                "auth.teamsystem_email",
+                DicAuthStage.TEAMSYSTEM_EMAIL,
+                origin=_TEAMSYSTEM_ORIGIN,
+                path=_TEAMSYSTEM_EMAIL_PATH,
+            )
+            await self._fill_control(
+                teamsystem_email,
+                credentials.username,
+                DicAuthStage.TEAMSYSTEM_EMAIL,
+            )
+            teamsystem_email_submit = await self._wait_for_control(
+                "auth.teamsystem_email_submit",
+                DicAuthStage.TEAMSYSTEM_EMAIL_SUBMIT,
+                origin=_TEAMSYSTEM_ORIGIN,
+                path=_TEAMSYSTEM_EMAIL_PATH,
+            )
+            await self._click_control(
+                teamsystem_email_submit,
+                DicAuthStage.TEAMSYSTEM_EMAIL_SUBMIT,
+            )
 
+        await self._verify_teamsystem_account_binding(credentials.username)
         teamsystem_password = await self._wait_for_control(
             "auth.teamsystem_password",
             DicAuthStage.TEAMSYSTEM_CREDENTIAL,
@@ -746,11 +865,16 @@ class DicSessionManager:
         self.lifetime = lifetime
         self._clock = clock
 
-    def load_storage_state(self) -> dict[str, JsonValue] | None:
+    def load_session(self) -> StoredBrowserSession | None:
         try:
-            session = self.vault.load()
+            return self.vault.load()
         except DicSessionExpiredError:
             return None
+
+    def load_storage_state(self) -> dict[str, JsonValue] | None:
+        """Compatibility helper for callers that need only Playwright storage_state."""
+
+        session = self.load_session()
         return None if session is None else session.storage_state
 
     async def persist(
@@ -759,9 +883,20 @@ class DicSessionManager:
         *,
         account_hint_redacted: str | None = None,
     ) -> StoredBrowserSession:
+        capture_failed = False
+        try:
+            storage_state = await provider.storage_state()
+            session_storage = await provider.dic_session_storage()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            capture_failed = True
+        if capture_failed:
+            raise DicSessionVaultError("browser session could not be captured safely")
         now = self._clock()
         session = StoredBrowserSession(
-            storage_state=await provider.storage_state(),
+            storage_state=storage_state,
+            session_storage=session_storage,
             authenticated_at=now,
             expires_at=now + self.lifetime,
             account_hint_redacted=account_hint_redacted,

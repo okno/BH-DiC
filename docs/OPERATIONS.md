@@ -1,24 +1,27 @@
 # Operazioni
 
-## Stato operativo corrente
+## Ultima evidenza osservata sul target
 
 - repository installata in `/opt/bh-dic` sul target Debian 12; il remote GitHub è intenzionalmente
   `PUBLIC` e il tree corrente contiene soltanto sorgenti e materiale sintetico, mai configurazione
   runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- servizio systemd `active/running`, con `NRestarts=0` al controllo di avvio;
+- il servizio è stato inizialmente `active/running`, poi un riavvio pre-0.2.7 si è fermato
+  fail-closed con exit 78 a `TEAMSYSTEM_EMAIL`, prima dell'avvio del gateway;
 - nessuna Function ID DIC read o write verificata live;
-- check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED`, tenant
-  `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile;
-- comando guild-scoped registrato e gateway responsivo; primo smoke negato dal gate RBAC prima del
-  dispatch, senza eseguire Function ID DIC;
+- check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED` e tenant
+  `VERIFIED_BY_ADAPTER` nel processo corrente; il vault pre-0.2.7 non conservava `sessionStorage`;
+- comando guild-scoped registrato e gateway storicamente responsivo; primo smoke negato dal gate
+  RBAC prima del dispatch, ma l'ultima istanza osservata è offline;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-I gate sintetici della release 0.2.6 sono verdi: 579 test, branch coverage 86%, Ruff, mypy, Bandit,
-audit dipendenze e secret scan senza finding. Il dettaglio è nell'implementation report. Sul target
-sono stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
-Function ID DIC.
+La release candidata 0.2.7 separa il gateway dal login DIC, conserva cifrato lo snapshot bounded
+`sessionStorage` e gestisce sia `LoginEmail` sia `LoginPassword` diretto con binding dell'account.
+I gate sintetici della release candidata 0.2.7 sono verdi: 614 test, branch coverage 86%, Ruff,
+mypy, Bandit, audit dipendenze e controlli privacy senza finding. Il dettaglio è
+nell'implementation report. Sul target sono stati eseguiti solo i controlli operativi riportati
+sopra; nessun test live ha eseguito una Function ID DIC.
 
 ## Runbook giornaliero
 
@@ -89,21 +92,25 @@ Se il vault non esiste (prima installazione, rotazione o invalidazione), il fall
 non attesta nulla sul login. In quel caso procedere soltanto con l'unico check live autorizzato
 descritto sotto.
 
-La password TeamSystem è stata rinnovata e il secret locale aggiornato. Il controllo live 0.2.5 è
-stato eseguito una sola volta con bot fermo e write disabilitate:
+La password TeamSystem è stata rinnovata e il secret locale aggiornato. Per aggiornare un vault
+legacy alla 0.2.7, fermare il servizio, mantenere le write disabilitate ed eseguire una sola volta:
 
 ```bash
-.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ```
 
-Il risultato osservato è sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato
-utilizzabile. Il comando ripristina prima un eventuale vault, prova la route applicativa fissa e richiede
-l'attestazione passiva dell'azienda corrente. Se serve login, accetta redirect soltanto verso le
-origini TeamSystem esatte previste. Qualunque mismatch, risposta mancante, password scaduta,
-MFA/CAPTCHA o redirect inatteso fallisce chiuso. Non avviare il bot finché sessione e tenant non
-risultano verificati. Un risultato `encrypted_session_invalidated=false` indica semplicemente che
-il vault non esisteva.
+Non invalidare preventivamente un vault leggibile soltanto perché è legacy: il check può
+aggiornarlo in modo atomico. Invalidare è un'azione distinta, riservata a compromissione, rotazione
+della chiave del vault o errore `DicSessionVaultError` verificato dall'operatore. Il comando prova la
+route applicativa fissa e richiede l'attestazione passiva dell'azienda corrente. Se serve login,
+accetta solo origini/route TeamSystem esatte e vincola l'account osservato all'utente configurato
+prima di compilare il segreto. Qualunque mismatch, risposta mancante, password scaduta,
+MFA/CAPTCHA o redirect inatteso fallisce chiuso.
+
+Un fallimento DIC non richiede più di lasciare Discord offline: il normale `run` non invia
+credenziali e può avviare il gateway in stato `DEGRADED`. In tale stato `/bh status`, `/bh health`
+e l'aiuto restano disponibili, mentre ogni operazione DIC fallisce chiuso. Non ripetere il check
+live dopo un submit dall'esito incerto.
 
 Nella 0.2.3 i controlli di login attendono l'hydration entro un budget condiviso, soltanto sulle
 route esatte e con un solo controllo visibile. La 0.2.4 restringe il campo e-mail DIC all'unico
@@ -119,8 +126,9 @@ La 0.2.5 tratta soltanto l'esatta `/it/callback` DIC come transitoria entro il b
 non legge né registra la query e rifiuta fragment, porta esplicita, userinfo, host somigliante,
 trailing slash e path aggiuntivi. Il marker autenticato viene atteso entro la cattura tenant, ma
 `/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il singolo
-check headless successivo al login manuale è stato completato; per una futura rotazione o
-invalidazione, un nuovo exit 78 impone nuovamente lo stop senza retry.
+check headless successivo al login manuale è stato completato. La 0.2.7 ammette anche l'ingresso
+diretto alla route password quando DIC usa `login_hint`, senza cambio user agent né fallback
+generici; un nuovo exit 78 impone nuovamente lo stop del check senza retry.
 
 ### Log
 
@@ -163,8 +171,9 @@ catena. Vedere [Audit](AUDIT.md).
 
 `--force` è una scelta esplicita successiva a diagnosi, non il default.
 
-In modalità systemd l'unit installata deve includere `RestartPreventExitStatus=78`: `run` usa 78
-per ogni errore di autenticazione, impedendo a `Restart=on-failure` di rilanciare il login. Su
+In modalità systemd l'unit installata mantiene `RestartPreventExitStatus=78` come difesa
+aggiuntiva. Dalla 0.2.7 il normale `run` non invia credenziali DIC: il codice 78 è soprattutto il
+contratto dell'operazione esplicita di autenticazione con esito post-submit incerto. Su
 Debian 12 l'unit dalla 0.2.4 usa `ConditionPathExists=/opt/bh-dic/.env` più
 `ExecCondition=/usr/bin/test -f /opt/bh-dic/.env`, non la direttiva non supportata
 `ConditionPathIsRegularFile`. `doctor.sh` resta il controllo che impone modalità `0600` di `.env`

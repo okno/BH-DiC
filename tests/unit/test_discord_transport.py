@@ -128,6 +128,25 @@ def _gate() -> DiscordGate:
     )
 
 
+def test_everyone_role_can_grant_only_the_configured_logical_role_in_the_allowed_channel() -> None:
+    guild_id = 10
+    gate = DiscordGate(
+        guild_id=guild_id,
+        channel_id=20,
+        role_mapping={"READ_ONLY": {guild_id}, "HR_READ": {30}},
+    )
+
+    actor = gate.authorize(
+        user_id=40,
+        guild_id=guild_id,
+        channel_id=20,
+        role_ids=[guild_id],
+    )
+
+    assert actor.logical_roles == frozenset({"READ_ONLY"})
+    assert actor.discord_role_ids == frozenset({guild_id})
+
+
 def _coordinator(
     result: InteractionResult | None = None,
 ) -> tuple[InteractionCoordinator, SimpleNamespace]:

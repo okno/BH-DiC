@@ -25,8 +25,8 @@ from bh_dic.dic.auth import (
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
     DicAuthenticationError,
-    DicAuthorizationError,
     DicConfigurationError,
+    DicError,
     DicNotFoundError,
     DicReconciliationRequiredError,
     DicUiChangedError,
@@ -196,18 +196,23 @@ class PlaywrightDicAdapter:
             )
         try:
             status = await self.session_status()
-        except (DicAuthenticationError, DicAuthorizationError, DicConfigurationError):
+        except (DicError, TimeoutError):
             return HealthStatus(
-                ready=True,
+                ready=False,
                 authenticated=False,
                 browser_available=True,
                 detail="browser ready; authenticated tenant is unavailable",
             )
+        authenticated = status.state is SessionState.AUTHENTICATED
         return HealthStatus(
-            ready=True,
-            authenticated=status.state is SessionState.AUTHENTICATED,
+            ready=authenticated,
+            authenticated=authenticated,
             browser_available=True,
-            detail="Playwright adapter ready",
+            detail=(
+                "Playwright adapter ready"
+                if authenticated
+                else "browser ready; authenticated tenant is unavailable"
+            ),
         )
 
     async def ensure_authenticated(

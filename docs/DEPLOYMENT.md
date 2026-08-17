@@ -7,10 +7,12 @@ installato senza sostituire il Python di sistema, virtualenv e dipendenze, migra
 directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
 doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-Il servizio systemd è `active/running` con `NRestarts=0`. Il check headless 0.2.5 ha restituito
-sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e vault cifrato utilizzabile. Il comando
-guild-scoped è registrato e il gateway risponde, ma il primo smoke è stato negato dal gate RBAC
-prima del dispatch; nessuna Function ID DIC read/write è stata collaudata live.
+Il check headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant
+`VERIFIED_BY_ADAPTER` nel processo corrente. Il comando guild-scoped è registrato e il gateway ha
+risposto, ma il primo smoke è stato negato dal gate RBAC. Un riavvio successivo della release
+precedente alla 0.2.7 ha perso lo stato federato non incluso nel vecchio vault e si è fermato con
+exit 78 a `TEAMSYSTEM_EMAIL`, prima del gateway. La 0.2.7 corregge restore e avvio degradato, ma
+deve ancora essere distribuita e verificata sul target; nessuna Function ID DIC è collaudata live.
 `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
 restano `false`.
 
@@ -47,7 +49,7 @@ cd /opt/bh-dic
 
 `update.sh` richiede un worktree pulito e aggiorna solo fast-forward. Non usare `--restart` in
 questa fase. Non mostrare `.env`; conservarlo con owner del servizio e modalità `0600`.
-Verificare che `.venv/bin/python -m bh_dic version` riporti `0.2.5` prima del gate DIC.
+Verificare che `.venv/bin/python -m bh_dic version` riporti `0.2.7` prima del gate DIC.
 
 La configurazione deve mantenere:
 
@@ -60,7 +62,8 @@ ENABLE_LIVE_WRITE_TESTS=false
 ## Sblocco autenticazione DIC
 
 Assicurarsi che `DIC_PASSWORD` nel secret store o nell'editor locale corrisponda alla credenziale
-corrente e invalidare l'eventuale vecchia sessione. Non passare la password nella command line,
+corrente. Non invalidare automaticamente un vault leggibile durante l'upgrade: la 0.2.7 può
+aggiornarlo al formato completo. Non passare la password nella command line,
 nei log o in ticket. Il login manuale fresco prova soltanto che la credenziale è stata accettata:
 non attesta l'adapter headless, il tenant configurato o il vault server.
 
@@ -69,14 +72,14 @@ Con le write ancora disabilitate:
 ```bash
 ./scripts/doctor.sh --online
 .venv/bin/python -m bh_dic model-check --live
-.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
-./scripts/status.sh
 ```
 
 Il check DIC senza `--live` valida soltanto un vault già esistente. Su una prima installazione o
-dopo `invalidate-session` fallisce correttamente perché non esiste ancora alcuna sessione cifrata;
-non usarlo come prerequisito del bootstrap live.
+dopo un'invalidazione intenzionale fallisce correttamente perché non esiste alcuna sessione
+cifrata; non usarlo come prerequisito del bootstrap live. Un vault illeggibile blocca il check
+esplicito finché l'operatore non decide se conservarlo per analisi o invalidarlo; il normale
+gateway può comunque avviarsi `DEGRADED` senza sovrascriverlo.
 
 Il controllo live deve terminare con autenticazione e tenant verificati e deve lasciare un vault
 cifrato valido. Un redirect fuori dall'allowlist esatta DIC/TeamSystem, un tenant non attestabile,
@@ -86,20 +89,24 @@ La 0.2.5 tratta l'esatta `/it/callback` DIC come transitoria e soltanto entro il
 La query opaca non viene letta o registrata; fragment, porta esplicita, userinfo, host somigliante,
 trailing slash e path aggiuntivi restano rifiutati. Il marker e `/data/company/id` restano
 obbligatori. Eseguire `dic-auth-check --live` una sola volta dopo il deployment: un nuovo exit 78
-impone stop e non autorizza un secondo tentativo.
+impone stop e non autorizza un secondo tentativo. La 0.2.7 accetta inoltre soltanto
+`LoginEmail`/`LoginPassword` TeamSystem esatte, vincola l'identità del form all'account configurato
+prima del segreto e conserva cifrato anche `sessionStorage`; lo user agent Chromium resta nativo.
 
-Solo dopo questo esito, con autorizzazione distinta, proseguire:
+Indipendentemente dall'esito DIC, il gateway 0.2.7 può essere avviato senza inviare credenziali.
+Se il check non riesce, `/bh status` deve mostrare `DEGRADED` e tutte le operazioni DIC restano
+fail-closed. Gli slash command sono già registrati e non vanno sincronizzati di nuovo per cambiare
+ruoli o `.env`. Proseguire con systemd:
 
 ```bash
-./scripts/register-commands.sh
-./scripts/start.sh
-./scripts/status.sh
-./scripts/logs.sh all --follow
+systemctl start bh-dic.service
+systemctl is-active bh-dic.service
+journalctl -u bh-dic.service -n 100 --no-pager -o cat
 ```
 
 `doctor --online` e `model-check --live` non attestano DIC. `dic-auth-check --live` può contattare
-DIC e l'IdP TeamSystem, ma non esegue Function ID HR. Non registrare comandi e non avviare se uno
-dei gate fallisce.
+DIC e l'IdP TeamSystem, ma non esegue Function ID HR. Un fallimento di configurazione, DB o browser
+resta bloccante; l'indisponibilità della sola sessione DIC è invece uno stato degradato esplicito.
 
 ## Stato di consegna atteso
 
@@ -109,7 +116,8 @@ dei gate fallisce.
 - `.env.example` presente; `.env` assente o protetto e valorizzato localmente;
 - directory e file con i permessi documentati;
 - `doctor.sh` riuscito, con risultato online separato se autorizzato;
-- gestore systemd unico, servizio `active/running` e `NRestarts=0` al controllo di avvio;
+- gestore systemd unico, servizio `active/running` dopo il deployment 0.2.7 e risposta di
+  `/bh status` anche quando DIC è `DEGRADED`;
 - nessun processo Chromium/Playwright residuo;
 - report senza token, PII, cookie o contenuti HR.
 

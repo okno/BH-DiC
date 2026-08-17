@@ -73,20 +73,32 @@ class FernetSessionVault:
                 os.fsync(handle.fileno())
             os.replace(temporary_path, self.path)
             os.chmod(self.path, 0o600)
-        except OSError as exc:
+        except OSError:
             if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
-            raise DicSessionVaultError("failed to persist encrypted browser session") from exc
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            persist_failed = True
+        else:
+            persist_failed = False
+        if persist_failed:
+            raise DicSessionVaultError("failed to persist encrypted browser session")
 
     def load(self) -> StoredBrowserSession | None:
         if not self.path.exists():
             return None
+        session: StoredBrowserSession | None = None
         try:
             encrypted = self.path.read_bytes()
             decrypted = self._fernet.decrypt(encrypted)
             session = StoredBrowserSession.model_validate_json(decrypted)
-        except (OSError, InvalidToken, ValueError) as exc:
-            raise DicSessionVaultError("browser session vault is unreadable or invalid") from exc
+        except (OSError, InvalidToken, ValueError):
+            load_failed = True
+        else:
+            load_failed = False
+        if load_failed or session is None:
+            raise DicSessionVaultError("browser session vault is unreadable or invalid")
         if session.expires_at <= self._clock():
             raise DicSessionExpiredError("encrypted DIC browser session is expired")
         return session
@@ -94,8 +106,12 @@ class FernetSessionVault:
     def invalidate(self) -> None:
         try:
             self.path.unlink(missing_ok=True)
-        except OSError as exc:
-            raise DicSessionVaultError("failed to invalidate browser session") from exc
+        except OSError:
+            invalidate_failed = True
+        else:
+            invalidate_failed = False
+        if invalidate_failed:
+            raise DicSessionVaultError("failed to invalidate browser session")
 
     def exists(self) -> bool:
         return self.path.is_file()
