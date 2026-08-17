@@ -34,7 +34,7 @@ problemi residui. Nessuna licenza open source è stata aggiunta.
 | Database server | SQLite presente e migrazione alla head verificata |
 | Antivirus | ClamAV attivo; socket `0660` e scansione applicativa riuscita |
 | Doctor | offline e online riusciti |
-| Bot target | 0.2.7 distribuita; check DIC corrente fermato a `TEAMSYSTEM_EMAIL` prima delle azioni credenziali; candidata 0.2.8 non ancora distribuita né verificata live |
+| Bot target | baseline precedente con evidenze Discord/DIC separate; candidata 0.3.0 non ancora distribuita né verificata live |
 
 Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
 TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato. I check DIC headless
@@ -48,9 +48,11 @@ gateway ha risposto; il primo smoke è stato negato dal gate RBAC prima del disp
 successivo ha evidenziato che il vault non conservava `sessionStorage` e si è fermato sulla route
 TeamSystem password diretta, prima del gateway. La 0.2.7 è stata distribuita; il check DIC corrente
 si è fermato a `TEAMSYSTEM_EMAIL` prima di qualunque azione credenziale. La candidata 0.2.8
-corregge il contratto corrente TeamSystem/OIDC; i gate locali sono verdi e la verifica live resta
-`PENDING`.
-Nessuna Function ID DIC resta verificata live.
+corregge il contratto corrente TeamSystem/OIDC e il restore di `sessionStorage`. La candidata
+0.3.0 aggiunge lettura passiva elenco, presenter Senior HR, persistenza della sessione ruotata e
+telemetria token. I gate locali completi sono verdi; deployment, migrazione e smoke live 0.3.0
+restano `PENDING`.
+Nessuna nuova Function ID DIC è promossa a verificata live da questo documento.
 
 ## Implementazione
 
@@ -62,6 +64,18 @@ Completati nel codice e testati con risorse sintetiche:
 - intent router strict multi-provider: Responses per OpenAI/Groq e chat-compatible per llama,
   con storage applicativo disabilitato e tool exposure filtrata;
 - persona configurabile e confinata alla presentazione, senza effetto su policy/RBAC;
+- presenter Senior HR locale per conteggio organico, elenco, scadenze e stato operativo, con tono
+  amichevole/dettagliato configurabile ma fatti derivati soltanto dai risultati tipizzati;
+- minimizzazione pre-provider per categorie semantiche canoniche: il provider riceve etichette di
+  intento, sole date ISO necessarie e segnaposto; ogni numero standalone viene redatto. Non riceve
+  vocaboli utente grezzi; nomi, Employee ID, query di ricerca e risultati DIC/DOM non raggiungono
+  OpenAI/Groq/llama, anche quando un nome coincide con una parola HR;
+- semantica locale del totale organico (`all` se non qualificato, filtri active/inactive soltanto
+  se espliciti) e intervalli relativi di mese/giorni calcolati nel timezone applicativo;
+- analisi bulk delle scadenze sul contratto corrente della lista paginata, con date ISO/italiane,
+  controllo di completezza/stabilità e senza fetch contratto N+1;
+- telemetria provider persistente tramite `0002_model_usage`, con contatori esatti per richiesta e
+  cumulativi, stati espliciti per usage assente/incerto e `/bh status` arricchito;
 - `model-check` offline per default e probe live provider sintetico/chiuso, esplicitamente opt-in;
 - catalogo/policy/RBAC/flag per 32 Function ID;
 - approval state machine, A1/A2, TTL, conferma hashata monouso, CAS/idempotenza, payload cifrati;
@@ -95,6 +109,15 @@ Completati nel codice e testati con risorse sintetiche:
   come transizioni pending bounded; SSO senza email/password accettato esclusivamente dopo route
   applicativa DIC, marker autenticato e attestazione tenant, con zero azioni sui controlli
   credenziali; query e `login_hint` restano opachi e nessuna route generica viene aggiunta;
+- candidata 0.3.0: cattura passiva della sola risposta UI `GET /backend_apiV2/employees`, con
+  origine/path/query/metodo/MIME/body/paginazione/schema chiusi e proiezione tipizzata; il display
+  name completo è un `SecretStr` transitorio aperto soltanto dal renderer `SENSITIVE`/ephemeral
+  per `HR_READ`, mentre e-mail, codice fiscale e matricola restano mascherati e l'endpoint non
+  viene chiamato direttamente;
+- ripersistenza serializzata del vault soltanto dopo sessione autenticata e tenant attestato o
+  lettura riuscita, mai dopo errori o stati ignoti;
+- trasporto Discord con acknowledgement privato e follow-up pubblico soltanto per
+  `PUBLIC_AGGREGATE`; elenchi, contratti, stato e risultati individuali restano ephemeral;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
 - unit systemd 0.2.4 compatibile con Debian 12: `ConditionPathExists` più
@@ -113,34 +136,34 @@ Stato funzionale:
   sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
-- bot target da aggiornare alla candidata 0.2.8 soltanto dopo i gate; nessuna modifica DIC di
+- bot target da aggiornare alla candidata 0.3.0 soltanto dopo i gate; nessuna modifica DIC di
   produzione e nessuna Function ID live autorizzata.
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — candidata 0.2.8
+## Test e gate — candidata 0.3.0
 
-I gate completi del worktree candidato 0.2.8 sono verdi. Le verifiche live DIC, provider e Discord
-sono evidenze separate e non sostituiscono questi gate né promuovono le Function ID HR a
-verificate.
+I gate completi del worktree candidato 0.3.0 sono conclusi. Le verifiche live DIC, provider e
+Discord sono evidenze separate e non vengono sostituite dai gate né promuovono automaticamente le
+Function ID HR a verificate.
 
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS, 187 file |
+| `ruff format --check .` | PASS, 196 file |
 | `ruff check .` | PASS |
-| `mypy src` | PASS, 108 file sorgente |
-| `pytest` | PASS, 655 test; 1 warning deprecazione `audioop` di terza parte |
-| `coverage run --branch -m pytest` | PASS, 655 test |
-| `coverage report --show-missing --fail-under=80` | PASS, branch coverage 85,88% |
-| `bandit -q -r src` | PASS, 16.347 righe e 0 finding |
-| `python -m pip check` | PASS, 0 dipendenze rotte |
-| `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, 0 vulnerabilità note |
+| `mypy src` | PASS, 114 file sorgente |
+| `pytest` | PASS, 734 test; un warning `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 734 test |
+| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.241 statement; 3.202 branch) |
+| `bandit -q -r src` | PASS, 18.931 linee di codice; zero issue |
+| `python -m pip check` | PASS, nessuna dipendenza rotta |
+| `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note |
 | `git diff --check` | PASS |
-| `gitleaks` | NOT RUN: binario non disponibile sull'host; test hygiene e review diff PASS |
-| parsing configurazioni/workflow YAML | PASS, 5/5 |
-| scansione hygiene/versione/documentazione | PASS, 18/18 test |
-| script `bash -n` + contratti/lifecycle ops | PASS, 22/22 |
-| link Markdown locali | PASS, 72/72 in 31 file |
+| `gitleaks` | `NOT RUN` sul workstation privo del binario; scansione diff/file nuovi PASS, full-history precedente zero finding; rieseguire in CI |
+| parsing configurazioni/workflow YAML | PASS, 3 file |
+| scansione hygiene/versione/documentazione | PASS, 46 test mirati |
+| script `bash -n` + contratti/lifecycle ops | PASS, 22 script |
+| link Markdown locali | PASS, 72 riferimenti |
 
 I workflow remoti restano da verificare dopo il push. Le evidenze Debian/Groq e il login manuale
 riportati sopra derivano da controlli separati; non promuovono adapter DIC o Discord a verificati.
@@ -177,8 +200,8 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
-- nessuna Function ID DIC write/read live eseguita; 0.2.7 distribuita e check DIC corrente fermato
-  a `TEAMSYSTEM_EMAIL`; correzione 0.2.8 non ancora distribuita né verificata live;
+- nessuna nuova Function ID DIC 0.3.0 promossa live; deployment e smoke della candidata restano
+  `PENDING`, mentre le evidenze storiche `TEAMSYSTEM_EMAIL`/`VERIFIED_BY_ADAPTER` restano separate;
 - l'unit systemd impedisce il restart su exit 78; dalla 0.2.7 il comando `run` non esegue alcun
   login automatico e il codice 78 resta per l'autenticazione esplicita incerta; su Debian 12
   l'unit dalla 0.2.4 usa
@@ -187,7 +210,7 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 
 ## Problemi residui
 
-- mappatura RBAC Discord dell'operatore da correggere e smoke read-only ancora da completare;
+- mappatura RBAC Discord e smoke 0.3.0 `READ_ONLY`/`HR_READ` ancora da verificare sul target;
 - Groq/modello verificati live; OpenAI e llama restano non verificati;
 - selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;
 - form write, delete/export/download e postcondizioni non verificati live;

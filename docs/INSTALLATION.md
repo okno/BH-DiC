@@ -4,14 +4,12 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato al 17 agosto 2026: runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati. La 0.2.5
-> ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER` nel processo corrente; un
-> riavvio successivo pre-0.2.7 ha perso lo stato federato non incluso nel vecchio vault. La 0.2.7
-> è stata distribuita, ma il check DIC corrente si è fermato a `TEAMSYSTEM_EMAIL` prima delle
-> azioni credenziali. La candidata 0.2.8 corregge il contratto corrente TeamSystem/OIDC; i gate
-> locali sono verdi e la verifica live resta `PENDING`. Nessuna Function ID DIC è stata collaudata
-> live e tutte
-> le write devono restare `DISABLED_BY_POLICY`.
+> Stato al 17 agosto 2026: runtime Debian 12 e Groq `openai/gpt-oss-120b` hanno evidenza verificata
+> separata. Lo storico DIC include `AUTHENTICATED`/`VERIFIED_BY_ADAPTER`, il successivo stop
+> `TEAMSYSTEM_EMAIL` e la correzione del vault `sessionStorage`. La candidata 0.3.0 aggiunge la
+> lettura passiva dell'elenco, l'assistente Senior HR e la telemetria token; gate completi,
+> deployment e smoke live restano `PENDING`. Tutte le write devono restare
+> `DISABLED_BY_POLICY`.
 
 ## 1. Decisioni prima dell'installazione
 
@@ -211,17 +209,18 @@ un endpoint HTTPS remoto richiede `LLAMA_API_KEY`. Configurazione, criteri e fon
 
 ```dotenv
 BOT_LANGUAGE=it
-BOT_TONE=professional
-BOT_ADDRESS_STYLE=lei
-BOT_VERBOSITY=standard
-BOT_EMOJI_MODE=off
+BOT_TONE=friendly
+BOT_ADDRESS_STYLE=tu
+BOT_VERBOSITY=detailed
+BOT_EMOJI_MODE=status
 BOT_DISPLAY_NAME=BH-DiC
 BOT_OPENING=
 BOT_CLOSING=
 ```
 
-La persona cambia soltanto chiarimenti e decorazioni; dati/output operativi restano in italiano.
-Non amplia tool, ruoli o azioni e non trasforma BH-DiC in un bot generalista o di moderazione.
+La persona cambia il presenter locale e i chiarimenti; non viene usata dal modello per inventare
+la risposta. Non amplia tool, ruoli o azioni e non trasforma BH-DiC in un bot generalista o di
+moderazione.
 
 ## 7. Discord e preparazione guild-scoped
 
@@ -252,6 +251,7 @@ cd /opt/bh-dic
 sudo -u bh-dic -H ./scripts/doctor.sh
 sudo -u bh-dic -H ./scripts/audit-verify.sh
 sudo -u bh-dic -H ./scripts/status.sh
+sudo -u bh-dic -H .venv/bin/python -m alembic -c migrations/alembic.ini current
 sudo -u bh-dic -H .venv/bin/python -m bh_dic run --mock --check-only
 sudo -u bh-dic -H .venv/bin/python -m bh_dic model-check
 ```
@@ -274,6 +274,10 @@ Function ID e accetta soltanto `unsupported_request`; non costruisce Discord, DI
 esegue tool. `LIVE_VERIFIED` vale esclusivamente per il provider/modello in quel momento. Nessuno
 dei due comandi prova login DIC, selettori live o deployment completo.
 
+Per la 0.3.0 la revisione Alembic corrente deve includere `0002_model_usage`. La tabella registra
+solo il ciclo di vita della chiamata e i contatori token esatti dichiarati dal provider; non
+contiene prompt, identità o dati DIC. Se la migrazione non è alla head, non avviare il bot.
+
 ### Gate DIC per abilitare le funzioni DIC
 
 Con servizio fermo e tutte le write disabilitate, il controllo offline è utile soltanto quando
@@ -290,7 +294,7 @@ bootstrap live.
 Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale e
 aggiornare `DIC_PASSWORD` localmente senza mostrarla. Non invalidare un vault leggibile per il
 solo upgrade, ma dopo una rotazione di password/account/tenant l'invalidazione è obbligatoria. Nel
-caso corrente, distribuire la candidata 0.2.8 dopo i gate e, con servizio fermo e autorizzazione
+caso corrente, distribuire la candidata 0.3.0 dopo i gate e, con servizio fermo e autorizzazione
 esplicita alla rete DIC, eseguire una sola invalidazione seguita da una sola verifica:
 
 ```bash
@@ -325,6 +329,10 @@ l'account del form coincida con
 `DIC_USERNAME`. Il vault cifra cookie/localStorage e lo snapshot bounded `sessionStorage` della
 sola origine DIC. Il normale gateway non invia credenziali: se la sessione è mancante, scaduta o
 non utilizzabile, Discord resta online `DEGRADED` e le funzioni DIC falliscono chiuso.
+
+Dalla 0.3.0 una sessione già autenticata può essere ripersistita, sotto lock, dopo attestazione
+tenant o lettura riuscita. Questo conserva le rotazioni valide osservate nel browser senza
+inviare credenziali. Stati ignoti, mismatch tenant ed errori non sovrascrivono il vault.
 
 Se TeamSystem completa il SSO senza mostrare email/password, l'adapter non esegue alcuna azione
 credenziale: accetta il risultato soltanto dopo route applicativa DIC, marker autenticato e tenant
@@ -422,10 +430,15 @@ specifico devono essere `false`. Non stampare altre righe di `.env`. Avviare con
 quindi:
 
 1. verificare processo, errori di bootstrap e guild/canale;
-2. eseguire `/bh help`, `/bh status` o `/bh health` con un account sintetico autorizzato;
+2. eseguire `/bh help`, `/bh status` o `/bh health` con un account autorizzato;
 3. verificare casi deny da altro canale, DM e ruolo non autorizzato;
-4. se autorizzato, eseguire una sola lettura su tenant e record sintetici/pre-approvati;
-5. verificare log redatti, catena audit e assenza di browser/processi residui dopo lo stop.
+4. con il solo ruolo `READ_ONLY`, chiedere il totale organico e verificare che il numero aggregato
+   finale sia pubblico nel solo canale allowlistato;
+5. con un ruolo umano dedicato `HR_READ`, chiedere le scadenze del prossimo mese e verificare che
+   elenco e date restino ephemeral; non assegnare `HR_READ` a `@everyone`;
+6. controllare in `/bh status` provider/modello, stato API e contatori token cumulativi, ricordando
+   che non equivalgono alla fatturazione provider;
+7. verificare log redatti, catena audit e assenza di browser/processi residui dopo lo stop.
 
 Non usare una write come smoke test. Nessun risultato ottenuto su mock, Discord o provider
 promuove automaticamente lo stato DIC live. Aggiornare lo [stato di verifica

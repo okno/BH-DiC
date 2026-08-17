@@ -48,6 +48,15 @@
 
 ## Read e dati
 
+- La 0.3.0 osserva soltanto la risposta UI esatta `/backend_apiV2/employees`; non esiste un adapter
+  API pubblico supportato né un fallback a chiamate HTTP dirette. Drift di query, schema o
+  paginazione fallisce chiuso. Deployment e smoke end-to-end della candidata restano `PENDING`.
+- Il totale non qualificato significa l'intero organico; “attivi” o “disattivati” devono essere
+  espliciti. Questo elimina l'ambiguità del modello ma non risolve eventuali categorie DIC future
+  fuori dal campo `active` osservato.
+- L'analisi bulk delle scadenze usa esclusivamente `current_contract.valid_to` dell'elenco. Non
+  effettua fetch N+1 e non include contratti storici, futuri multipli o date che lo schema chiuso
+  non riesce a interpretare. I risultati individuali sono limitati a 25 campi Discord.
 - I risultati del browser dipendono da label italiane, accessibilità e struttura
   della tabella; locale diverso da `it-IT` non è stato testato.
 - La pagina ruoli può non essere disponibile per dipendenti non collegati.
@@ -57,8 +66,11 @@
   pubblicazione e contenuto busta paga non sono implementati né dichiarati.
 - Ricerca, filtri, ordinamento e paginazione sono deterministici nel mock; effetti
   e limiti live (debounce, page size, combinazioni di filtri) non sono verificati.
-- I record letti sono redatti, ma la correttezza dei campi e la copertura di nuove
-  colonne devono essere riesaminate dopo la verifica DOM.
+- Il nome visualizzato completo è intenzionalmente disponibile come `SecretStr` transitorio per
+  il solo renderer `HR_READ` sensibile/ephemeral; non è redatto in quella risposta autorizzata.
+  E-mail, codice fiscale e matricola restano mascherati; gli altri campi operativi sono bounded e
+  tipizzati. Correttezza, necessity del nome e copertura di nuove colonne devono essere riesaminate
+  dopo la verifica live.
 
 ## Write, riconciliazione e file
 
@@ -103,9 +115,17 @@ semantica, permessi e postcondizioni.
   altri provider/modelli restano verifiche separate.
 - Il runtime llama locale, il modello e la protezione della porta sono responsabilità
   dell'operatore e non vengono installati da BH-DiC.
-- La lingua della persona riguarda chiarimenti e decorazioni; dati/output operativi restano in
-  italiano. Il profilo non migliora l'autorizzazione, non sostituisce la validazione deterministica
-  e non rende BH-DiC un assistente generalista o un bot di moderazione Discord.
+- Il provider vede categorie semantiche canoniche, sole date ISO necessarie e segnaposto; ogni
+  numero standalone viene redatto. Non vede vocaboli utente grezzi, nomi, Employee ID, query di
+  ricerca o risultati DIC. Espressioni non mappabili
+  possono diventare `[TERM_REDACTED]` e richiedere una formulazione più semplice; è un fail-closed
+  di privacy, non un errore da aggirare.
+- La lingua/persona riguarda presenter locale e chiarimenti. Il profilo non migliora
+  l'autorizzazione, non sostituisce la validazione deterministica e non rende BH-DiC un assistente
+  generalista o un bot di moderazione Discord.
+- I token cumulativi includono soltanto contatori validi dichiarati dal provider nel database
+  corrente. Le chiamate `UNAVAILABLE`/`UNKNOWN` sono conteggiate come gap, mai stimate; il totale
+  non equivale alla fattura e può cambiare dopo restore o sostituzione del database.
 
 ## Operatività e scala
 
@@ -120,8 +140,8 @@ semantica, permessi e postcondizioni.
 - Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
   offline/online sono stati verificati sul Debian target. Login DIC/tenant e gateway Discord hanno
   avuto successi storici separati; il check DIC corrente 0.2.7 si è fermato a
-  `TEAMSYSTEM_EMAIL`. La correzione 0.2.8, il nuovo restore vault, il restore drill e il carico
-  reale restano da verificare sul target.
+  `TEAMSYSTEM_EMAIL`. Deployment 0.3.0, migrazione token, refresh vault, smoke funzionali, restore
+  drill e carico reale restano da verificare sul target.
 
 ## Criterio per rimuovere una limitazione
 

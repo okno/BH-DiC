@@ -72,6 +72,30 @@ class MockIntentRouter:
         date_from, date_to = _september_range(text, date.today())
 
         candidates: list[tuple[str, str, ActionClass, Sensitivity]] = [
+            (
+                "employee_headcount",
+                "EMP-READ-001",
+                ActionClass.READ,
+                Sensitivity.LOW,
+            ),
+            (
+                "employment_contract",
+                "EMP-CONTRACT-001",
+                ActionClass.READ,
+                Sensitivity.MEDIUM,
+            ),
+            (
+                "employee_search",
+                "EMP-SEARCH-001",
+                ActionClass.SEARCH,
+                Sensitivity.MEDIUM,
+            ),
+            (
+                "employee_records",
+                "EMP-READ-002" if employee_id else "EMP-READ-001",
+                ActionClass.READ,
+                Sensitivity.MEDIUM,
+            ),
             ("elimin", "EMP-DELETE-001", ActionClass.PREPARE_WRITE, Sensitivity.CRITICAL),
             ("disattiv", "EMP-STATUS-001", ActionClass.PREPARE_WRITE, Sensitivity.CRITICAL),
             ("riattiv", "EMP-STATUS-002", ActionClass.PREPARE_WRITE, Sensitivity.HIGH),

@@ -55,13 +55,25 @@ sono autorizzati test live, né read né write.
 
 - configurazione multi-provider fail-closed e `MODEL_STORE=true` rifiutato;
 - schema provider strict e Function ID non esposto rifiutato;
+- minimizzazione pre-provider per categorie semantiche: nomi anche collidenti con parole HR,
+  Employee ID, query di ricerca e risultati DIC non attraversano OpenAI/Groq/llama;
+- uso token exact-only per Responses/chat, stati `REPORTED`/`UNAVAILABLE`/`UNKNOWN`, idempotenza e
+  migrazione `0002_model_usage` da database foundation;
 - `model-check` offline per default e probe live simulato con zero Function ID/tool execution;
 - scope Discord, RBAC, feature flag e kill switch;
 - preview/conferma, A1/A2 distinti, TTL, CAS, idempotenza e reconciliation;
 - catena HMAC e tamper detection;
 - redazione PII/segreti e rate limit;
 - upload, size/MIME/ext/hash, deduplica, antivirus fail-closed, path traversal e retention;
-- session vault, page object, UI drift, retry read e no-retry write;
+- session vault, ripersistenza solo dopo tenant attestato/read riuscita, page object, UI drift,
+  retry read e no-retry write;
+- cattura passiva della risposta elenco: origine/path/query/metodo/MIME/schema/body bounded,
+  duplicati, tenant e paginazione fail-closed;
+- display name `SecretStr`: chiaro soltanto nel renderer `SENSITIVE`/ephemeral `HR_READ`, mascherato
+  in repr/model dump e assente da aggregati, provider, log, audit e telemetria;
+- totale non qualificato `all`, intervalli mensili con rollover anno, date ISO/italiane, scadenze
+  bulk senza N+1 e risultati sensibili ephemeral;
+- follow-up pubblico consentito soltanto per `PUBLIC_AGGREGATE` e ruolo `READ_ONLY`;
 - script start/stop/status su processo sintetico, senza bot/provider reali.
 
 ## Coverage

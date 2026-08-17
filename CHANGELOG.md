@@ -5,6 +5,61 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-17
+
+### Added
+
+- Assistente Senior HR con presentazione locale, deterministica e configurabile: tono amichevole,
+  forma di indirizzo, verbosità e indicatori di stato personalizzano il dialogo senza modificare
+  RBAC, policy, dati o autorizzazioni.
+- Semantica locale per le domande operative principali. Un “totale dipendenti” non qualificato
+  indica l'intero organico, mentre “attivi” e “disattivati” applicano il filtro esplicito. Le
+  scadenze “nel prossimo mese”, “questo mese” e “nei prossimi N giorni” vengono trasformate in un
+  intervallo di date dal runtime, non dal provider.
+- Analisi bulk delle scadenze contrattuali basata sulla lista dipendenti paginata e sul contratto
+  corrente: accetta date ISO e italiane dove previste, verifica stabilità e completezza della
+  paginazione e non esegue una richiesta contratto separata per ogni dipendente.
+- Telemetria locale dei token provider con migrazione Alembic `0002_model_usage`. Ogni chiamata
+  registra soltanto provider, modello, correlation key, stato e contatori; `/bh ask` mostra input,
+  output e totale della richiesta e il cumulativo locale, mentre `/bh status` aggiunge stato bot,
+  provider/modello, ultima osservazione API e uso cumulativo.
+
+### Changed
+
+- L'elenco dipendenti Playwright osserva passivamente soltanto la risposta `GET` emessa dalla UI
+  sull'origine DIC e sul path esatti `/backend_apiV2/employees`. Metodo, stato, media type, query,
+  limite del corpo, paginazione e schema chiuso vengono validati prima di produrre una proiezione
+  tipizzata. Il display name è protetto come `SecretStr` e viene aperto soltanto per risultati
+  `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e matricola restano mascherati. BH-DiC non
+  trasforma il path osservato in un'API chiamata direttamente.
+- Gli aggregati non sensibili possono essere pubblicati nel canale Discord allowlistato dopo un
+  acknowledgement privato. Elenchi, identità, contratti, scadenze individuali, stato operativo e
+  altri risultati HR restano ephemeral per il solo richiedente autorizzato.
+- Una sessione browser tenant-attestata viene ripersistita in modo serializzato dopo verifiche e
+  letture riuscite, così le rotazioni valide di cookie e `sessionStorage` sopravvivono al riavvio.
+
+### Security
+
+- OpenAI, Groq e llama restano esclusivamente router di intento. Prima della chiamata, il testo
+  viene ridotto a categorie semantiche canoniche; nomi, query di ricerca, Employee ID e termini
+  liberi vengono rimossi o sostituiti, anche se un nome coincide con un termine HR;
+  risultati DIC, righe dipendente, DOM e scadenze non sono mai inviati al provider. Un Employee ID
+  esplicito viene riassociato soltanto localmente dopo il routing e rivalidato dalle policy.
+- I contatori token sono esclusivamente quelli dichiarati dal provider: assenza o esito remoto
+  incerto diventano rispettivamente `UNAVAILABLE` o `UNKNOWN`, senza stime. Prompt, testo utente,
+  identità Discord e dati DIC non sono conservati nella tabella di utilizzo.
+- `@everyone`, il cui ID coincide con quello del guild, può essere mappato soltanto a
+  `DISCORD_READONLY_ROLE_IDS` per aggregati e stato autorizzati nel canale allowlistato. Le letture
+  individuali e le scadenze richiedono un ruolo umano dedicato in `DISCORD_HR_READ_ROLE_IDS`.
+  Tutte le write restano disabilitate.
+
+### Verification
+
+- Gate locali completi: 734 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
+  Bandit, dependency audit, YAML, script shell, documentazione e link locali verdi. Deployment
+  Debian della 0.3.0, migrazione sul target e smoke Discord/DIC restano `PENDING`. Non promuovere
+  le nuove letture a `LIVE_READ_VERIFIED` prima delle evidenze separate.
+
 ## [0.2.8] - 2026-08-17
 
 ### Fixed
@@ -212,7 +267,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/okno/BH-DiC/compare/v0.2.8...v0.3.0
 [0.2.8]: https://github.com/okno/BH-DiC/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/okno/BH-DiC/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/okno/BH-DiC/compare/v0.2.5...v0.2.6

@@ -5,7 +5,7 @@ checking, RBAC, redazione, ClamAV, audit o feature flag per ottenere un test ver
 dati sintetici. Sul target sono stati verificati separatamente provider, autenticazione/tenant e
 trasporto Discord, senza eseguire Function ID HR. La 0.2.7 è distribuita, ma il check DIC corrente
 si è fermato a `TEAMSYSTEM_EMAIL`; la correzione candidata 0.2.8 ha gate locali verdi e verifica
-live `PENDING`.
+live `PENDING`. I gate locali 0.3.0 sono verdi; deployment e smoke restano `PENDING`.
 
 ## Modalità DEBUG locale
 
@@ -92,6 +92,11 @@ Non usare employee ID reale come chiave di ricerca nei log.
 - correlare request ID redatto senza loggare prompt o risposta completa;
 - un errore provider deve fallire chiuso, non bypassare il router.
 
+Se `/bh status` mostra contatori mancanti, distinguere `UNAVAILABLE` (risposta completata senza
+usage) da `UNKNOWN` (esito remoto incerto). Non ricostruire o stimare token dal testo e non
+interrogare prompt/log per “correggere” il totale. Verificare revisione Alembic
+`0002_model_usage`, provider/modello e correlation ID redatto.
+
 ### Selettori rotti / UI drift
 
 - acquisire route e nome page object dall'errore;
@@ -99,6 +104,11 @@ Non usare employee ID reale come chiave di ricerca nei log.
 - aggiornare il selector registry e fixture DOM sintetica/redatta in una modifica separata;
 - eseguire unit test page object e smoke read-only autorizzato;
 - non correggere un selettore direttamente in produzione e non provare una write.
+
+Per l'elenco dipendenti, drift comprende anche risposta UI assente, query diversa dall'azione,
+schema o MIME inatteso, body oltre il limite, tenant difforme, totale instabile e paginazione senza
+progresso. Non sostituire il listener passivo con una chiamata diretta al path osservato e non
+registrare body/URL completi per diagnosticare il problema.
 
 ### Database locked
 

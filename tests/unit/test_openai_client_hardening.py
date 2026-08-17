@@ -16,7 +16,7 @@ from bh_dic.openai.client import (
     envelope_from_call,
 )
 from bh_dic.openai.providers import GROQ_OPENAI_BASE_URL, OPENAI_RESPONSES_BASE_URL
-from bh_dic.openai.schemas import ActionClass, IntentEnvelope, Sensitivity
+from bh_dic.openai.schemas import ActionClass, IntentEnvelope, ProviderTokenUsage, Sensitivity
 
 
 def _tool_arguments(**overrides: object) -> str:
@@ -160,6 +160,18 @@ def test_envelope_from_call_supports_null_parameters_dates_and_unsupported() -> 
     assert valid_list.parameters == {"values": [1, 2, 3]}
 
 
+def test_malformed_provider_json_never_survives_in_exception_chains() -> None:
+    private_marker = "PRIVATE_PROVIDER_DOCUMENT_MARKER"
+    malformed = f'{{"private":"{private_marker}"'
+
+    with pytest.raises(IntentProviderError, match="valid JSON") as caught:
+        envelope_from_call("list_employees", malformed, frozenset({"EMP-READ-001"}))
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -192,17 +204,19 @@ class _ResponsesStub:
         output: list[object] | None = None,
         error: Exception | None = None,
         request_id: str | None = None,
+        usage: object | None = None,
     ) -> None:
         self.output = output or []
         self.error = error
         self.request_id = request_id
+        self.usage = usage
         self.request: dict[str, Any] | None = None
 
     async def create(self, **kwargs: Any) -> SimpleNamespace:
         self.request = kwargs
         if self.error is not None:
             raise self.error
-        response = SimpleNamespace(output=self.output)
+        response = SimpleNamespace(output=self.output, usage=self.usage)
         if self.request_id is not None:
             response._request_id = self.request_id
         return response
@@ -250,7 +264,10 @@ async def test_responses_client_normalizes_provider_failures_and_call_count() ->
     with pytest.raises(IntentProviderError, match="routing failed") as caught:
         await failing.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
     assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert reflected not in str(caught.value)
+    assert caught.value.response_received is False
+    assert caught.value.usage is None
 
     no_call = _client(_ResponsesStub(output=[SimpleNamespace(type="message")]))
     with pytest.raises(IntentProviderError, match="exactly one"):
@@ -264,6 +281,101 @@ async def test_responses_client_normalizes_provider_failures_and_call_count() ->
     duplicate = _client(_ResponsesStub(output=[call, call]))
     with pytest.raises(IntentProviderError, match="exactly one"):
         await duplicate.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+
+@pytest.mark.asyncio
+async def test_responses_client_preserves_exact_usage_on_success_and_invalid_tool_output() -> None:
+    usage = SimpleNamespace(input_tokens=101, output_tokens=23, total_tokens=124)
+    call = SimpleNamespace(
+        type="function_call",
+        name="list_employees",
+        arguments=_tool_arguments(),
+    )
+    routed = await _client(_ResponsesStub(output=[call], usage=usage)).route(
+        "richiesta sintetica", frozenset({"EMP-READ-001"})
+    )
+
+    assert routed.metadata.usage == ProviderTokenUsage(
+        input_tokens=101,
+        output_tokens=23,
+        total_tokens=124,
+    )
+
+    invalid = _client(_ResponsesStub(output=[SimpleNamespace(type="message")], usage=usage))
+    with pytest.raises(IntentProviderError, match="exactly one") as caught:
+        await invalid.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert caught.value.response_received is True
+    assert caught.value.provider == "openai"
+    assert caught.value.model == "synthetic-model"
+    assert caught.value.usage == routed.metadata.usage
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": True, "output_tokens": 1, "total_tokens": 2},
+        {"input_tokens": "1", "output_tokens": 1, "total_tokens": 2},
+        {"input_tokens": -1, "output_tokens": 1, "total_tokens": 0},
+        {"input_tokens": 1, "output_tokens": 1, "total_tokens": 3},
+        {"input_tokens": 1, "output_tokens": 1},
+    ],
+)
+async def test_responses_client_fails_closed_on_malformed_present_usage(usage: object) -> None:
+    call = SimpleNamespace(
+        type="function_call",
+        name="list_employees",
+        arguments=_tool_arguments(),
+    )
+
+    with pytest.raises(IntentProviderError, match="token usage") as caught:
+        await _client(_ResponsesStub(output=[call], usage=usage)).route(
+            "richiesta sintetica", frozenset({"EMP-READ-001"})
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert caught.value.response_received is True
+    assert caught.value.usage is None
+
+
+@pytest.mark.asyncio
+async def test_private_usage_property_failure_is_detached_from_sanitized_error() -> None:
+    private_marker = "PRIVATE_USAGE_PROPERTY_MARKER"
+
+    class PrivateUsage:
+        @property
+        def input_tokens(self) -> int:
+            raise RuntimeError(private_marker)
+
+    call = SimpleNamespace(
+        type="function_call",
+        name="list_employees",
+        arguments=_tool_arguments(),
+    )
+    with pytest.raises(IntentProviderError, match="token usage") as caught:
+        await _client(_ResponsesStub(output=[call], usage=PrivateUsage())).route(
+            "richiesta sintetica", frozenset({"EMP-READ-001"})
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
+
+
+def test_provider_token_usage_schema_is_strict_and_consistent() -> None:
+    assert ProviderTokenUsage(input_tokens=2, output_tokens=3, total_tokens=5).total_tokens == 5
+    for payload in (
+        {"input_tokens": False, "output_tokens": 0, "total_tokens": 0},
+        {"input_tokens": 0, "output_tokens": "0", "total_tokens": 0},
+        {"input_tokens": 0, "output_tokens": 0, "total_tokens": -1},
+        {"input_tokens": 1, "output_tokens": 1, "total_tokens": 1},
+        {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "private": "x"},
+    ):
+        with pytest.raises(ValidationError):
+            ProviderTokenUsage.model_validate(payload)
 
 
 @pytest.mark.asyncio
@@ -282,6 +394,7 @@ async def test_responses_client_omits_reasoning_when_disabled_and_handles_missin
 
     assert result.envelope.function_id == "EMP-READ-001"
     assert result.metadata.request_id is None
+    assert result.metadata.usage is None
     assert responses.request is not None
     assert "reasoning" not in responses.request
     assert responses.request["store"] is False
@@ -335,17 +448,19 @@ class _ChatCompletionsStub:
         choices: list[object] | None = None,
         error: Exception | None = None,
         request_id: str | None = None,
+        usage: object | None = None,
     ) -> None:
         self.choices = choices or []
         self.error = error
         self.request_id = request_id
+        self.usage = usage
         self.request: dict[str, Any] | None = None
 
     async def create(self, **kwargs: Any) -> SimpleNamespace:
         self.request = kwargs
         if self.error is not None:
             raise self.error
-        response = SimpleNamespace(choices=self.choices)
+        response = SimpleNamespace(choices=self.choices, usage=self.usage)
         if self.request_id is not None:
             response._request_id = self.request_id
         return response
@@ -396,13 +511,16 @@ async def test_llama_provider_failure_drops_private_exception_chain() -> None:
         await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
 
     assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert reflected not in str(caught.value)
 
 
 @pytest.mark.asyncio
 async def test_llama_chat_client_uses_interoperable_tools_and_exact_local_validation() -> None:
     completions = _ChatCompletionsStub(
-        choices=[_chat_choice(_chat_call())], request_id="req-llama-synthetic"
+        choices=[_chat_choice(_chat_call())],
+        request_id="req-llama-synthetic",
+        usage=SimpleNamespace(prompt_tokens=71, completion_tokens=12, total_tokens=83),
     )
 
     result = await _llama_client(completions).route(
@@ -412,6 +530,11 @@ async def test_llama_chat_client_uses_interoperable_tools_and_exact_local_valida
     assert result.envelope.function_id == "EMP-READ-001"
     assert result.metadata.provider == "llama"
     assert result.metadata.request_id == "req-llama-synthetic"
+    assert result.metadata.usage == ProviderTokenUsage(
+        input_tokens=71,
+        output_tokens=12,
+        total_tokens=83,
+    )
     assert completions.request is not None
     assert completions.request["messages"][0] == {
         "role": "system",
@@ -422,6 +545,23 @@ async def test_llama_chat_client_uses_interoperable_tools_and_exact_local_valida
     assert "parallel_tool_calls" not in completions.request
     assert "store" not in completions.request
     assert "reasoning_effort" not in completions.request
+
+
+@pytest.mark.asyncio
+async def test_llama_preserves_chat_usage_when_tool_validation_fails() -> None:
+    usage = SimpleNamespace(prompt_tokens=8, completion_tokens=5, total_tokens=13)
+    client = _llama_client(_ChatCompletionsStub(choices=[], usage=usage))
+
+    with pytest.raises(IntentProviderError, match="exactly one completion") as caught:
+        await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+    assert caught.value.response_received is True
+    assert caught.value.provider == "llama"
+    assert caught.value.usage == ProviderTokenUsage(
+        input_tokens=8,
+        output_tokens=5,
+        total_tokens=13,
+    )
 
 
 @pytest.mark.asyncio

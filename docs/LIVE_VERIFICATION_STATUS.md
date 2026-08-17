@@ -7,9 +7,9 @@
 | OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
-| Discord | `LIVE_DISCORD_TRANSPORT_VERIFIED` storico: comando guild-scoped registrato e gateway responsivo; dalla 0.2.7 l'avvio non invia credenziali DIC | Dopo i gate 0.2.8 verificare `active/running`, correggere RBAC e ripetere un solo smoke read-only; nessuna Function ID ancora verificata |
-| DIC | check headless 0.2.5 `LIVE_AUTHENTICATED`: sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; check server 0.2.7 corrente fermato a `TEAMSYSTEM_EMAIL` prima delle azioni credenziali | Distribuire la candidata 0.2.8 dopo i gate, invalidare una volta il vault precedente alla rotazione e fare esattamente un check live; funzioni applicative `NEEDS_VALIDATION`, nessuna write live |
-| Debian deployment | prerequisiti runtime `VERIFIED`; release 0.2.7 distribuita, correzione 0.2.8 non ancora live | Gate locali 0.2.8 `PASS`; verificare avvio Discord anche `DEGRADED`, log, smoke RBAC/read-only e restore drill |
+| Discord | `LIVE_DISCORD_TRANSPORT_VERIFIED` storico: comando guild-scoped registrato e gateway responsivo; dalla 0.2.7 l'avvio non invia credenziali DIC | Dopo i gate 0.3.0 verificare `active/running`, RBAC, aggregato pubblico `READ_ONLY` e dettaglio ephemeral `HR_READ` |
+| DIC | check headless storico `LIVE_AUTHENTICATED`: sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; successivo stop 0.2.7 a `TEAMSYSTEM_EMAIL` prima delle azioni credenziali | Distribuire la candidata 0.3.0 dopo i gate e verificare lettura passiva elenco, totale, scadenze e refresh `sessionStorage`; funzioni applicative ancora `NEEDS_VALIDATION`, nessuna write live |
+| Debian deployment | prerequisiti runtime `VERIFIED`; gate locali 0.3.0 verdi, candidata non ancora live | Migrazione `0002_model_usage`, avvio anche `DEGRADED`, log, smoke RBAC/read-only/HR-read e restore drill: `PENDING` |
 
 Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. DIC e trasporto
 Discord hanno evidenze live separate; nessuna di esse attesta una Function ID HR. Il doctor Debian
@@ -53,6 +53,15 @@ credenziali. La candidata 0.2.8 riconosce la root e-mail TeamSystem esatta corre
 `/connect/authorize/callback`; un SSO senza controlli è accettato soltanto dopo marker DIC e tenant
 attestato e non esegue fill/click/submit credenziali. I gate locali sono verdi; la verifica live
 resta `PENDING`.
+Dalla candidata 0.3.0 la UI può essere usata per osservare passivamente la risposta esatta
+`GET /backend_apiV2/employees`: origine, query, metodo, status, media type, limite, schema,
+paginazione e tenant vengono validati prima di creare una proiezione tipizzata. Il display name in
+chiaro è protetto come `SecretStr` e può essere aperto soltanto per risultati `HR_READ`
+sensibili/ephemeral; e-mail, codice fiscale e matricola restano mascherati. La risposta è stata usata per
+determinare il contratto tecnico, ma deployment della release, totale organico, analisi scadenze,
+pubblicazione Discord e telemetria token non sono ancora promossi come smoke live riusciti. Il
+provider resta intent-only e riceve categorie semantiche canoniche, mai nomi, Employee ID o
+risultati DIC.
 Dopo la rotazione del secret il vault precedente va invalidato deliberatamente una volta prima di
 un unico check live; un esito `CREDENTIAL_SUBMIT` non va ritentato. Le write restano disabilitate.
 Nessuna Function ID DIC è quindi classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono

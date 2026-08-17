@@ -116,11 +116,21 @@ evaluated user context. Read-only users do not receive write schemas, and high-r
 functions are hidden from model exposure.
 There are no browser, URL, HTTP, JavaScript, filesystem, shell or direct execution tools.
 
+The user request is reduced locally to canonical semantic-category labels, bounded dates/numbers
+and placeholders. Raw recognized vocabulary, search values, names and Employee IDs are not sent;
+the search span is removed before categorization so a name that collides with an HR term cannot
+cross the boundary. Explicit local targets are restored only after routing and policy recheck.
+
 `MODEL_STORE=false` forbids application-requested persistence. OpenAI/Groq requests apply the
 supported storage control; the llama chat-compatible request omits unsupported storage and
 conversation-state parameters. Full documents, payrolls, credentials, cookies, storage state,
 IBAN and full tax identifiers are forbidden. `MODEL_RESULT_RENDERING=deterministic` keeps DIC
 results local and renders Discord output through Python templates.
+
+The employee-list projection may hold the clear display name transiently as `SecretStr`. Only the
+`SENSITIVE`/ephemeral `HR_READ` list and expiry renderers unwrap it. Public aggregates, provider
+requests, repr/model dumps, logs, audit, telemetry and database persistence never receive the
+clear value; e-mail, tax code and payroll number remain masked.
 
 ## Persona isolation
 

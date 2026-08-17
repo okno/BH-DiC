@@ -16,7 +16,7 @@ runner = CliRunner()
 def test_cli_version_and_mock_config_are_operational() -> None:
     version = runner.invoke(app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.2.8"
+    assert version.stdout.strip() == "0.3.0"
 
     config = runner.invoke(app, ["validate-config", "--mock"])
     assert config.exit_code == 0

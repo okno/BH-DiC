@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,6 +119,7 @@ def _adapter(
     coordinator: DirectCoordinator | None = None,
     live_writes_enabled: bool = False,
     quarantine_root: Path | None = None,
+    verified_session_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[PlaywrightDicAdapter, DirectCoordinator]:
     direct = coordinator or DirectCoordinator()
     adapter = PlaywrightDicAdapter(  # type: ignore[arg-type]
@@ -127,6 +129,7 @@ def _adapter(
         quarantine_root=quarantine_root,
         live_writes_enabled=live_writes_enabled,
         state_digest_key=b"s" * 32,
+        verified_session_callback=verified_session_callback,
     )
     return adapter, direct
 
@@ -417,6 +420,58 @@ async def test_read_protocol_delegates_only_after_tenant_bound_authentication() 
     adapter._auth = _auth(SessionState.UNKNOWN)
     with pytest.raises(DicAuthenticationError, match="tenant-bound"):
         await adapter.list_employees(query)
+
+
+@pytest.mark.asyncio
+async def test_verified_session_callback_runs_only_after_attested_success() -> None:
+    events: list[str] = []
+
+    async def persist_verified_session() -> None:
+        events.append("persist")
+
+    adapter, _ = _adapter(verified_session_callback=persist_verified_session)
+    adapter._auth = _auth()
+
+    async def successful_list(_query: EmployeeListQuery) -> EmployeeListResult:
+        events.append("read")
+        return EmployeeListResult(items=(), page=1, page_size=25, total=0, has_next=False)
+
+    adapter._employees = SimpleNamespace(list=successful_list)
+
+    assert (await adapter.session_status()).state is SessionState.AUTHENTICATED
+    assert events == ["persist"]
+
+    events.clear()
+    await adapter.list_employees(EmployeeListQuery())
+    assert events == ["read", "persist"]
+
+    # Explicit authentication is persisted by the composition root, not by the
+    # passive callback, so this probe must not write the vault twice.
+    events.clear()
+    assert (await adapter.ensure_authenticated()).state is SessionState.AUTHENTICATED
+    assert events == []
+
+    adapter._auth = _auth(SessionState.UNKNOWN)
+    assert (await adapter.session_status()).state is SessionState.UNKNOWN
+    assert events == []
+    with pytest.raises(DicAuthenticationError, match="tenant-bound"):
+        await adapter.list_employees(EmployeeListQuery())
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_failed_read_never_notifies_verified_session_callback() -> None:
+    callback = AsyncMock()
+    adapter, _ = _adapter(verified_session_callback=callback)
+    adapter._auth = _auth()
+    adapter._employees = SimpleNamespace(
+        list=AsyncMock(side_effect=DicUiChangedError("private-read-failure"))
+    )
+
+    with pytest.raises(DicUiChangedError, match="private-read-failure"):
+        await adapter.list_employees(EmployeeListQuery())
+
+    callback.assert_not_awaited()
 
 
 @pytest.mark.asyncio

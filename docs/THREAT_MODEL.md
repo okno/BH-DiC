@@ -11,7 +11,7 @@ provider access controls.
 
 - Discord bot token, the selected model-provider key and DIC credentials;
 - encrypted browser session and encryption/HMAC keys;
-- employee identifiers and redacted HR results;
+- employee identifiers, transient `SecretStr` display names and redacted HR fields;
 - pending-action parameters, approvals and idempotency state;
 - uploaded documents and payroll files during their bounded local lifetime;
 - audit-chain integrity and operational logs;
@@ -57,6 +57,8 @@ provider access controls.
 | T24 | Denial of service via commands/browser jobs | rate limit, single browser queue, timeout, circuit breaker | authorized reads may be delayed during degradation |
 | T25 | Operator enables a critical flag unsafely | validated flag invariants, global kill switch, A2 mandatory | configuration change is privileged and audited |
 | T26 | Persona text is used as prompt injection or mention abuse | closed enums; bounded local decorations; URL/mention/token/instruction rejection; decorations never sent to provider | review configuration change and keep safety strings deterministic |
+| T27 | Clear employee name escapes its authorized response | `SecretStr`, sensitive/ephemeral-only unwrap, no public/provider/log/audit/telemetry/model-dump destination | revoke access, preserve redacted evidence and perform privacy incident review |
+| T28 | Search name collides with an allowed HR word | remove the complete local search span before canonical semantic-category projection | fail closed on unmappable intent; never forward the raw search value |
 
 ## Abuse cases that must remain impossible
 

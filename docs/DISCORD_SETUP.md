@@ -4,12 +4,11 @@ Questa procedura prepara un'applicazione Discord slash-only limitata al guild e 
 allowlistati nella configurazione locale. I relativi ID non sono conservati nella repository e
 devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarli.
 
-> Stato al 17 agosto 2026: installazione guild-scoped e registrazione sono verificate; dalla 0.2.7
-> il gateway è separato dal login DIC e deve rispondere anche con DIC `DEGRADED`. Il check DIC
-> corrente si è fermato a `TEAMSYSTEM_EMAIL`; i gate locali della candidata 0.2.8 sono verdi, la
-> verifica live resta `PENDING` e la release non modifica i permessi Discord. Il primo smoke
-> storico è stato negato dal gate
-> RBAC prima del dispatch; occorre correggere i ruoli senza ampliare guild o canale. Le istruzioni seguono la
+> Stato al 17 agosto 2026: installazione guild-scoped e registrazione hanno evidenza storica; il
+> gateway resta separato dal login DIC e può rispondere anche con DIC `DEGRADED`. Il primo smoke è
+> stato negato dal gate RBAC prima del dispatch. La candidata 0.3.0 separa gli aggregati pubblici
+> dai dettagli ephemeral, ma deployment e smoke dei nuovi flussi restano `PENDING`. Correggere i
+> ruoli senza ampliare guild o canale. Le istruzioni seguono la
 > documentazione Discord ufficiale
 > per [creare l'app e il bot](https://docs.discord.com/developers/quick-start/getting-started),
 > [OAuth2](https://docs.discord.com/developers/topics/oauth2) e [application
@@ -113,6 +112,18 @@ Usare interi positivi separati da virgole. La presenza nel canale non autorizza 
 scope e ruoli vengono ricontrollati dall'applicazione. Applicare least privilege e separazione dei
 compiti; il richiedente non può approvare la propria azione e A2 deve essere distinto da A1.
 
+| Richiesta | Ruolo minimo | Visibilità risposta |
+|---|---|---|
+| totale organico, totale attivi/disattivati | `READ_ONLY` | aggregato finale pubblico nel canale allowlistato |
+| `/bh status`, `/bh health`, aiuto | `READ_ONLY` | ephemeral, perché include stato operativo |
+| elenco/ricerca dipendente | `HR_READ` | ephemeral |
+| contratti o scadenze del prossimo mese | `HR_READ` | ephemeral |
+
+Le due righe `HR_READ` possono includere il nome visualizzato in chiaro, necessario a rendere
+utile l'elenco al Senior HR. Il runtime lo apre da `SecretStr` soltanto nel risultato
+`SENSITIVE`/ephemeral; non compare nell'acknowledgement, negli aggregati pubblici o nei canali
+tecnici.
+
 ### Consentire i comandi a tutti i membri del solo canale
 
 Discord assegna al ruolo predefinito `@everyone` lo stesso snowflake del guild. Se l'obiettivo è
@@ -133,6 +144,12 @@ balance è un entitlement aggiuntivo e da sola non supera il gate.
 Non mappare `@everyone` a `HR_WRITE`, IAM, document operator, approver, security admin o system
 admin. Mappare `@everyone` a `HR_READ` è tecnicamente possibile, ma estende automaticamente i dati
 HR a ogni membro presente o futuro che ottenga accesso al canale ed è quindi sconsigliato.
+
+Il risultato pubblico è limitato al numero aggregato e ai contatori tecnici associati alla
+richiesta. Discord non consente di trasformare in pubblica una risposta già deferita come privata:
+BH-DiC chiude quindi l'acknowledgement ephemeral e invia un follow-up pubblico soltanto quando il
+runtime ha classificato esplicitamente il risultato `PUBLIC_AGGREGATE`. Nessun dettaglio HR usa
+questo percorso.
 
 Nel client Discord configurare inoltre i due livelli nativi:
 

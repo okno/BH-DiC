@@ -64,6 +64,14 @@ contenuti binari e target non pseudonimizzati. Non loggare comunque:
 - screenshot/trace.
 
 La redazione è difesa in profondità, non autorizzazione a passare PII al logger.
+Il `SecretStr` del display name viene aperto esclusivamente nel renderer Discord
+`SENSITIVE`/ephemeral: non inserirlo in `extra`, eccezioni, correlation metadata o messaggi.
+
+La telemetria token 0.3.0 non è un log di conversazione. La tabella
+`model_usage_events` conserva soltanto correlation key, purpose/ordinal, provider, modello, stato,
+timestamp e contatori esatti quando disponibili. Prompt, testo utente, Employee ID e risultati DIC
+non devono apparire né nella tabella né nei JSONL. `/bh status` espone soltanto aggregati locali e
+gap; non stampare righe SQL per diagnosticarli.
 
 ## Correlazione e incidenti
 

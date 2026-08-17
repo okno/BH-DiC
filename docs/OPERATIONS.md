@@ -21,8 +21,11 @@ La 0.2.7 separa il gateway dal login DIC e conserva cifrato lo snapshot bounded
 `sessionStorage`. La candidata 0.2.8 aggiunge soltanto il contratto corrente verificato
 pubblicamente: root e-mail TeamSystem esatta, legacy `/Account/LoginEmail`, transizioni pending
 bounded `/connect/authorize`/`/connect/authorize/callback` e SSO senza azioni credenziali accettato
-solo dopo marker DIC e tenant attestato. I gate locali 0.2.8 sono verdi, ma la candidata non è
-ancora verificata live. Sul target non è stata eseguita alcuna Function ID DIC.
+solo dopo marker DIC e tenant attestato. La candidata 0.3.0 aggiunge presenter Senior HR, lettura
+passiva elenco, refresh del vault e telemetria token. I gate locali completi sono verdi; deployment
+e smoke Discord/DIC restano `PENDING`. Sul target non è ancora promossa alcuna nuova Function ID
+live. Il
+primo deny RBAC resta un'evidenza separata dal funzionamento DIC.
 
 ## Runbook giornaliero
 
@@ -59,6 +62,11 @@ Sono modalità alternative. Dettagli in [Start/stop](START_STOP.md).
 Il primo healthcheck controlla soltanto identità/processo. Quello completo richiede configurazione
 e DB; se l'interfaccia CLI/script non coincide, trattarlo come `BLOCKED` e non sostituirlo con una
 chiamata live improvvisata.
+
+`/bh status` della 0.3.0 riporta separatamente bot Discord, provider/modello, stato API osservato,
+browser, autenticazione tenant, kill switch e token cumulativi locali. “Risposta osservata” indica
+che almeno una chiamata modello è terminata nel database corrente; non è un healthcheck live né
+una prova di quota disponibile. I contatori mancanti/incerti sono dichiarati e mai stimati.
 
 ### Provider di modello
 
@@ -138,6 +146,11 @@ riconosce anche la root e-mail esatta corrente e le sole transizioni OIDC esatte
 non esegue fill/click/submit credenziali ed è valido solo dopo marker DIC e tenant attestato. Un
 nuovo exit 78 o `CREDENTIAL_SUBMIT` impone lo stop del check senza retry né nuova invalidazione.
 
+La 0.3.0 ripersiste sotto lock cookie e `sessionStorage` aggiornati soltanto dopo stato
+autenticato/tenant attestato o lettura riuscita. Questa manutenzione del vault non invia
+credenziali e non è un retry di login; fallimenti, mismatch o stati ignoti non sovrascrivono il
+file valido.
+
 ### Log
 
 ```bash
@@ -216,6 +229,12 @@ Dopo un restore drill riuscito sul target:
 `update.sh` richiede working tree pulito e upstream, usa fetch con timeout e solo fast-forward,
 reinstalla lockfile/editable, migra e testa. L'opzione `--restart` riavvia solo se il bot era già
 attivo; non usarla durante preparazione/deployment fermo.
+
+Dopo l'update 0.3.0 verificare che `bh_dic version` mostri `0.3.0` e che Alembic sia alla revisione
+`0002_model_usage`. Poi, con write ancora disabilitate, eseguire i due smoke distinti: totale
+organico tramite un attore `READ_ONLY` e scadenze del prossimo mese tramite un attore `HR_READ`.
+Il primo può produrre soltanto un aggregato pubblico nel canale allowlistato; il secondo deve
+restare ephemeral. Se uno dei due confini non è rispettato, fermare il rollout.
 
 ## Sessione DIC e rotazione token
 

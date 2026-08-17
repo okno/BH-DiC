@@ -13,6 +13,7 @@ from pydantic import (
     Field,
     StrictBool,
     StrictFloat,
+    StrictInt,
     StrictStr,
     field_validator,
     model_validator,
@@ -153,6 +154,26 @@ class IntentEnvelope(BaseModel):
         return self
 
 
+class ProviderTokenUsage(BaseModel):
+    """Exact token counters reported by one completed provider response.
+
+    Missing provider usage is represented by ``None`` at the containing boundary.  Values are
+    never coerced or estimated locally: a present usage object must be internally consistent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    input_tokens: StrictInt = Field(ge=0, le=2**63 - 1)
+    output_tokens: StrictInt = Field(ge=0, le=2**63 - 1)
+    total_tokens: StrictInt = Field(ge=0, le=2**63 - 1)
+
+    @model_validator(mode="after")
+    def validate_total(self) -> ProviderTokenUsage:
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("total_tokens must equal input_tokens plus output_tokens")
+        return self
+
+
 class RouteMetadata(BaseModel):
     """Non-sensitive provider metadata suitable for local observability."""
 
@@ -162,3 +183,4 @@ class RouteMetadata(BaseModel):
     model: StrictStr
     request_id: StrictStr | None = None
     tool_name: StrictStr
+    usage: ProviderTokenUsage | None = None

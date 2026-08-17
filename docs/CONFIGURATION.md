@@ -74,16 +74,16 @@ Gli alias legacy `OPENAI_STORE`, `OPENAI_TIMEOUT_SECONDS`, `OPENAI_MAX_RETRIES`,
 alla migrazione verso `MODEL_*`. Non usarli in un nuovo `.env`; un valore legacy in conflitto con
 quello canonico deve far fallire il caricamento.
 
-## Persona del bot
+## Persona Senior HR del bot
 
-Esempio italiano professionale:
+Esempio italiano amichevole e dettagliato, adatto a un Senior HR:
 
 ```dotenv
 BOT_LANGUAGE=it
-BOT_TONE=professional
-BOT_ADDRESS_STYLE=lei
-BOT_VERBOSITY=standard
-BOT_EMOJI_MODE=off
+BOT_TONE=friendly
+BOT_ADDRESS_STYLE=tu
+BOT_VERBOSITY=detailed
+BOT_EMOJI_MODE=status
 BOT_DISPLAY_NAME=BH-DiC
 BOT_OPENING=
 BOT_CLOSING=
@@ -107,11 +107,11 @@ name è limitato a 48 caratteri, apertura e chiusura a 120.
 Testo di decorazione con mention, URL, materiale simile a token, caratteri di controllo o
 istruzioni/prompt injection viene rifiutato.
 
-La persona controlla presentazione locale e soltanto lo stile di un'eventuale domanda di
+La persona controlla il presenter Senior HR locale e soltanto lo stile di un'eventuale domanda di
 chiarimento. Display name, apertura e chiusura non vengono inviati al provider. Il profilo non
-traduce dati/output operativi deterministici, che restano in italiano; non amplia il catalogo,
-non cambia scope/RBAC e non rende meno esplicite preview o conferme. BH-DiC è un router HR
-autorizzato, non un chatbot generalista né un sistema di moderazione Discord.
+inventa fatti, non amplia il catalogo, non cambia scope/RBAC e non rende meno esplicite preview o
+conferme. Il tono amichevole non trasforma BH-DiC in un chatbot generalista né in un sistema di
+moderazione Discord: ogni dato operativo deriva ancora dall'adapter tipizzato.
 
 ## Baseline sicura
 
@@ -161,6 +161,17 @@ stesso ID del guild e si può impostare `DISCORD_READONLY_ROLE_IDS=<DISCORD_GUIL
 usare invece un ruolo umano dedicato in `DISCORD_HR_READ_ROLE_IDS`; non mappare `@everyone` a
 write/admin. Procedura completa: [Configurazione Discord](DISCORD_SETUP.md).
 
+`READ_ONLY` consente gli aggregati non sensibili e lo stato previsto dal catalogo; non consente
+elenchi, Employee ID, contratti o scadenze individuali. Gli aggregati possono essere pubblicati
+nel canale allowlistato, mentre tutti i risultati sensibili restano ephemeral. Per la domanda
+“dipendenti con contratto a scadenza nel prossimo mese” assegnare quindi un ruolo umano dedicato
+presente in `DISCORD_HR_READ_ROLE_IDS`, senza allargare `@everyone`.
+
+Negli elenchi e nelle scadenze autorizzate `HR_READ`, il nome visualizzato può apparire in chiaro
+nella sola risposta ephemeral. Nel modello applicativo è un `SecretStr`: non compare in repr/dump,
+aggregati pubblici, provider, log, audit o telemetria. E-mail, codice fiscale e matricola restano
+mascherati.
+
 Analogamente, [redaction.example.yaml](../config/redaction.example.yaml) documenta il profilo
 atteso: i controlli effettivi sono nel codice di logging, security e provider. Modificare il file
 YAML da solo non modifica la redazione runtime.
@@ -170,6 +181,26 @@ YAML da solo non modifica la redazione runtime.
 Il provider selezionato riceve solo testo minimizzato/redatto, JSON schema e Function ID che la
 policy ha già reso visibili all'attore. Non riceve browser, file, segreti o la decisione finale.
 L'output è un candidato non attendibile e viene rivalidato. `MODEL_STORE=true` è vietato.
+
+La minimizzazione della 0.3.0 proietta la domanda su categorie semantiche canoniche chiuse, come
+`employee_headcount`, `employment_contract` e `contract_deadline`, anziché inoltrare i vocaboli
+utente grezzi. Nomi, valori di ricerca, Employee ID e termini liberi vengono rimossi o sostituiti
+prima del trasporto, anche quando un nome coincide con una parola HR o un mese. Query di ricerca e
+ID espliciti rimangono locali e vengono riassociati soltanto dopo il routing. Risposte DIC, DOM,
+righe dipendente e analisi contrattuali non vengono mai inviate a OpenAI, Groq o llama.
+
+## Telemetria token locale
+
+La migrazione Alembic `0002_model_usage` crea una tabella a transizione unidirezionale per il
+ciclo di vita delle chiamate modello. Conserva provider, modello, correlation key, ordinal, stato, timestamp e, solo
+quando il provider li restituisce validi, `input_tokens`, `output_tokens` e `total_tokens`. Non
+conserva prompt, testo utente, ID Discord, Employee ID o risultati DIC.
+
+Gli stati sono `STARTED`, `REPORTED`, `UNAVAILABLE` e `UNKNOWN`. `REPORTED` usa esclusivamente i
+contatori dichiarati dal provider; `UNAVAILABLE` indica risposta completata senza contatori;
+`UNKNOWN` indica che l'esito remoto non può essere determinato. Il runtime non stima valori
+mancanti. Il cumulativo è locale al database corrente, può includere gap e non equivale alla
+fatturazione del provider.
 
 ## Validazione senza stampare segreti
 

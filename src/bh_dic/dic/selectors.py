@@ -134,22 +134,18 @@ DEFAULT_SELECTORS = SelectorRegistry(
             placeholder("Cerca"),
             test_id("employee-search"),
         ),
-        "employees.filter.active": (
-            role("tab", "Attivi"),
-            role("button", "Attivi"),
+        "consent.onetrust_banner": (
+            css("#onetrust-banner-sdk"),
+            css(".ot-sdk-container"),
         ),
-        "employees.filter.inactive": (
-            role("tab", "Disattivati"),
-            role("button", "Disattivati"),
+        "consent.reject_nonessential": (
+            css("#onetrust-reject-all-handler"),
+            css(".ot-pc-refuse-all-handler"),
         ),
-        "employees.filter.all": (
-            role("tab", "Tutti"),
-            role("button", "Tutti"),
-        ),
-        "employees.sort.name": (
-            role("columnheader", "Dipendente"),
-            test_id("sort-name"),
-        ),
+        "employees.filter.active": (css("dic-segmented-control-option#option-true"),),
+        "employees.filter.inactive": (css("dic-segmented-control-option#option-false"),),
+        "employees.filter.all": (css("dic-segmented-control-option#option-null"),),
+        "employees.sort.name": (css("th.cdk-column-full_name"),),
         "employees.sort.payroll_number": (
             role("columnheader", "Matricola"),
             test_id("sort-payroll-number"),
@@ -158,15 +154,8 @@ DEFAULT_SELECTORS = SelectorRegistry(
             role("columnheader", "Stato"),
             test_id("sort-status"),
         ),
-        "employees.sort.contract": (
-            role("columnheader", "Contratto"),
-            test_id("sort-contract"),
-        ),
-        "employees.next": (
-            role("button", "Pagina successiva"),
-            test_id("pagination-next"),
-            css("button[aria-label*='successiva']"),
-        ),
+        "employees.sort.contract": (css("th.cdk-column-current_contract"),),
+        "employees.next": (css("dic-table-pagination button[text='Avanti']"),),
         "employees.new": (role("button", "Nuovo dipendente"), test_id("new-employee")),
         "employees.create_manual": (
             text("Crea manualmente"),

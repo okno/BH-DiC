@@ -1,8 +1,8 @@
 # Provider di modello: OpenAI, Groq e llama locale
 
 > Il nome del file è mantenuto per compatibilità con i link esistenti. La configurazione è ora
-> multi-provider. Nessuna connessione live a OpenAI, Groq o a un endpoint llama è stata verificata
-> in questa consegna.
+> multi-provider. Groq `openai/gpt-oss-120b` ha evidenza di un probe live chiuso separato;
+> OpenAI, llama e il deployment della candidata 0.3.0 restano verifiche indipendenti.
 
 Il modello è usato esclusivamente come router di intento. Non controlla browser o file, non riceve
 credenziali e non decide autorizzazioni, approvazioni o risultati. L'applicazione espone solo i
@@ -138,10 +138,18 @@ disponibilità del processo locale e la qualità del routing restano verifiche o
 
 Prima della chiamata:
 
-1. input e strutture vengono redatti e minimizzati;
+1. input e strutture vengono redatti e proiettati su categorie semantiche canoniche chiuse;
 2. scope Discord, tenant e ruoli determinano i Function ID visibili;
 3. vengono costruiti soltanto i tool relativi a quei Function ID;
 4. il provider deve restituire una sola function call conforme allo schema.
+
+Il provider riceve etichette come `employee_headcount`, `employment_contract` e
+`contract_deadline`, non i vocaboli utente riconosciuti. Nomi, valori di ricerca, Employee ID e
+termini liberi vengono sostituiti prima del trasporto; l'intero valore di ricerca è rimosso prima
+della categorizzazione, anche se coincide con una parola HR o un mese. Un solo Employee ID
+esplicitamente etichettato può restare nel contesto locale, ma il provider vede soltanto un
+segnaposto; l'ID viene riassociato dopo il routing e rivalidato. Il modello non riceve mai righe
+dipendente, risultati DIC, DOM, contratti o analisi delle scadenze.
 
 Dopo la risposta, nome tool, Function ID, schema, lunghezze, sensibilità e parametri sono
 rivalidati. Un Function ID non esposto o un output ambiguo viene rifiutato. Il modello non può
@@ -160,6 +168,17 @@ telefono, indirizzo, cookie, TOTP, password o session state. Vedere
 - dimensionare e monitorare CPU/RAM/GPU per llama senza acquisire prompt;
 - correlare errori soltanto tramite request ID e correlation ID redatti;
 - non usare log provider o proxy come archivio conversazionale.
+
+La 0.3.0 registra localmente il ciclo di vita di ogni chiamata router. I contatori
+`input_tokens`, `output_tokens` e `total_tokens` vengono accettati soltanto se presenti, interi,
+non negativi e coerenti nella risposta del provider. Una risposta senza usage diventa
+`UNAVAILABLE`; un esito remoto incerto diventa `UNKNOWN`; nessuno dei due viene stimato. `/bh ask`
+mostra uso della richiesta e cumulativo locale, mentre `/bh status` riporta provider/modello,
+stato dell'ultima osservazione API e cumulativo. Questi valori non equivalgono al billing del
+provider e ripartono con un database nuovo o ripristinato.
+
+La tabella non conserva prompt, testo utente, identità Discord, Employee ID o dati DIC. La
+migrazione richiesta è `0002_model_usage`; applicarla prima del primo avvio della 0.3.0.
 
 Il client disabilita redirect HTTP e proxy ereditati dalle variabili d'ambiente per impedire che
 prompt o metadati vengano inoltrati a un'origine diversa da quella validata. Il server deve quindi

@@ -59,8 +59,13 @@ credenziali, il percorso è accettato soltanto dopo route applicativa DIC, marke
 attestazione tenant esatta, con zero fill/click/submit sui controlli e-mail/password. I gate locali
 della 0.2.8 sono verdi; la verifica live resta `PENDING`.
 
+La candidata 0.3.0 conserva questi confini e aggiunge soltanto l'osservazione passiva della
+risposta elenco e la ripersistenza di una sessione già attestata. Gate completi, deployment e
+smoke della 0.3.0 restano `PENDING`; nessuna nuova lettura viene promossa da questa descrizione.
+
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
-Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
+Playwright, righe dipendente, nomi, Employee ID, risultati DIC o una funzione di navigazione
+arbitraria. Il confine applicativo è il
 Protocol `DipendentiInCloudAdapter`.
 
 ## Configurazione
@@ -174,6 +179,39 @@ bundle pubblico corrente, non da una risposta autenticata acquisita. Non sono
 un'API pubblica supportata né un nuovo adapter dati: BH-DiC non invoca direttamente
 l'endpoint e non usa la risposta per funzioni HR.
 
+## Lettura passiva dell'elenco dipendenti
+
+La 0.3.0 applica lo stesso principio di osservazione passiva alla lista dipendenti. Playwright
+installa un listener bounded prima di una navigazione o azione UI deterministica e accetta
+soltanto la risposta che la pagina emette su origine esatta
+`https://secure.dipendentincloud.it`, path esatto `/backend_apiV2/employees`, metodo `GET`, status
+`200` e media type JSON. BH-DiC non costruisce né invia una richiesta HTTP diretta a questo path.
+
+La query catturata deve corrispondere all'azione UI appena eseguita: pagina, page size fisso,
+ricerca, campi di ricerca, ordinamento e filtro `active` sono confrontati con un insieme chiuso.
+Risposte precedenti al marker o non correlate all'azione vengono ignorate; overflow, timeout e
+metadati inattesi fanno fallire chiuso la lettura. Il corpo massimo è 256 KiB, il JSON deve essere
+UTF-8 senza chiavi duplicate e tenant, paginazione, URL correlati e conteggi devono essere
+coerenti.
+
+Lo schema root chiuso comprende soltanto `current_page`, `data`, `first_page_url`, `from`,
+`last_page`, `last_page_url`, `links`, `next_page_url`, `path`, `per_page`, `prev_page_url`, `to` e
+`total`. Ogni riga deve rispettare il contratto dipendente noto; `current_contract` ammette
+esattamente `hours_type`, `id`, `part_time_percentage`, `permanent`, `valid_from` e `valid_to`.
+Campi o tipi inattesi, date non ISO, company ID difforme, ID duplicati o paginazione instabile
+producono un errore generico senza body o PII.
+
+All'esterno del parser esce soltanto una proiezione tipizzata. Il nome visualizzato completo è
+conservato transitoriamente come `SecretStr`, escluso da `repr` e mascherato nei dump del modello;
+le iniziali restano disponibili come alternativa sicura. Il presenter apre il `SecretStr` soltanto
+per elenchi e scadenze classificati `SENSITIVE`, destinati a un richiedente `HR_READ` tramite
+risposta ephemeral. E-mail, codice fiscale e matricola restano mascherati; stato, mansione, team,
+luogo e date del contratto corrente sono i soli altri campi proiettati.
+
+Il nome completo non entra mai in aggregati pubblici, provider di modello, log, audit, telemetria
+token o persistenza applicativa. Il body originale non viene registrato, persistito o inserito
+nell'audit. Un uso futuro del nome fuori dal renderer sensibile richiede una nuova review privacy.
+
 Gli errori password scaduta/CAPTCHA/MFA corrispondono operativamente a
 `AUTHENTICATION_INTERACTIVE_REQUIRED`: fermare il job e completare il passaggio
 solo con una procedura umana autorizzata. Non tentare bypass, automazioni CAPTCHA
@@ -213,13 +251,17 @@ destinazione va verificata con `stat` prima di considerarla operativa.
 `DicSessionManager` applica una durata predefinita di otto ore e può caricare, salvare o
 invalidare lo stato. Il bootstrap non-mock collega settings, vault e browser context: carica
 cookie/localStorage e ripristina una volta lo snapshot `sessionStorage` cifrato prima degli script
-applicativi. Soltanto
-il comando operatore esplicito `dic-auth-check --live` può inviare credenziali e persistere un
-nuovo snapshot, e lo fa solo dopo autenticazione e attestazione tenant verificate. Il normale
-gateway Discord non invia credenziali e non aggiorna il vault: se la sessione manca, scade o il
-vault è illeggibile, resta online in stato `DEGRADED`, preserva il file e le funzioni DIC falliscono
-chiuso. Il check esplicito continua invece a rifiutare un vault illeggibile finché l'operatore non
-decide se conservarlo o invalidarlo. Questa composizione è testata
+applicativi. Soltanto il comando operatore esplicito `dic-auth-check --live` può inviare
+credenziali e creare una nuova sessione, e lo fa solo dopo autenticazione e attestazione tenant
+verificate. Il normale gateway Discord non invia mai credenziali. La 0.3.0 può però ripersistire,
+con lock serializzato, lo stato già autenticato dopo una verifica tenant-attestata o una lettura
+DIC riuscita: questo conserva le normali rotazioni di cookie e `sessionStorage` senza effettuare
+un nuovo login. Stati non autenticati, tenant non attestati, errori e letture fallite non
+sovrascrivono il vault.
+
+Se la sessione manca, scade o il vault è illeggibile, il gateway resta online in stato `DEGRADED`,
+preserva il file e le funzioni DIC falliscono chiuso. Il check esplicito continua invece a
+rifiutare un vault illeggibile finché l'operatore non decide se conservarlo o invalidarlo. Questa composizione è testata
 localmente. I tentativi 0.2.2 e 0.2.3 si
 sono fermati prima del submit password; la 0.2.4 ha raggiunto la callback DIC dopo un singolo
 submit, ma l'ha rifiutata fail-closed. Un successivo check headless ha confermato autenticazione e

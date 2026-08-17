@@ -108,6 +108,54 @@ class DiscordRequest(Base):
     __table_args__ = (Index("ix_discord_requests_created", "created_at"),)
 
 
+class ModelUsageEvent(Base):
+    """One retained model call whose lifecycle may advance only from STARTED once."""
+
+    __tablename__ = "model_usage_events"
+
+    usage_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="STARTED")
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "correlation_id",
+            "purpose",
+            "ordinal",
+            name="uq_model_usage_events_correlation_purpose_ordinal",
+        ),
+        CheckConstraint("ordinal >= 1", name="ordinal_positive"),
+        CheckConstraint(
+            "status IN ('STARTED', 'REPORTED', 'UNAVAILABLE', 'UNKNOWN')",
+            name="status_allowed",
+        ),
+        CheckConstraint(
+            "(status = 'STARTED' AND completed_at IS NULL "
+            "AND input_tokens IS NULL AND output_tokens IS NULL AND total_tokens IS NULL) "
+            "OR (status = 'REPORTED' AND completed_at IS NOT NULL "
+            "AND input_tokens IS NOT NULL AND input_tokens >= 0 "
+            "AND output_tokens IS NOT NULL AND output_tokens >= 0 "
+            "AND total_tokens IS NOT NULL AND total_tokens = input_tokens + output_tokens) "
+            "OR (status IN ('UNAVAILABLE', 'UNKNOWN') AND completed_at IS NOT NULL "
+            "AND input_tokens IS NULL AND output_tokens IS NULL AND total_tokens IS NULL)",
+            name="lifecycle_consistent",
+        ),
+        Index("ix_model_usage_events_created", "created_at"),
+        Index("ix_model_usage_events_status", "status"),
+    )
+
+
 class PendingAction(Base):
     __tablename__ = "pending_actions"
 

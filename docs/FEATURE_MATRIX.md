@@ -14,10 +14,17 @@ non deve essere mantenuta come secondo catalogo runtime.
   `EMP-DOC-003` e `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. I 19 Function ID write
   sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
-- Nessuna Function ID DIC live è stata eseguita. Il runtime Debian e Groq sono verificati
-  separatamente. La 0.2.7 mantiene Discord online in stato `DEGRADED` senza login implicito, ma il
-  check DIC corrente si è fermato a `TEAMSYSTEM_EMAIL`. DIC resta `NEEDS_VALIDATION`; i gate locali
-  della candidata 0.2.8 sono verdi e la verifica live resta `PENDING`.
+- Nessuna nuova Function ID della candidata 0.3.0 è promossa a `LIVE_READ_VERIFIED`. Il runtime
+  Debian, Groq e le evidenze storiche DIC/Discord restano verifiche separate. DIC resta
+  `NEEDS_VALIDATION`; i gate locali sono verdi, mentre deployment e smoke della 0.3.0 sono
+  `PENDING`. Tutte le write
+  restano disabilitate.
+
+La 0.3.0 estende i percorsi read senza ampliare il catalogo: `EMP-READ-001` usa la risposta elenco
+emessa dalla UI sotto schema chiuso; `EMP-CONTRACT-001` può analizzare le date del contratto
+corrente sull'intero elenco paginato senza fetch per-dipendente. La semantica “totale” e gli
+intervalli relativi sono risolti localmente. Queste proprietà implementative non sono da sole una
+prova live.
 
 “Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
 Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il
@@ -27,13 +34,13 @@ catalogo esclude anche dalla tool exposure ordinaria.
 
 | Function ID | Funzione | Ruolo/scope minimo | Flag | Tool | Stato |
 |---|---|---|---|---|---|
-| `EMP-READ-001` | elenco/conteggio | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-READ-001` | elenco/conteggio; totale non qualificato = intero organico | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-READ-002` | riepilogo anagrafico redatto | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-SEARCH-001` | ricerca dipendente | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-FILTER-001` | filtri elenco | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-SORT-001` | ordinamento | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-PAGE-001` | paginazione | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-CONTRACT-001` | contratti | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-CONTRACT-001` | contratti e scadenze bulk senza N+1 | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-RBAC-001` | gruppi/ruoli | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
@@ -92,6 +99,12 @@ mostrati come supportati per una write live che non potrebbe essere riconciliata
 - un esito ambiguo diventa `UNKNOWN_REQUIRES_RECONCILIATION`, mai retry automatico;
 - `ENABLE_LIVE_WRITE_TESTS` richiede employee sintetico dedicato e tenant confermato, ma resta
   vietato finché non esiste un'autorizzazione esplicita separata.
+- un aggregato `READ_ONLY` può essere pubblico soltanto nel canale allowlistato; liste, scadenze e
+  ogni risultato `HR_READ` restano ephemeral;
+- il provider classifica esclusivamente categorie semantiche minimizzate: vocaboli grezzi, nomi,
+  Employee ID, query di ricerca e risultati DIC restano nel runtime locale;
+- il nome in chiaro è aperto dal `SecretStr` soltanto per elenchi/scadenze `HR_READ` ephemeral;
+  aggregati `READ_ONLY`, log, audit, telemetria e provider non lo ricevono.
 
 Vedere [Configuration](CONFIGURATION.md), [Security architecture](SECURITY_ARCHITECTURE.md) e
 [Testing](TESTING.md).

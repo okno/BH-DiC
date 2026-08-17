@@ -142,6 +142,7 @@ class PlaywrightDicAdapter:
         quarantine_root: Path | None = None,
         live_writes_enabled: bool = False,
         state_digest_key: bytes | None = None,
+        verified_session_callback: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if live_writes_enabled and expected_tenant_id is None:
             raise DicWriteDisabledError("live writes require an explicitly configured DIC tenant")
@@ -151,6 +152,7 @@ class PlaywrightDicAdapter:
         if state_digest_key is not None and len(state_digest_key) < 32:
             raise DicConfigurationError("DIC state digest key must contain at least 32 bytes")
         self._state_digest_key = bytes(state_digest_key) if state_digest_key is not None else None
+        self._verified_session_callback = verified_session_callback
         self._auth = PlaywrightAuthenticator(
             page,
             base_url,
@@ -158,7 +160,11 @@ class PlaywrightDicAdapter:
             login_timeout_ms=login_timeout_ms,
         )
         self._auth_timeout_seconds = self._auth.login_timeout_seconds + 5
-        self._employees = EmployeesListPage(page, base_url)
+        self._employees = EmployeesListPage(
+            page,
+            base_url,
+            expected_tenant_id=expected_tenant_id,
+        )
         self._summary = EmployeeSummaryPage(page, base_url)
         self._roles = EmployeeRolesPage(page, base_url)
         self._timestamps = TimestampEmployeesPage(page, base_url)
@@ -182,9 +188,30 @@ class PlaywrightDicAdapter:
                 raise DicAuthenticationError(
                     "an authenticated, tenant-bound DIC session is required"
                 )
-            return await operation()
+            result = await operation()
+            await self._notify_verified_session()
+            return result
 
         return await self._coordinator.run_read(name, "dic-browser", authenticated_operation)
+
+    async def _notify_verified_session(self) -> None:
+        callback = self._verified_session_callback
+        if callback is not None:
+            await callback()
+
+    async def _session_status(self, *, notify_verified: bool) -> SessionStatus:
+        async def status_operation() -> SessionStatus:
+            status = await self._auth.status()
+            if notify_verified and status.state is SessionState.AUTHENTICATED:
+                await self._notify_verified_session()
+            return status
+
+        return await self._coordinator.run_once(
+            "session_status",
+            "dic-browser",
+            status_operation,
+            timeout_seconds=self._auth_timeout_seconds,
+        )
 
     async def health(self) -> HealthStatus:
         if self._closed:
@@ -219,7 +246,10 @@ class PlaywrightDicAdapter:
         self, credentials: DicCredentials | None = None
     ) -> SessionStatus:
         self._ensure_open()
-        current = await self.session_status()
+        # Explicit authentication has its own mandatory persistence step in the
+        # composition root. Avoid notifying the passive-session callback here so
+        # a single operator authentication never races or writes the vault twice.
+        current = await self._session_status(notify_verified=False)
         if current.state is SessionState.AUTHENTICATED:
             return current
         if credentials is None:
@@ -243,12 +273,7 @@ class PlaywrightDicAdapter:
 
     async def session_status(self) -> SessionStatus:
         self._ensure_open()
-        return await self._coordinator.run_once(
-            "session_status",
-            "dic-browser",
-            self._auth.status,
-            timeout_seconds=self._auth_timeout_seconds,
-        )
+        return await self._session_status(notify_verified=True)
 
     async def list_employees(self, query: EmployeeListQuery) -> EmployeeListResult:
         return await self._read("employees.list", lambda: self._employees.list(query))

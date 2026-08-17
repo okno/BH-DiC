@@ -11,8 +11,11 @@ Il check headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant
 `VERIFIED_BY_ADAPTER` nel processo corrente. Il comando guild-scoped è registrato e il gateway ha
 risposto, ma il primo smoke è stato negato dal gate RBAC. La 0.2.7 è stata distribuita; il check
 DIC corrente si è fermato con `TEAMSYSTEM_EMAIL` prima delle azioni credenziali. La candidata
-0.2.8 corregge il contratto corrente TeamSystem/OIDC; i gate locali sono verdi e la verifica live
-resta `PENDING`. Nessuna Function ID DIC è collaudata live.
+0.2.8 corregge il contratto TeamSystem/OIDC e lo snapshot `sessionStorage`. La candidata 0.3.0
+aggiunge lettura passiva elenco, presenter Senior HR, ripersistenza della sessione e telemetria
+token. I gate locali completi sono verdi; deployment/migrazione e smoke live 0.3.0 restano
+`PENDING`; non promuovere
+ancora le nuove letture a `LIVE_READ_VERIFIED`.
 `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
 restano `false`.
 
@@ -45,11 +48,14 @@ cd /opt/bh-dic
 ./scripts/doctor.sh
 .venv/bin/python -m bh_dic validate-config
 .venv/bin/python -m bh_dic model-check
+.venv/bin/python -m alembic -c migrations/alembic.ini current
 ```
 
 `update.sh` richiede un worktree pulito e aggiorna solo fast-forward. Non usare `--restart` in
 questa fase. Non mostrare `.env`; conservarlo con owner del servizio e modalità `0600`.
-Verificare che `.venv/bin/python -m bh_dic version` riporti `0.2.8` prima del gate DIC.
+Verificare che `.venv/bin/python -m bh_dic version` riporti `0.3.0` e che Alembic sia alla revisione
+`0002_model_usage` prima del gate DIC. La migrazione non salva prompt o dati HR: crea la sola
+telemetria locale di provider/modello, stato e contatori dichiarati.
 
 La configurazione deve mantenere:
 
@@ -127,8 +133,10 @@ resta bloccante; l'indisponibilità della sola sessione DIC è invece uno stato 
 - `.env.example` presente; `.env` assente o protetto e valorizzato localmente;
 - directory e file con i permessi documentati;
 - `doctor.sh` riuscito, con risultato online separato se autorizzato;
-- gestore systemd unico, servizio `active/running` dopo il deployment 0.2.8 e risposta di
+- gestore systemd unico, servizio `active/running` dopo il deployment 0.3.0 e risposta di
   `/bh status` anche quando DIC è `DEGRADED`;
+- `/bh status` con provider/modello, stato API e token cumulativi locali; totale organico pubblico
+  con `READ_ONLY`, scadenze individuali ephemeral con ruolo dedicato `HR_READ`;
 - nessun processo Chromium/Playwright residuo;
 - report senza token, PII, cookie o contenuti HR.
 

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Self
+from typing import Any, Self
+from urllib.parse import urlencode
 from uuid import uuid4
 
 import pytest
 from pydantic import JsonValue
 
+from bh_dic.dic.employee_list_capture import (
+    EMPLOYEE_LIST_ENDPOINT_ORIGIN,
+    EMPLOYEE_LIST_ENDPOINT_PATH,
+)
 from bh_dic.dic.errors import DicNotFoundError, DicUiChangedError, DicValidationError
 from bh_dic.dic.models import (
     AccountState,
@@ -59,6 +67,7 @@ class SyntheticNode:
         visible: bool = True,
         checked_error: bool = False,
         on_click: Callable[[SyntheticNode], None] | None = None,
+        on_fill: Callable[[SyntheticNode, str], None] | None = None,
     ) -> None:
         self.text = text
         self.value = value
@@ -67,6 +76,7 @@ class SyntheticNode:
         self.visible = visible
         self.checked_error = checked_error
         self.on_click = on_click
+        self.on_fill = on_fill
         self.children: dict[str, list[SyntheticNode]] = {}
         self.clicks = 0
         self.filled: list[str] = []
@@ -169,6 +179,8 @@ class SyntheticLocator:
         node = self._one()
         node.value = value
         node.filled.append(value)
+        if node.on_fill is not None:
+            node.on_fill(node, value)
 
     async def select_option(self, value: str) -> None:
         node = self._one()
@@ -192,6 +204,7 @@ class SyntheticPage:
         self._root_locator = SyntheticLocator([self.root])
         self._url = ""
         self.visited: list[str] = []
+        self.response_handlers: list[object] = []
 
     def add(self, key: str, *nodes: SyntheticNode) -> None:
         container_key = {
@@ -290,6 +303,238 @@ class SyntheticPage:
     ) -> None:
         del state, timeout
 
+    def on(self, event: str, handler: object) -> None:
+        assert event == "response"
+        self.response_handlers.append(handler)
+
+    def remove_listener(self, event: str, handler: object) -> None:
+        assert event == "response"
+        self.response_handlers.remove(handler)
+
+    def emit_response(self, response: object) -> None:
+        for handler in tuple(self.response_handlers):
+            handler(response)  # type: ignore[operator]
+
+
+@dataclass(frozen=True)
+class SyntheticRequest:
+    method: str = "GET"
+
+
+class SyntheticResponse:
+    def __init__(
+        self,
+        url: str,
+        document: dict[str, Any],
+        *,
+        on_body: Callable[[], None] | None = None,
+    ) -> None:
+        self.url = url
+        self.status = 200
+        self.request = SyntheticRequest()
+        self._body = json.dumps(document).encode()
+        self._on_body = on_body
+
+    async def body(self) -> bytes:
+        if self._on_body is not None:
+            callback, self._on_body = self._on_body, None
+            callback()
+        return self._body
+
+    async def header_value(self, name: str) -> str | None:
+        return {
+            "content-type": "application/json",
+            "content-length": str(len(self._body)),
+        }.get(name.casefold())
+
+
+def _api_employee(
+    employee_id: int,
+    *,
+    name: str = "Alice Example",
+    active: bool = True,
+    job_title: str = "Tester",
+) -> dict[str, Any]:
+    return {
+        "id": employee_id,
+        "company_id": 123_456_789,
+        "active": active,
+        "full_name": name,
+        "email": "synthetic@example.invalid",
+        "tax_code": "SYNTHETIC123456",
+        "number": "M-0001",
+        "job_title": job_title,
+        "has_access": True,
+        "invited": False,
+        "current_contract": {
+            "id": employee_id + 1_000,
+            "hours_type": "Full time",
+            "part_time_percentage": 100,
+            "permanent": False,
+            "valid_from": "2026-01-01",
+            "valid_to": "2026-09-30",
+        },
+        "current_workplace": {"id": 1, "name": "Sede sintetica"},
+        "main_role": {
+            "role": {"id": 1, "name": "Employee", "category": "worker"},
+            "team": {"id": 2, "name": "Synthetic"},
+        },
+    }
+
+
+class EmployeeApiSyntheticPage(SyntheticPage):
+    """Small UI fake: only UI actions emit the passively observed API response."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.api_pages: dict[int, list[dict[str, Any]]] = {1: []}
+        self.api_total = 0
+        self.search = ""
+        self.employee_filter = EmployeeFilter.ACTIVE
+        self.sort_by = "name"
+        self.sort_direction = SortDirection.ASC
+        self.page_number = 1
+
+        self.search_node = SyntheticNode(value="", on_fill=self._search_filled)
+        self.active_filter = SyntheticNode(
+            on_click=lambda _node: self._set_filter(EmployeeFilter.ACTIVE)
+        )
+        self.inactive_filter = SyntheticNode(
+            on_click=lambda _node: self._set_filter(EmployeeFilter.INACTIVE)
+        )
+        self.all_filter = SyntheticNode(on_click=lambda _node: self._set_filter(EmployeeFilter.ALL))
+        self.name_sort = SyntheticNode(
+            attributes={"aria-sort": "ascending"},
+            on_click=lambda node: self._set_sort("name", node),
+        )
+        self.contract_sort = SyntheticNode(
+            attributes={"aria-sort": "none"},
+            on_click=lambda node: self._set_sort("contract", node),
+        )
+        self.next_button = SyntheticNode(on_click=lambda _node: self._next_page())
+        self.add("employees.search", self.search_node)
+        self.add("employees.filter.active", self.active_filter)
+        self.add("employees.filter.inactive", self.inactive_filter)
+        self.add("employees.filter.all", self.all_filter)
+        self.add("employees.sort.name", self.name_sort)
+        self.add("employees.sort.contract", self.contract_sort)
+        self.add("employees.next", self.next_button)
+
+    def _reset_state(self) -> None:
+        self.search = ""
+        self.employee_filter = EmployeeFilter.ACTIVE
+        self.sort_by = "name"
+        self.sort_direction = SortDirection.ASC
+        self.page_number = 1
+        self.search_node.value = ""
+        self.name_sort.attributes["aria-sort"] = "ascending"
+        self.contract_sort.attributes["aria-sort"] = "none"
+
+    def _search_filled(self, _node: SyntheticNode, value: str) -> None:
+        self.search = value
+        self.page_number = 1
+        self._emit_employee_response()
+
+    def _set_filter(self, employee_filter: EmployeeFilter) -> None:
+        self.employee_filter = employee_filter
+        self.page_number = 1
+        self._emit_employee_response()
+
+    def _set_sort(self, sort_by: str, node: SyntheticNode) -> None:
+        current = node.attributes.get("aria-sort", "none")
+        next_state = "ascending" if current in {"none", "descending"} else "descending"
+        self.name_sort.attributes["aria-sort"] = "none"
+        self.contract_sort.attributes["aria-sort"] = "none"
+        node.attributes["aria-sort"] = next_state
+        self.sort_by = sort_by
+        self.sort_direction = SortDirection.ASC if next_state == "ascending" else SortDirection.DESC
+        self.page_number = 1
+        self._emit_employee_response()
+
+    def _next_page(self) -> None:
+        self.page_number += 1
+        self._emit_employee_response()
+
+    def _query_pairs(self) -> list[tuple[str, str]]:
+        field = "full_name" if self.sort_by == "name" else "current_contract"
+        if self.sort_direction is SortDirection.DESC:
+            field = f"-{field}"
+        pairs = [
+            ("search", self.search),
+            ("filter_type", "and"),
+            ("page", str(self.page_number)),
+            ("per_page", "20"),
+            ("sort", field),
+            ("search_fields", "full_name,job_title,number,teams,email,tax_code"),
+        ]
+        if self.employee_filter is not EmployeeFilter.ALL:
+            pairs.extend(
+                (
+                    ("filter[0][field]", "active"),
+                    ("filter[0][op]", "="),
+                    (
+                        "filter[0][value]",
+                        "1" if self.employee_filter is EmployeeFilter.ACTIVE else "0",
+                    ),
+                )
+            )
+        return pairs
+
+    def _response_document(self) -> dict[str, Any]:
+        data = self.api_pages.get(self.page_number, [])
+        last_page = max(1, (self.api_total + 19) // 20)
+        start = (self.page_number - 1) * 20 + 1 if data else None
+        end = start + len(data) - 1 if start is not None else None
+        endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+        return {
+            "current_page": self.page_number,
+            "data": data,
+            "first_page_url": f"{endpoint}?page=1",
+            "from": start,
+            "last_page": last_page,
+            "last_page_url": f"{endpoint}?page={last_page}",
+            "links": [
+                {"url": None, "label": "Previous", "active": False},
+                {
+                    "url": f"{endpoint}?page={self.page_number}",
+                    "label": str(self.page_number),
+                    "active": True,
+                },
+                {"url": None, "label": "Next", "active": False},
+            ],
+            "next_page_url": (
+                f"{endpoint}?page={self.page_number + 1}" if self.page_number < last_page else None
+            ),
+            "path": endpoint,
+            "per_page": 20,
+            "prev_page_url": (
+                f"{endpoint}?page={self.page_number - 1}" if self.page_number > 1 else None
+            ),
+            "to": end,
+            "total": self.api_total,
+        }
+
+    def _emit_employee_response(self) -> None:
+        endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+        self.emit_response(
+            SyntheticResponse(
+                f"{endpoint}?{urlencode(self._query_pairs())}", self._response_document()
+            )
+        )
+
+    async def goto(
+        self,
+        url: str,
+        *,
+        wait_until: str | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109
+    ) -> object:
+        result = await super().goto(url, wait_until=wait_until, timeout=timeout)
+        if url == f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}/it/app/employees/list":
+            self._reset_state()
+            self._emit_employee_response()
+        return result
+
 
 def _prepared(
     function_id: FunctionId,
@@ -344,45 +589,38 @@ def _row(fields: dict[str, str], *, attributes: dict[str, str] | None = None) ->
     return row
 
 
+def test_employee_list_uses_only_the_live_observed_stable_controls() -> None:
+    expected_css = {
+        "employees.filter.active": "dic-segmented-control-option#option-true",
+        "employees.filter.inactive": "dic-segmented-control-option#option-false",
+        "employees.filter.all": "dic-segmented-control-option#option-null",
+        "employees.sort.name": "th.cdk-column-full_name",
+        "employees.sort.contract": "th.cdk-column-current_contract",
+        "employees.next": "dic-table-pagination button[text='Avanti']",
+    }
+    for key, selector in expected_css.items():
+        candidates = DEFAULT_SELECTORS.candidates(key)
+        assert [(candidate.kind, candidate.value) for candidate in candidates] == [
+            (SelectorKind.CSS, selector)
+        ]
+
+
 @pytest.mark.asyncio
-async def test_employee_list_reads_redacted_synthetic_dom_and_paginates() -> None:
-    page = _control_page("employees.search", "employees.filter.active", "employees.next")
-    sort = SyntheticNode(
-        attributes={"aria-sort": "descending"},
-        on_click=lambda node: node.attributes.update({"aria-sort": "ascending"}),
-    )
-    page.add("employees.sort.name", sort)
-    page.add("employees.total", SyntheticNode(text="Totale 1.234"))
-    first = _row(
-        {
-            "row.employee_id": "",
-            "row.name": "Alice Example",
-            "row.email": "alice@example.invalid",
-            "row.tax_code": "SYNTHETIC1234",
-            "row.job_title": "Tester",
-            "row.group": "Synthetic",
-            "row.payroll_number": "M-001",
-            "row.contract": "Indeterminato",
-            "row.contract_state": "Attivo",
-            "row.contract_period": "2026",
-            "row.schedule": "40h",
-            "row.workplace": "Sede sintetica",
-            "row.account_state": "Non collegato",
-            "row.employee_state": "Disattivato",
-        },
-        attributes={"data-employee-id": "EMP-SYNTH-001"},
-    )
-    second = _row(
-        {
-            "row.employee_id": "",
-            "row.name": "Bob Example",
-            "row.account_state": "Collegato",
-            "row.employee_state": "Attivo",
-        },
-        attributes={"href": "/it/app/employees/info/EMP-SYNTH-002/summary"},
-    )
-    page.add("employees.rows", first, second)
-    result = await EmployeesListPage(page, "https://secure.dipendentincloud.it").list(
+async def test_employee_list_reads_passive_redacted_response_and_paginates() -> None:
+    page = EmployeeApiSyntheticPage()
+    first = _api_employee(101, active=False)
+    first["has_access"] = False
+    second = _api_employee(102, name="Bob Example")
+    page.api_pages = {
+        1: [_api_employee(employee_id) for employee_id in range(1, 21)],
+        2: [first, second, *[_api_employee(employee_id) for employee_id in range(103, 121)]],
+    }
+    page.api_total = 1_234
+    result = await EmployeesListPage(
+        page,
+        "https://secure.dipendentincloud.it",
+        expected_tenant_id="123456789",
+    ).list(
         EmployeeListQuery(
             query="synthetic",
             employee_filter=EmployeeFilter.ACTIVE,
@@ -394,43 +632,67 @@ async def test_employee_list_reads_redacted_synthetic_dom_and_paginates() -> Non
 
     assert result.total == 1234
     assert result.has_next is True
-    assert [item.employee_id for item in result.items] == ["EMP-SYNTH-001", "EMP-SYNTH-002"]
+    assert result.page_size == 20
+    assert len(result.items) == 20
+    assert [item.employee_id for item in result.items[:2]] == ["101", "102"]
     assert result.items[0].display_name_redacted == "A. E."
-    assert result.items[0].email_redacted == "a***@example.invalid"
-    assert result.items[0].contract_state == "Attivo"
+    assert result.items[0].email_redacted == "s***@example.invalid"
+    assert result.items[0].contract_state == "fixed_term"
     assert result.items[0].workplace == "Sede sintetica"
     assert result.items[0].account_state is AccountState.NOT_CONNECTED
     assert result.items[0].employee_state is EmployeeState.INACTIVE
     assert result.items[1].account_state is AccountState.CONNECTED
-    assert sort.clicks == 1
+    assert page.next_button.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_employee_list_drops_private_browser_exception_context() -> None:
+    private_marker = "PRIVATE_EMPLOYEE_BROWSER_FAILURE_MARKER"
+
+    class PrivateResetFailurePage(EmployeeApiSyntheticPage):
+        async def goto(
+            self,
+            url: str,
+            *,
+            wait_until: str | None = None,
+            timeout: float | None = None,  # noqa: ASYNC109
+        ) -> object:
+            if url == "about:blank":
+                raise RuntimeError(private_marker)
+            return await super().goto(url, wait_until=wait_until, timeout=timeout)
+
+    with pytest.raises(DicUiChangedError, match="response generation reset") as caught:
+        await EmployeesListPage(
+            PrivateResetFailurePage(),
+            "https://secure.dipendentincloud.it",
+        ).list(EmployeeListQuery())
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
 
 
 @pytest.mark.asyncio
 async def test_employee_list_applies_descending_sort_to_an_unsorted_column() -> None:
-    page = _control_page("employees.filter.active")
-    page.add("employees.container", SyntheticNode())
-    page.add("employees.total", SyntheticNode(text="Totale 0"))
-
-    def advance_sort(node: SyntheticNode) -> None:
-        current = node.attributes.get("aria-sort")
-        node.attributes["aria-sort"] = "ascending" if current == "none" else "descending"
-
-    sort = SyntheticNode(attributes={"aria-sort": "none"}, on_click=advance_sort)
-    page.add("employees.sort.contract", sort)
+    page = EmployeeApiSyntheticPage()
 
     result = await EmployeesListPage(page, "https://secure.dipendentincloud.it").list(
         EmployeeListQuery(sort_by="contract", sort_direction=SortDirection.DESC)
     )
 
     assert result.items == ()
-    assert sort.clicks == 2
-    assert sort.attributes["aria-sort"] == "descending"
+    assert page.contract_sort.clicks == 2
+    assert page.contract_sort.attributes["aria-sort"] == "descending"
 
 
 @pytest.mark.asyncio
 async def test_employee_list_reports_unverifiable_sort_and_missing_row_id() -> None:
-    page = _control_page("employees.filter.active")
-    page.add("employees.sort.name", SyntheticNode(attributes={"aria-sort": "unexpected"}))
+    class InvalidSortPage(EmployeeApiSyntheticPage):
+        def _reset_state(self) -> None:
+            super()._reset_state()
+            self.name_sort.attributes["aria-sort"] = "unexpected"
+
+    page = InvalidSortPage()
     employees = EmployeesListPage(page, "https://secure.dipendentincloud.it")
     with pytest.raises(DicUiChangedError, match="sort state"):
         await employees.list(EmployeeListQuery())
@@ -438,6 +700,181 @@ async def test_employee_list_reports_unverifiable_sort_and_missing_row_id() -> N
     empty_row = SyntheticNode()
     with pytest.raises(DicUiChangedError, match="stable employee identifier"):
         await employees._employee_id(SyntheticLocator([empty_row]))
+
+
+@pytest.mark.asyncio
+async def test_employee_list_waits_for_hydration_and_rejects_nonessential_consent() -> None:
+    class HydratingConsentPage(EmployeeApiSyntheticPage):
+        async def goto(
+            self,
+            url: str,
+            *,
+            wait_until: str | None = None,
+            timeout: float | None = None,  # noqa: ASYNC109
+        ) -> object:
+            result = await super().goto(url, wait_until=wait_until, timeout=timeout)
+            if url.endswith("/it/app/employees/list"):
+                for control in (
+                    self.active_filter,
+                    self.inactive_filter,
+                    self.all_filter,
+                ):
+                    control.visible = False
+                asyncio.get_running_loop().call_later(
+                    0.01,
+                    lambda: [
+                        setattr(control, "visible", True)
+                        for control in (
+                            self.active_filter,
+                            self.inactive_filter,
+                            self.all_filter,
+                        )
+                    ],
+                )
+            return result
+
+    page = HydratingConsentPage()
+    banner = SyntheticNode(visible=True)
+    reject = SyntheticNode(
+        visible=True,
+        on_click=lambda _node: (
+            setattr(banner, "visible", False),
+            setattr(reject, "visible", False),
+        ),
+    )
+    page.add("consent.onetrust_banner", banner)
+    page.add("consent.reject_nonessential", reject)
+
+    result = await EmployeesListPage(
+        page, "https://secure.dipendentincloud.it", timeout_ms=1_000
+    ).list(EmployeeListQuery())
+
+    assert result.items == ()
+    assert reject.clicks == 1
+    assert banner.visible is False
+
+
+@pytest.mark.asyncio
+async def test_employee_list_fails_closed_for_unrejectable_consent_and_route_race() -> None:
+    blocked = EmployeeApiSyntheticPage()
+    blocked.add("consent.onetrust_banner", SyntheticNode(visible=True))
+    with pytest.raises(DicUiChangedError, match="cannot be rejected"):
+        await EmployeesListPage(blocked, "https://secure.dipendentincloud.it", timeout_ms=100).list(
+            EmployeeListQuery()
+        )
+
+    raced = EmployeeApiSyntheticPage()
+
+    def navigate_away(_node: SyntheticNode) -> None:
+        raced._url = "https://evil.invalid/it/app/employees/list"
+
+    raced.all_filter.on_click = navigate_away
+    with pytest.raises(DicUiChangedError, match="unexpected route"):
+        await EmployeesListPage(raced, "https://secure.dipendentincloud.it", timeout_ms=100).list(
+            EmployeeListQuery(employee_filter=EmployeeFilter.ALL)
+        )
+
+
+@pytest.mark.asyncio
+async def test_employee_list_rejects_consent_before_it_waits_for_blocked_hydration() -> None:
+    page = EmployeeApiSyntheticPage()
+    for control in (page.active_filter, page.inactive_filter, page.all_filter):
+        control.visible = False
+    banner = SyntheticNode(visible=True)
+    reject = SyntheticNode(visible=True)
+
+    def unlock_hydration(_node: SyntheticNode) -> None:
+        banner.visible = False
+        reject.visible = False
+        for control in (page.active_filter, page.inactive_filter, page.all_filter):
+            control.visible = True
+
+    reject.on_click = unlock_hydration
+    page.add("consent.onetrust_banner", banner)
+    page.add("consent.reject_nonessential", reject)
+
+    result = await EmployeesListPage(
+        page, "https://secure.dipendentincloud.it", timeout_ms=500
+    ).list(EmployeeListQuery())
+
+    assert result.total == 0
+    assert reject.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_employee_list_rechecks_route_after_exact_response_body_finishes() -> None:
+    class LateRedirectPage(EmployeeApiSyntheticPage):
+        def _emit_employee_response(self) -> None:
+            endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+            self.emit_response(
+                SyntheticResponse(
+                    f"{endpoint}?{urlencode(self._query_pairs())}",
+                    self._response_document(),
+                    on_body=lambda: setattr(
+                        self, "_url", "https://evil.invalid/it/app/employees/list"
+                    ),
+                )
+            )
+
+    with pytest.raises(DicUiChangedError, match="unexpected route"):
+        await EmployeesListPage(
+            LateRedirectPage(),
+            "https://secure.dipendentincloud.it",
+            timeout_ms=500,
+        ).list(EmployeeListQuery())
+
+
+@pytest.mark.asyncio
+async def test_employee_list_finishes_each_response_body_before_the_next_ui_action() -> None:
+    class DelayedResponse(SyntheticResponse):
+        def __init__(
+            self,
+            url: str,
+            document: dict[str, Any],
+            *,
+            started: asyncio.Event,
+            release: asyncio.Event,
+        ) -> None:
+            super().__init__(url, document)
+            self.started = started
+            self.release = release
+
+        async def body(self) -> bytes:
+            self.started.set()
+            await self.release.wait()
+            return await super().body()
+
+    class DelayedSearchPage(EmployeeApiSyntheticPage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.body_started = asyncio.Event()
+            self.body_release = asyncio.Event()
+
+        def _search_filled(self, _node: SyntheticNode, value: str) -> None:
+            self.search = value
+            self.page_number = 1
+            endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+            self.emit_response(
+                DelayedResponse(
+                    f"{endpoint}?{urlencode(self._query_pairs())}",
+                    self._response_document(),
+                    started=self.body_started,
+                    release=self.body_release,
+                )
+            )
+
+    page = DelayedSearchPage()
+    operation = asyncio.create_task(
+        EmployeesListPage(page, "https://secure.dipendentincloud.it", timeout_ms=1_000).list(
+            EmployeeListQuery(query="synthetic", employee_filter=EmployeeFilter.INACTIVE)
+        )
+    )
+    await asyncio.wait_for(page.body_started.wait(), timeout=1)
+    assert page.inactive_filter.clicks == 0
+    page.body_release.set()
+    result = await operation
+    assert result.total == 0
+    assert page.inactive_filter.clicks == 1
 
 
 @pytest.mark.asyncio
@@ -478,18 +915,18 @@ async def test_employee_create_fills_only_allowlisted_fields_and_rejects_unsafe_
 
 @pytest.mark.asyncio
 async def test_employee_create_baseline_requires_one_new_stable_exact_match() -> None:
-    page = _control_page("employees.search", "employees.filter.all", confirmation=False)
-    page.add("employees.sort.name", SyntheticNode(attributes={"aria-sort": "ascending"}))
-    page.add("employees.total", SyntheticNode(text="Totale 1"))
+    page = EmployeeApiSyntheticPage()
+    page.api_pages = {1: [_api_employee(101)]}
+    page.api_total = 1
     existing = _row(
         {"row.employee_id": "", "row.name": "Alice Example"},
-        attributes={"data-employee-id": "EMP-SYNTH-OLD"},
+        attributes={"data-employee-id": "101"},
     )
     page.add("employees.rows", existing)
     employee_page = EmployeesListPage(page, "https://secure.dipendentincloud.it")
     parameters = {"first_name": "Alice", "last_name": "Example", "job_title": "Tester"}
     baseline = await employee_page.stable_employee_ids_for_create(parameters)
-    assert baseline == frozenset({"EMP-SYNTH-OLD"})
+    assert baseline == frozenset({"101"})
 
     created = _row(
         {
@@ -497,10 +934,11 @@ async def test_employee_create_baseline_requires_one_new_stable_exact_match() ->
             "row.name": "Alice Example",
             "row.job_title": "Tester",
         },
-        attributes={"data-employee-id": "EMP-SYNTH-NEW"},
+        attributes={"data-employee-id": "102"},
     )
     page.add("employees.rows", created)
-    page.root.children["employees.total"][0].text = "Totale 2"
+    page.api_pages = {1: [_api_employee(101), _api_employee(102)]}
+    page.api_total = 2
     assert await employee_page.verify_created_employee(baseline, parameters) is True
     created.children["row.job_title"][0].text = "Wrong"
     assert await employee_page.verify_created_employee(baseline, parameters) is False

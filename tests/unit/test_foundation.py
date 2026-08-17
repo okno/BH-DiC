@@ -10,7 +10,7 @@ from bh_dic.logging import JsonFormatter, pseudonymize_identifier, redact
 
 
 def test_package_exposes_semantic_version() -> None:
-    assert __version__ == "0.2.8"
+    assert __version__ == "0.3.0"
 
 
 def test_public_error_does_not_include_internal_exception() -> None:

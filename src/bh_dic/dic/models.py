@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from math import isfinite
 from typing import Annotated, Literal
@@ -175,6 +175,9 @@ class EmployeeListQuery(StrictModel):
 
 class EmployeeListItem(StrictModel):
     employee_id: EmployeeId
+    # Clear text is used only for authorized ephemeral HR rendering. SecretStr keeps it out of
+    # diagnostic repr/model dumps; the redacted form remains available for safe summaries.
+    display_name: SecretStr | None = Field(default=None, max_length=256, repr=False)
     display_name_redacted: str = Field(max_length=128)
     email_redacted: str | None = Field(default=None, max_length=320)
     tax_code_redacted: str | None = Field(default=None, max_length=32)
@@ -188,6 +191,8 @@ class EmployeeListItem(StrictModel):
     workplace: str | None = Field(default=None, max_length=128)
     account_state: AccountState = AccountState.UNKNOWN
     employee_state: EmployeeState = EmployeeState.UNKNOWN
+    current_contract_valid_from: date | None = None
+    current_contract_valid_to: date | None = None
 
 
 class EmployeeListResult(StrictModel):

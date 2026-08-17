@@ -21,8 +21,9 @@ BH-DiC applies data protection by design through:
 | Data class | Source | Local handling | External destination |
 | --- | --- | --- | --- |
 | Discord actor/guild/channel IDs | Discord | request, approval and audit metadata | none beyond Discord response |
-| Employee ID | DIC/user | pending target; pseudonymized in logs | DIC; redacted Discord output |
-| Employee profile/contract/balance metadata | DIC | transient response; redacted preview where needed | authorized ephemeral Discord response |
+| Employee ID | DIC/user | pending target; pseudonymized in logs | DIC; authorized ephemeral Discord only, never public/provider/telemetry |
+| Employee display name | DIC | transient `SecretStr`, excluded from repr and masked in model dumps; initials retained for safe fallback | authorized `HR_READ` ephemeral list/expiry only |
+| Other employee profile/contract/balance metadata | DIC | transient response; personal fields redacted where required | authorized ephemeral Discord response |
 | Write parameters | authorized user | Fernet-encrypted in `pending_actions` | DIC only after approval |
 | Confirmation code | application | plaintext returned once; only salted HMAC digest persists | authorized requester via Discord |
 | Approval decisions | Discord | persistent workflow/audit metadata | none |
@@ -30,6 +31,7 @@ BH-DiC applies data protection by design through:
 | Attachment content | Discord | bounded quarantine/clean/processed area | DIC upload workflow only when enabled |
 | Original attachment filename | Discord | protected metadata; never a path or ordinary log field | not sent to a model provider |
 | Model intent input | Discord | minimized and redacted; no persistent conversation | selected provider with `MODEL_STORE=false` |
+| Model usage counters | selected provider | provider/model, status, timestamps and exact token counts only | local database and authorized Discord status |
 | Persona decorations | local configuration | bounded and validated; values omitted from safe summary/logs | configured Discord embed only; not sent to provider |
 | Audit/log metadata | application | redacted JSON and HMAC chain | optional Wazuh ingestion |
 
@@ -47,6 +49,14 @@ The following are forbidden provider inputs:
 - full IBAN, tax code, address, telephone and internal notes;
 - health, family or other special-category data;
 - unredacted DIC result pages.
+- employee names, Employee ID, search identity, DIC result rows, DOM and contract-expiry results.
+
+Before routing, the request is projected onto a closed set of semantic-category labels rather
+than forwarding raw recognized words. Search values are removed as a whole before token mapping,
+so a name that also resembles an HR term or month cannot survive the boundary. Unknown terms and
+employee identity material become placeholders; an explicitly labelled Employee ID and a local
+employee search query are restored only inside the deterministic application boundary after
+routing. The Senior HR presenter is local and does not call the model.
 
 `MODEL_STORE=false` is mandatory. OpenAI/Groq requests apply the supported storage control; the
 llama chat-compatible request omits unsupported storage and conversation-state parameters.
@@ -70,8 +80,18 @@ Discord interaction permits it. Never publish:
 - document or payroll content;
 - local filesystem paths, tokens, cookies or credentials.
 
+For an authorized `HR_READ` list or contract-expiry result, the local presenter may unwrap the
+employee display name from `SecretStr` into the ephemeral Discord embed. This is the only clear-name
+destination: the value is never placed in a public aggregate, provider request, log, audit event,
+token telemetry, database record or model dump. Other personal fields remain redacted according
+to their typed projection.
+
 Ephemeral delivery reduces accidental exposure but is not a substitute for authorization or a
 retention policy: Discord and user clients remain external systems.
+
+An aggregate request is first acknowledged privately and only its explicitly classified
+`PUBLIC_AGGREGATE` result is sent as a public follow-up in the allowlisted channel. Contract
+expiry lists remain ephemeral even when the original question is phrased conversationally.
 
 ## Retention
 
@@ -85,6 +105,7 @@ The deployment owner must document concrete retention periods. Technical default
 | Browser session | encrypted until expiry/invalidation | invalidate after personnel/credential changes |
 | Application/security logs | structured and redacted | rotation and deletion interval |
 | Audit chain | integrity/accountability record | statutory/HR retention and protected archival |
+| Model usage | local lifecycle metadata and exact provider counters; no prompt or HR data | retention, billing reconciliation limits and database reset policy |
 | Backups | must exclude secrets/session/files unless explicitly encrypted | backup expiry and secure destruction |
 
 Deleting attachment bytes must emit a deletion metadata event. A backup can extend effective

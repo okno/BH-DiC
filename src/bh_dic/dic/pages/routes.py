@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
+from collections.abc import Awaitable, Callable
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from bh_dic.dic.errors import DicNotFoundError, DicUiChangedError, DicValidationError
+from bh_dic.dic.employee_list_capture import (
+    EMPLOYEE_LIST_PAGE_SIZE,
+    EmployeeListResponseCapture,
+    employee_list_result_from_response,
+)
+from bh_dic.dic.employee_list_capture import (
+    ResponseLike as EmployeeResponseLike,
+)
+from bh_dic.dic.errors import (
+    DicConfigurationError,
+    DicNotFoundError,
+    DicUiChangedError,
+    DicValidationError,
+)
 from bh_dic.dic.models import (
     AccountState,
     BalanceCorrectionState,
@@ -32,7 +48,8 @@ from bh_dic.dic.models import (
     SortDirection,
     TimeAccessResult,
 )
-from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, VerifiedUploadPayload
+from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, PageLike, VerifiedUploadPayload
+from bh_dic.dic.selectors import DEFAULT_SELECTORS, SelectorRegistry
 from bh_dic.dic.values import canonical_decimal_text
 
 
@@ -89,6 +106,358 @@ class LoginPage(BaseDicPage):
 class EmployeesListPage(BaseDicPage):
     route_template = "/it/app/employees/list"
 
+    _HYDRATION_POLL_SECONDS = 0.05
+
+    def __init__(
+        self,
+        page: PageLike,
+        base_url: str,
+        *,
+        selectors: SelectorRegistry = DEFAULT_SELECTORS,
+        timeout_ms: float = 15_000,
+        expected_tenant_id: str | None = None,
+    ) -> None:
+        if (
+            expected_tenant_id is not None
+            and re.fullmatch(r"[1-9][0-9]{0,18}", expected_tenant_id) is None
+        ):
+            raise DicConfigurationError("expected employee tenant has an invalid format")
+        super().__init__(page, base_url, selectors=selectors, timeout_ms=timeout_ms)
+        self.expected_tenant_id = expected_tenant_id
+
+    def _assert_exact_route(self) -> None:
+        parsed = None
+        port: int | None = None
+        route_parse_failed = False
+        try:
+            parsed = urlsplit(self.page.url)
+            port = parsed.port
+        except (TypeError, ValueError):
+            route_parse_failed = True
+        if route_parse_failed or parsed is None:
+            raise DicUiChangedError("employee list reached an invalid route")
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "secure.dipendentincloud.it"
+            or parsed.hostname != "secure.dipendentincloud.it"
+            or parsed.username is not None
+            or parsed.password is not None
+            or port is not None
+            or parsed.path != self.route_template
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise DicUiChangedError("employee list reached an unexpected route")
+
+    async def _strict_control(self, key: str) -> LocatorLike:
+        candidates = self.selectors.candidates(key)
+        if len(candidates) != 1:
+            raise DicUiChangedError("employee UI control registry is ambiguous")
+        locator = self._candidate_locator(self.page, candidates[0])
+        count: int | None = None
+        count_failed = False
+        try:
+            count = await locator.count()
+        except Exception:
+            count_failed = True
+        if count_failed or count != 1:
+            raise DicUiChangedError("employee UI control is unavailable")
+        return locator.first
+
+    async def _visible_candidates(self, key: str) -> tuple[LocatorLike, ...]:
+        visible: list[LocatorLike] = []
+        for candidate in self.selectors.candidates(key):
+            locator = self._candidate_locator(self.page, candidate)
+            count: int | None = None
+            count_failed = False
+            try:
+                count = await locator.count()
+            except Exception:
+                count_failed = True
+            if count_failed or count is None:
+                raise DicUiChangedError("consent control state is unavailable")
+            for index in range(count):
+                item = locator.nth(index)
+                item_visible = False
+                visibility_failed = False
+                try:
+                    item_visible = await item.is_visible()
+                except Exception:
+                    visibility_failed = True
+                if visibility_failed:
+                    raise DicUiChangedError("consent control state is unavailable")
+                if item_visible:
+                    visible.append(item)
+        return tuple(visible)
+
+    async def _first_visible_candidate(self, key: str) -> LocatorLike | None:
+        """Resolve ordered alternative consent selectors without double-counting one node."""
+
+        for candidate in self.selectors.candidates(key):
+            locator = self._candidate_locator(self.page, candidate)
+            count: int | None = None
+            count_failed = False
+            try:
+                count = await locator.count()
+            except Exception:
+                count_failed = True
+            if count_failed or count is None:
+                raise DicUiChangedError("consent control state is unavailable")
+            if count > 1:
+                raise DicUiChangedError("non-essential consent controls are ambiguous")
+            if count == 1:
+                item_visible = False
+                visibility_failed = False
+                try:
+                    item_visible = await locator.first.is_visible()
+                except Exception:
+                    visibility_failed = True
+                if visibility_failed:
+                    raise DicUiChangedError("consent control state is unavailable")
+                if item_visible:
+                    return locator.first
+        return None
+
+    async def _reject_nonessential_consent(self) -> None:
+        self._assert_exact_route()
+        banners = await self._visible_candidates("consent.onetrust_banner")
+        reject = await self._first_visible_candidate("consent.reject_nonessential")
+        if banners and reject is None:
+            raise DicUiChangedError("non-essential consent cannot be rejected")
+        if reject is None:
+            return
+        click_failed = False
+        try:
+            await reject.click()
+        except Exception:
+            click_failed = True
+        if click_failed:
+            raise DicUiChangedError("non-essential consent rejection failed")
+        self._assert_exact_route()
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        while True:
+            if not await self._visible_candidates(
+                "consent.onetrust_banner"
+            ) and not await self._visible_candidates("consent.reject_nonessential"):
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("non-essential consent rejection could not be verified")
+            await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+            self._assert_exact_route()
+
+    async def _wait_for_hydration(self) -> None:
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        keys = (
+            "employees.filter.active",
+            "employees.filter.inactive",
+            "employees.filter.all",
+        )
+        while True:
+            self._assert_exact_route()
+            await self._reject_nonessential_consent()
+            ready = True
+            for key in keys:
+                try:
+                    control = await self._strict_control(key)
+                    ready = ready and await control.is_visible()
+                except Exception:
+                    ready = False
+            if ready:
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("employee list did not hydrate")
+            await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _reset_response_generation(self) -> None:
+        """Drain the previous document before installing the employee-response listener."""
+
+        reset_failed = False
+        try:
+            await self.page.goto(
+                "about:blank",
+                wait_until="domcontentloaded",
+                timeout=self.timeout_ms,
+            )
+            await self.page.wait_for_load_state("domcontentloaded", timeout=self.timeout_ms)
+            await asyncio.sleep(0)
+        except Exception:
+            reset_failed = True
+        if reset_failed:
+            raise DicUiChangedError("employee response generation reset failed")
+        if self.page.url != "about:blank":
+            raise DicUiChangedError(
+                "employee response generation reset reached an unexpected route"
+            )
+
+    @staticmethod
+    def _query_state(
+        requested: EmployeeListQuery,
+        *,
+        search: str | None,
+        employee_filter: EmployeeFilter,
+        sort_by: Literal["name", "payroll_number", "status", "contract"],
+        sort_direction: SortDirection,
+        page: int,
+    ) -> EmployeeListQuery:
+        return requested.model_copy(
+            update={
+                "query": search,
+                "employee_filter": employee_filter,
+                "sort_by": sort_by,
+                "sort_direction": sort_direction,
+                "page": page,
+                "page_size": EMPLOYEE_LIST_PAGE_SIZE,
+            }
+        )
+
+    async def _validated_result(
+        self,
+        response: EmployeeResponseLike,
+        expected: EmployeeListQuery,
+    ) -> EmployeeListResult:
+        self._assert_exact_route()
+        result = await employee_list_result_from_response(
+            response,
+            expected,
+            expected_tenant_id=self.expected_tenant_id,
+        )
+        await asyncio.sleep(0)
+        self._assert_exact_route()
+        return result
+
+    async def _action_result(
+        self,
+        capture: EmployeeListResponseCapture,
+        expected: EmployeeListQuery,
+        action: Callable[[], Awaitable[object]],
+    ) -> EmployeeListResult:
+        await self._reject_nonessential_consent()
+        mark = capture.mark()
+        action_failed = False
+        try:
+            await action()
+        except DicUiChangedError:
+            raise
+        except Exception:
+            action_failed = True
+        if action_failed:
+            raise DicUiChangedError("employee UI action failed")
+        self._assert_exact_route()
+        response = await capture.wait_for(
+            expected,
+            after_sequence=mark,
+            timeout_ms=self.timeout_ms,
+        )
+        return await self._validated_result(response, expected)
+
+    async def _click_strict_control(self, key: str) -> None:
+        control = await self._strict_control(key)
+        await control.click()
+
+    async def _wait_sort_state(self, control: LocatorLike, expected: str) -> str:
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        while True:
+            self._assert_exact_route()
+            observed: str | None = None
+            state_read_failed = False
+            try:
+                observed = (await control.get_attribute("aria-sort") or "none").casefold()
+            except Exception:
+                state_read_failed = True
+            if state_read_failed or observed is None:
+                raise DicUiChangedError("employee sort state cannot be verified")
+            if observed == expected:
+                return observed
+            if observed not in {"none", "ascending", "descending"}:
+                raise DicUiChangedError("employee sort state cannot be verified")
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("employee sort state did not settle")
+            await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _wait_next_enabled(self) -> LocatorLike:
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        while True:
+            self._assert_exact_route()
+            next_button = await self._strict_control("employees.next")
+            disabled: str | None = None
+            aria_disabled: str | None = None
+            state_read_failed = False
+            try:
+                disabled = await next_button.get_attribute("disabled")
+                aria_disabled = (await next_button.get_attribute("aria-disabled") or "").casefold()
+            except Exception:
+                state_read_failed = True
+            if state_read_failed or aria_disabled is None:
+                raise DicUiChangedError("employee pagination state is unavailable")
+            if disabled is None and aria_disabled != "true":
+                return next_button
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("employee pagination did not become available")
+            await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _sort_result(
+        self,
+        capture: EmployeeListResponseCapture,
+        requested: EmployeeListQuery,
+        current: EmployeeListQuery,
+        result: EmployeeListResult,
+    ) -> tuple[EmployeeListQuery, EmployeeListResult]:
+        target = "ascending" if requested.sort_direction is SortDirection.ASC else "descending"
+        if requested.sort_by == "name" and target == "ascending":
+            control = await self._strict_control("employees.sort.name")
+            await self._wait_sort_state(control, target)
+            return current, result
+        if requested.sort_by not in {"name", "contract"}:
+            raise DicUiChangedError("requested employee sort is not live-verified")
+
+        control = await self._strict_control(f"employees.sort.{requested.sort_by}")
+        initial_sort_state = (
+            "ascending"
+            if current.sort_by == requested.sort_by and current.sort_direction is SortDirection.ASC
+            else "descending"
+            if current.sort_by == requested.sort_by
+            else "none"
+        )
+        aria_sort = await self._wait_sort_state(control, initial_sort_state)
+        for _ in range(2):
+            if aria_sort == target:
+                break
+            next_sort = "ascending" if aria_sort in {"none", "descending"} else "descending"
+            mark = capture.mark()
+            await self._reject_nonessential_consent()
+            click_failed = False
+            try:
+                await control.click()
+            except Exception:
+                click_failed = True
+            if click_failed:
+                raise DicUiChangedError("employee sort action failed")
+            self._assert_exact_route()
+            current = self._query_state(
+                requested,
+                search=current.query,
+                employee_filter=current.employee_filter,
+                sort_by=requested.sort_by,
+                sort_direction=(
+                    SortDirection.ASC if next_sort == "ascending" else SortDirection.DESC
+                ),
+                page=1,
+            )
+            response = await capture.wait_for(
+                current,
+                after_sequence=mark,
+                timeout_ms=self.timeout_ms,
+            )
+            result = await self._validated_result(response, current)
+            aria_sort = await self._wait_sort_state(control, next_sort)
+        if aria_sort != target:
+            raise DicUiChangedError("employee sort did not reach the requested state")
+        return current, result
+
     async def _employee_id(self, row: LocatorLike) -> str:
         value = await self.read_attribute("row.employee_id", "data-employee-id", root=row)
         if value:
@@ -109,7 +478,7 @@ class EmployeesListPage(BaseDicPage):
             tax_code_redacted=self.redact_tail(await self.read_text("row.tax_code", root=row)),
             job_title=await self.read_text("row.job_title", root=row),
             group_name=await self.read_text("row.group", root=row),
-            payroll_number=await self.read_text("row.payroll_number", root=row),
+            payroll_number=self.redact_tail(await self.read_text("row.payroll_number", root=row)),
             contract_label=await self.read_text("row.contract", root=row),
             contract_state=await self.read_text("row.contract_state", root=row),
             contract_period=await self.read_text("row.contract_period", root=row),
@@ -120,58 +489,84 @@ class EmployeesListPage(BaseDicPage):
         )
 
     async def list(self, query: EmployeeListQuery) -> EmployeeListResult:
-        await self.open()
-        if query.query:
-            await self.fill("employees.search", query.query)
-        await self.click(f"employees.filter.{query.employee_filter.value}")
-        sort_key = f"employees.sort.{query.sort_by}"
-        sort_control = await self.locate(sort_key)
-        if sort_control is None:
-            raise DicUiChangedError("employee sort control is unavailable")
-        aria_sort = (await sort_control.get_attribute("aria-sort") or "").casefold()
-        target = "ascending" if query.sort_direction is SortDirection.ASC else "descending"
-        if aria_sort not in {"none", "ascending", "descending"}:
-            raise DicUiChangedError("employee sort state cannot be verified")
-        for _ in range(2):
-            if aria_sort == target:
-                break
-            await sort_control.click()
-            aria_sort = (await sort_control.get_attribute("aria-sort") or "").casefold()
-        if aria_sort != target:
-            raise DicUiChangedError("employee sort did not reach the requested state")
-        for _ in range(query.page - 1):
-            next_button = await self.locate("employees.next", required=False)
-            if next_button is None:
-                break
-            disabled = await next_button.get_attribute("disabled")
-            aria_disabled = await next_button.get_attribute("aria-disabled")
-            if disabled is not None or aria_disabled == "true":
-                break
-            await next_button.click()
-        if await self.locate("employees.container", required=False) is None:
-            raise DicUiChangedError("employee list container is unavailable")
-        rows = await self.all_matches("employees.rows")
-        row_count = await rows.count()
-        items = tuple([await self._read_row(rows.nth(index)) for index in range(row_count)])
-        total_text = await self.read_text("employees.total")
-        total_matches = re.findall(r"\d+", (total_text or "").replace(".", ""))
-        total = int(total_matches[-1]) if total_matches else row_count
-        if row_count == 0 and (not total_matches or total != 0):
-            raise DicUiChangedError("empty employee result has no verified zero total")
-        next_button = await self.locate("employees.next", required=False)
-        has_next = False
-        if next_button is not None:
-            has_next = (
-                await next_button.get_attribute("disabled") is None
-                and await next_button.get_attribute("aria-disabled") != "true"
-            )
-        return EmployeeListResult(
-            items=items,
-            page=query.page,
-            page_size=query.page_size,
-            total=total,
-            has_next=has_next,
+        if query.sort_by not in {"name", "contract"}:
+            raise DicUiChangedError("requested employee sort is not live-verified")
+        await self._reset_response_generation()
+        initial = self._query_state(
+            query,
+            search=None,
+            employee_filter=EmployeeFilter.ACTIVE,
+            sort_by="name",
+            sort_direction=SortDirection.ASC,
+            page=1,
         )
+        with EmployeeListResponseCapture(self.page) as capture:
+            navigation_mark = capture.mark()
+            await self.navigate()
+            self._assert_exact_route()
+            await self._reject_nonessential_consent()
+            await self._wait_for_hydration()
+            response = await capture.wait_for(
+                initial,
+                after_sequence=navigation_mark,
+                timeout_ms=self.timeout_ms,
+            )
+            current = initial
+            result = await self._validated_result(response, current)
+
+            if query.query:
+                current = self._query_state(
+                    query,
+                    search=query.query,
+                    employee_filter=current.employee_filter,
+                    sort_by=current.sort_by,
+                    sort_direction=current.sort_direction,
+                    page=1,
+                )
+                result = await self._action_result(
+                    capture,
+                    current,
+                    lambda: self.fill("employees.search", query.query or ""),
+                )
+
+            if query.employee_filter is not EmployeeFilter.ACTIVE:
+                current = self._query_state(
+                    query,
+                    search=current.query,
+                    employee_filter=query.employee_filter,
+                    sort_by=current.sort_by,
+                    sort_direction=current.sort_direction,
+                    page=1,
+                )
+                result = await self._action_result(
+                    capture,
+                    current,
+                    lambda: self._click_strict_control(
+                        f"employees.filter.{query.employee_filter.value}"
+                    ),
+                )
+
+            current, result = await self._sort_result(capture, query, current, result)
+
+            for page_number in range(2, query.page + 1):
+                if not result.has_next:
+                    raise DicUiChangedError("employee pagination ended before the requested page")
+                next_button = await self._wait_next_enabled()
+                current = self._query_state(
+                    query,
+                    search=current.query,
+                    employee_filter=current.employee_filter,
+                    sort_by=current.sort_by,
+                    sort_direction=current.sort_direction,
+                    page=page_number,
+                )
+                result = await self._action_result(
+                    capture,
+                    current,
+                    next_button.click,
+                )
+
+            return result
 
     async def create_employee(self, action: PreparedAction) -> None:
         await self.open()
@@ -438,13 +833,22 @@ class EmployeeRolesPage(BaseDicPage):
         if len(matches) != 1:
             raise DicValidationError("role_name must identify exactly one role")
         role = matches[0]
+        role_state_unavailable = False
         try:
             current = await role.is_checked()
         except Exception:
-            aria_checked = await role.get_attribute("aria-checked")
-            if aria_checked not in {"true", "false"}:
-                raise DicUiChangedError("role control state is unavailable") from None
-            current = aria_checked == "true"
+            aria_checked: str | None = None
+            try:
+                aria_checked = await role.get_attribute("aria-checked")
+            except Exception:
+                role_state_unavailable = True
+            if aria_checked in {"true", "false"}:
+                current = aria_checked == "true"
+            else:
+                current = False
+                role_state_unavailable = True
+        if role_state_unavailable:
+            raise DicUiChangedError("role control state is unavailable")
         if current is enabled:
             raise DicValidationError("role state already matches requested value")
         await role.set_checked(enabled)

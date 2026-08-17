@@ -1,20 +1,18 @@
 # BH-DiC
 
-BH-DiC è un assistente Discord per flussi HR autorizzati nell'area Dipendenti di
+BH-DiC è un assistente Discord Senior HR per flussi autorizzati nell'area Dipendenti di
 Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello selezionato
 (`openai`, `groq` o `llama`) propone soltanto un intento strutturato e un'applicazione
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 17 agosto 2026: Debian 12 e Groq `openai/gpt-oss-120b` sono verificati. Un check DIC
-> headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; la 0.2.7 è
-> stata poi distribuita, ma il check corrente sul server si è fermato fail-closed a
-> `TEAMSYSTEM_EMAIL`. La candidata 0.2.8 riconosce l'ingresso e-mail TeamSystem corrente sulla root
-> esatta, le transizioni OIDC esatte e il completamento SSO senza credenziali soltanto dopo marker
-> applicativo e attestazione tenant; i gate locali sono verdi e la verifica live resta `PENDING`.
-> Il gateway
-> resta separato dal login DIC. Nessuna Function ID live è collaudata e tutte le write restano
-> `DISABLED_BY_POLICY`.
+> Stato al 17 agosto 2026: Debian 12 e Groq `openai/gpt-oss-120b` hanno evidenza live separata. Un
+> check storico DIC ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; la
+> diagnosi successiva `TEAMSYSTEM_EMAIL`, il restore cifrato di `sessionStorage`, lo stato gateway
+> `DEGRADED` e il primo deny RBAC restano documentati come evidenze distinte. La candidata 0.3.0
+> aggiunge l'assistente Senior HR, la lettura passiva dell'elenco e la telemetria token. I gate
+> locali completi sono verdi; deployment della 0.3.0 e smoke funzionali Discord/DIC restano
+> `PENDING`. Tutte le write restano `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 
@@ -37,17 +35,33 @@ Function ID, ruoli, flag e approvazioni è
 `src/bh_dic/policies/catalog.py`. Lingua, tono e formula di apertura/chiusura sono configurabili,
 ma la persona non modifica policy o superficie operativa.
 
+Il testo destinato al router viene trasformato in etichette di categoria semantica chiuse, non
+inoltrato come vocaboli grezzi. Nomi, valori di ricerca ed Employee ID vengono rimossi o sostituiti
+prima di OpenAI/Groq/llama; eventuali ID espliciti e query di ricerca vengono conservati soltanto
+nel confine locale. Risultati DIC, righe dipendente, DOM e scadenze non vengono mai reinviati al
+modello. La risposta amichevole è costruita da un presenter locale sui soli risultati tipizzati
+dell'adapter.
+
 ## Caratteristiche implementate
 
 - catalogo di 32 Function ID e policy fail-closed;
-- router multi-provider OpenAI/Groq/llama con tuning comune e rendering deterministico;
-- profilo lingua italiano/inglese per chiarimenti/decorazioni; dati operativi restano in italiano
-  e il profilo è separato da RBAC e autorizzazioni;
+- router multi-provider OpenAI/Groq/llama limitato all'intento, con minimizzazione identità,
+  tuning comune e rendering deterministico locale;
+- presenter Senior HR italiano/inglese con tono, indirizzo e verbosità configurabili, separato da
+  RBAC e autorizzazioni;
+- totale organico con semantica locale esatta (`all` se non qualificato; `active`/`inactive` se
+  espliciti) e analisi scadenze del prossimo mese senza query contratto N+1;
+- contatori token input/output/totale per richiesta e cumulativi locali, con stato esplicito per
+  valori assenti o incerti e migrazione Alembic dedicata;
 - kill switch globale `ENABLE_WRITE_ACTIONS=false` e flag specifici tutti `false`;
 - preview, conferma monouso hashata, TTL, idempotenza, A1/A2 distinti e riconciliazione;
-- adapter mock deterministico e adapter Playwright con tenant guard basato su attestazione
-  passiva first-party, vault cifrato cookie/localStorage/`sessionStorage` e avvio Discord degradabile
-  senza submit implicito di credenziali; le funzioni HR Playwright non sono ancora validate live;
+- adapter mock deterministico e adapter Playwright con tenant guard first-party, osservazione
+  passiva della risposta UI `GET /backend_apiV2/employees` sotto schema chiuso e bounded, vault
+  cifrato cookie/localStorage/`sessionStorage` ripersistito dopo letture verificate e avvio Discord
+  degradabile senza submit implicito di credenziali;
+- nome visualizzato disponibile in chiaro soltanto come `SecretStr` transitorio per elenchi e
+  scadenze `HR_READ` sensibili/ephemeral; aggregati pubblici, provider, log, audit, telemetria e
+  dump dei modelli non ricevono il valore; e-mail, codice fiscale e matricola restano mascherati;
 - audit HMAC append-only, cifratura dei parametri pending e log JSON redatti;
 - quarantena UUID, hash/deduplica, MIME/estensione, ClamAV fail-closed e retention;
 - persistenza async SQLite/PostgreSQL, migrazioni Alembic e test sintetici.
@@ -76,10 +90,10 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). Il check DIC corrente della 0.2.7 si è fermato a
-`TEAMSYSTEM_EMAIL`; distribuire la candidata 0.2.8 soltanto dopo i gate, invalidare una sola volta
-il vault creato prima della rotazione della credenziale e lanciare esattamente un check live. Il
-gateway può essere avviato `DEGRADED` anche se il check DIC non riesce.
+[Deployment](docs/DEPLOYMENT.md). Distribuire la candidata 0.3.0 soltanto dopo i gate e applicare
+la migrazione `0002_model_usage`. Invalidare il vault esclusivamente dopo rotazione o compromissione
+documentata; un semplice upgrade non richiede un nuovo login. Il gateway può essere avviato
+`DEGRADED` se la sessione verificata non è disponibile.
 
 ## Configurazione e operatività
 
@@ -108,6 +122,13 @@ Consultare [Start/stop](docs/START_STOP.md) per disponibilità verificata e sema
 comandi. Non avviare il bot finché `doctor.sh` non termina con successo e le credenziali non
 sono state fornite per canale sicuro.
 
+Con `DISCORD_READONLY_ROLE_IDS=<DISCORD_GUILD_ID>`, ogni membro del solo canale allowlistato può
+chiedere un aggregato non sensibile, per esempio `/bh ask richiesta:Dimmi il totale dei
+dipendenti`; il risultato finale viene pubblicato nel canale. `/bh ask richiesta:Dimmi i dipendenti
+con contratto a scadenza nel prossimo mese` richiede invece un ruolo umano dedicato `HR_READ` e
+resta ephemeral perché contiene dettagli individuali. L'ownership Discord non sostituisce questi
+ruoli applicativi.
+
 `model-check` è offline per default. Solo con autorizzazione esplicita a rete/costo usare
 `model-check --live`: esegue una singola richiesta sintetica chiusa al provider, senza DIC,
 Discord, browser o tool.
@@ -130,8 +151,8 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 
 ## Sicurezza e limiti
 
-- Il progetto è alpha. La struttura di login e il contratto di attestazione tenant sono stati
-  osservati in ricognizione read-only, ma le funzioni HR non sono state validate live.
+- Il progetto è alpha. La lettura passiva dell'elenco e le nuove risposte Senior HR della 0.3.0
+  restano da validare end-to-end sul target prima della promozione live.
 - MFA, CAPTCHA e UI drift possono impedire l'automazione.
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.
@@ -143,6 +164,8 @@ tool. Vedere anche [Testing](docs/TESTING.md).
   SSO silenzioso non tocca controlli credenziali ed è valido soltanto dopo marker DIC e tenant
   attestato. Dopo una rotazione credenziale il vecchio vault va invalidato deliberatamente una
   volta; un esito `CREDENTIAL_SUBMIT` non deve essere ritentato.
+- La 0.3.0 ripersiste la sessione soltanto dopo stato autenticato e tenant attestato o dopo una
+  lettura riuscita; errori e stati ignoti non sovrascrivono il vault.
 - Prima di qualunque smoke read-only verificare il ruolo Discord dell'operatore. La creazione del
   bot o l'ownership del guild non sostituiscono la mappa RBAC.
 

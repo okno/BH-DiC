@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol, cast
@@ -17,7 +18,13 @@ from bh_dic.openai.providers import (
     llama_endpoint_is_loopback,
     validate_llama_base_url,
 )
-from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata, Sensitivity
+from bh_dic.openai.schemas import (
+    ActionClass,
+    IntentEnvelope,
+    ProviderTokenUsage,
+    RouteMetadata,
+    Sensitivity,
+)
 from bh_dic.openai.tools import build_openai_tools, tool_by_name
 from bh_dic.policies.catalog import (
     FUNCTION_CATALOG,
@@ -27,7 +34,27 @@ from bh_dic.policies.catalog import (
 
 
 class IntentProviderError(RuntimeError):
-    pass
+    """Sanitized provider failure with optional completed-response telemetry.
+
+    ``response_received`` distinguishes an unavailable counter on a completed provider response
+    from a request whose remote outcome is unknown.  The exception deliberately carries neither
+    provider bodies nor request IDs.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        usage: ProviderTokenUsage | None = None,
+        response_received: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.usage = usage
+        self.response_received = response_received
 
 
 _FORBIDDEN_SDK_ENVIRONMENT = (
@@ -89,10 +116,14 @@ def _parse_iso_date(raw: object) -> date | None:
         return None
     if not isinstance(raw, str):
         raise IntentProviderError("provider returned a non-string date")
+    parsed: date | None = None
     try:
-        return date.fromisoformat(raw)
+        parsed = date.fromisoformat(raw)
     except ValueError:
-        raise IntentProviderError("provider returned an invalid ISO date") from None
+        pass
+    if parsed is None:
+        raise IntentProviderError("provider returned an invalid ISO date")
+    return parsed
 
 
 def _parse_parameters(raw: object) -> dict[str, Any]:
@@ -100,13 +131,87 @@ def _parse_parameters(raw: object) -> dict[str, Any]:
         return {}
     if not isinstance(raw, str) or len(raw) > 4_000:
         raise IntentProviderError("provider returned invalid parameters_json")
+    decoded: object | None = None
+    malformed = False
     try:
         decoded = json.loads(raw)
     except json.JSONDecodeError:
-        raise IntentProviderError("provider returned malformed parameters_json") from None
+        malformed = True
+    if malformed:
+        raise IntentProviderError("provider returned malformed parameters_json")
     if not isinstance(decoded, dict):
         raise IntentProviderError("parameters_json must encode an object")
     return decoded
+
+
+_MISSING = object()
+
+
+def _usage_member(value: object, name: str) -> object:
+    if isinstance(value, Mapping):
+        return value.get(name, _MISSING)
+    return getattr(value, name, _MISSING)
+
+
+def _provider_token_usage(
+    response: object,
+    *,
+    input_field: str,
+    output_field: str,
+) -> ProviderTokenUsage | None:
+    """Normalize exact provider counters without coercion or local estimation."""
+
+    raw_usage: object = _MISSING
+    read_failed = False
+    try:
+        raw_usage = _usage_member(response, "usage")
+    except Exception:
+        read_failed = True
+    if read_failed:
+        raise IntentProviderError("provider token usage could not be read")
+    if raw_usage is _MISSING or raw_usage is None:
+        return None
+    values: dict[str, object] | None = None
+    read_failed = False
+    try:
+        values = {
+            "input_tokens": _usage_member(raw_usage, input_field),
+            "output_tokens": _usage_member(raw_usage, output_field),
+            "total_tokens": _usage_member(raw_usage, "total_tokens"),
+        }
+    except Exception:
+        read_failed = True
+    if read_failed or values is None:
+        raise IntentProviderError("provider token usage could not be read")
+    if any(value is _MISSING for value in values.values()):
+        raise IntentProviderError("provider returned incomplete token usage")
+    usage: ProviderTokenUsage | None = None
+    invalid_usage = False
+    try:
+        usage = ProviderTokenUsage.model_validate(values)
+    except ValidationError:
+        invalid_usage = True
+    if invalid_usage or usage is None:
+        raise IntentProviderError("provider returned invalid token usage")
+    return usage
+
+
+def _response_error_with_context(
+    error: IntentProviderError,
+    *,
+    provider: str,
+    model: str,
+    usage: ProviderTokenUsage | None,
+) -> IntentProviderError:
+    """Attach safe telemetry while suppressing the original exception chain."""
+
+    return IntentProviderError(
+        str(error),
+        provider=provider,
+        model=model,
+        usage=usage,
+        response_received=True,
+    )
 
 
 def envelope_from_call(
@@ -114,10 +219,14 @@ def envelope_from_call(
 ) -> IntentEnvelope:
     if len(arguments) > 8_000:
         raise IntentProviderError("tool arguments exceed the local limit")
+    payload: object | None = None
+    malformed = False
     try:
         payload = json.loads(arguments)
     except json.JSONDecodeError:
-        raise IntentProviderError("tool arguments are not valid JSON") from None
+        malformed = True
+    if malformed:
+        raise IntentProviderError("tool arguments are not valid JSON")
     if not isinstance(payload, dict):
         raise IntentProviderError("tool arguments must be an object")
 
@@ -151,15 +260,18 @@ def envelope_from_call(
     parameters = _parse_parameters(payload.get("parameters_json"))
     function_spec = FUNCTION_CATALOG.get(str(function_id))
     if function_spec is not None and function_spec.is_write:
+        invalid_write_parameters = False
         try:
             parameters = validate_write_parameters(function_spec, parameters)
         except WriteParameterValidationError:
-            raise IntentProviderError(
-                "provider write parameters violate the local catalog"
-            ) from None
+            invalid_write_parameters = True
+        if invalid_write_parameters:
+            raise IntentProviderError("provider write parameters violate the local catalog")
 
+    envelope: IntentEnvelope | None = None
+    invalid_envelope = False
     try:
-        return IntentEnvelope(
+        envelope = IntentEnvelope(
             intent=intent,
             function_id=function_id,
             action_class=action_class,
@@ -174,7 +286,10 @@ def envelope_from_call(
             confidence=float(confidence),
         )
     except (TypeError, ValueError, ValidationError):
-        raise IntentProviderError("provider output failed local validation") from None
+        invalid_envelope = True
+    if invalid_envelope or envelope is None:
+        raise IntentProviderError("provider output failed local validation")
+    return envelope
 
 
 class ResponsesIntentClient:
@@ -238,26 +353,97 @@ class ResponsesIntentClient:
         }
         if self._reasoning_effort and self._reasoning_effort != "none":
             request["reasoning"] = {"effort": self._reasoning_effort}
+        response: Any = _MISSING
+        provider_failed = False
         try:
             response = await self._provider.responses.create(**request)
         except Exception:  # provider exceptions and response bodies are private
-            raise IntentProviderError(f"{self._provider_name} intent routing failed") from None
+            provider_failed = True
+        if provider_failed or response is _MISSING:
+            raise IntentProviderError(
+                f"{self._provider_name} intent routing failed",
+                provider=self._provider_name,
+                model=self._model,
+                response_received=False,
+            )
 
-        calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
-        if len(calls) != 1:
-            raise IntentProviderError("provider must return exactly one function call")
-        call = calls[0]
-        envelope = envelope_from_call(call.name, call.arguments, allowed_function_ids)
-        request_id = getattr(response, "_request_id", None)
-        return RoutedIntent(
-            envelope=envelope,
-            metadata=RouteMetadata(
+        usage: ProviderTokenUsage | None = None
+        usage_failure: IntentProviderError | None = None
+        try:
+            usage = _provider_token_usage(
+                response,
+                input_field="input_tokens",
+                output_field="output_tokens",
+            )
+        except IntentProviderError as exc:
+            usage_failure = _response_error_with_context(
+                exc,
+                provider=self._provider_name,
+                model=self._model,
+                usage=None,
+            )
+        if usage_failure is not None:
+            raise usage_failure
+
+        call: Any | None = None
+        envelope: IntentEnvelope | None = None
+        request_id: object | None = None
+        output_failure: IntentProviderError | None = None
+        try:
+            calls = [
+                item for item in response.output if getattr(item, "type", None) == "function_call"
+            ]
+            if len(calls) != 1:
+                raise IntentProviderError("provider must return exactly one function call")
+            call = calls[0]
+            envelope = envelope_from_call(call.name, call.arguments, allowed_function_ids)
+            request_id = getattr(response, "_request_id", None)
+        except IntentProviderError as exc:
+            output_failure = _response_error_with_context(
+                exc,
+                provider=self._provider_name,
+                model=self._model,
+                usage=usage,
+            )
+        except Exception:
+            output_failure = IntentProviderError(
+                "provider output validation failed",
+                provider=self._provider_name,
+                model=self._model,
+                usage=usage,
+                response_received=True,
+            )
+        if output_failure is not None:
+            raise output_failure
+        if call is None or envelope is None:
+            raise IntentProviderError(
+                "provider output validation failed",
+                provider=self._provider_name,
+                model=self._model,
+                usage=usage,
+                response_received=True,
+            )
+        metadata: RouteMetadata | None = None
+        metadata_failed = False
+        try:
+            metadata = RouteMetadata(
                 provider=self._provider_name,
                 model=self._model,
                 request_id=request_id,
                 tool_name=call.name,
-            ),
-        )
+                usage=usage,
+            )
+        except (TypeError, ValueError, ValidationError):
+            metadata_failed = True
+        if metadata_failed or metadata is None:
+            raise IntentProviderError(
+                "provider metadata validation failed",
+                provider=self._provider_name,
+                model=self._model,
+                usage=usage,
+                response_received=True,
+            )
+        return RoutedIntent(envelope=envelope, metadata=metadata)
 
 
 class GroqResponsesIntentClient(ResponsesIntentClient):
@@ -385,35 +571,105 @@ class LlamaChatCompletionsIntentClient:
             "n": 1,
             "max_tokens": self._max_output_tokens,
         }
+        response: object = _MISSING
+        provider_failed = False
         try:
             response = await self._provider.chat.completions.create(**request)
         except Exception:  # provider exceptions and response bodies are private
-            raise IntentProviderError("llama intent routing failed") from None
+            provider_failed = True
+        if provider_failed or response is _MISSING:
+            raise IntentProviderError(
+                "llama intent routing failed",
+                provider="llama",
+                model=self._model,
+                response_received=False,
+            )
 
-        choices = getattr(response, "choices", None)
-        if not isinstance(choices, list) or len(choices) != 1:
-            raise IntentProviderError("provider must return exactly one completion choice")
-        message = getattr(choices[0], "message", None)
-        calls = getattr(message, "tool_calls", None)
-        if not isinstance(calls, list) or len(calls) != 1:
-            raise IntentProviderError("provider must return exactly one tool call")
-        call = calls[0]
-        if getattr(call, "type", None) != "function":
-            raise IntentProviderError("provider returned a non-function tool call")
-        function = getattr(call, "function", None)
-        name = getattr(function, "name", None)
-        arguments = getattr(function, "arguments", None)
-        if not isinstance(name, str) or not isinstance(arguments, str):
-            raise IntentProviderError("provider returned an invalid function call")
+        usage: ProviderTokenUsage | None = None
+        usage_failure: IntentProviderError | None = None
+        try:
+            usage = _provider_token_usage(
+                response,
+                input_field="prompt_tokens",
+                output_field="completion_tokens",
+            )
+        except IntentProviderError as exc:
+            usage_failure = _response_error_with_context(
+                exc,
+                provider="llama",
+                model=self._model,
+                usage=None,
+            )
+        if usage_failure is not None:
+            raise usage_failure
 
-        envelope = envelope_from_call(name, arguments, allowed_function_ids)
-        request_id = getattr(response, "_request_id", None)
-        return RoutedIntent(
-            envelope=envelope,
-            metadata=RouteMetadata(
+        name: str | None = None
+        arguments: str | None = None
+        envelope: IntentEnvelope | None = None
+        request_id: object | None = None
+        output_failure: IntentProviderError | None = None
+        try:
+            choices = getattr(response, "choices", None)
+            if not isinstance(choices, list) or len(choices) != 1:
+                raise IntentProviderError("provider must return exactly one completion choice")
+            message = getattr(choices[0], "message", None)
+            calls = getattr(message, "tool_calls", None)
+            if not isinstance(calls, list) or len(calls) != 1:
+                raise IntentProviderError("provider must return exactly one tool call")
+            call = calls[0]
+            if getattr(call, "type", None) != "function":
+                raise IntentProviderError("provider returned a non-function tool call")
+            function = getattr(call, "function", None)
+            name = getattr(function, "name", None)
+            arguments = getattr(function, "arguments", None)
+            if not isinstance(name, str) or not isinstance(arguments, str):
+                raise IntentProviderError("provider returned an invalid function call")
+
+            envelope = envelope_from_call(name, arguments, allowed_function_ids)
+            request_id = getattr(response, "_request_id", None)
+        except IntentProviderError as exc:
+            output_failure = _response_error_with_context(
+                exc,
+                provider="llama",
+                model=self._model,
+                usage=usage,
+            )
+        except Exception:
+            output_failure = IntentProviderError(
+                "provider output validation failed",
+                provider="llama",
+                model=self._model,
+                usage=usage,
+                response_received=True,
+            )
+        if output_failure is not None:
+            raise output_failure
+        if name is None or envelope is None:
+            raise IntentProviderError(
+                "provider output validation failed",
+                provider="llama",
+                model=self._model,
+                usage=usage,
+                response_received=True,
+            )
+        metadata: RouteMetadata | None = None
+        metadata_failed = False
+        try:
+            metadata = RouteMetadata(
                 provider="llama",
                 model=self._model,
                 request_id=request_id,
                 tool_name=name,
-            ),
-        )
+                usage=usage,
+            )
+        except (TypeError, ValueError, ValidationError):
+            metadata_failed = True
+        if metadata_failed or metadata is None:
+            raise IntentProviderError(
+                "provider metadata validation failed",
+                provider="llama",
+                model=self._model,
+                usage=usage,
+                response_received=True,
+            )
+        return RoutedIntent(envelope=envelope, metadata=metadata)

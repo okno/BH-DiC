@@ -7,7 +7,8 @@ import hashlib
 import hmac
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from bh_dic.application import ApplicationError, ApplicationScope, BHApplicationCoordinator
 from bh_dic.approvals.confirmation import ConfirmationHasher
@@ -33,6 +34,7 @@ from bh_dic.files.mime import ContentMimeDetector
 from bh_dic.files.quarantine import QuarantineStore
 from bh_dic.files.repository import SqlAlchemyUploadRepository
 from bh_dic.files.service import FileService
+from bh_dic.model_usage import ModelUsageService, SqlAlchemyModelUsageRepository
 from bh_dic.openai.factory import build_intent_client
 from bh_dic.openai.intent_router import IntentRouter, MockIntentRouter, OpenAIIntentRouter
 from bh_dic.openai.prompts import build_intent_router_prompt
@@ -192,6 +194,20 @@ async def _adapter(
             None if stored_session is None else stored_session.storage_state,
             session_storage=(None if stored_session is None else stored_session.session_storage),
         )
+        session_persist_lock = asyncio.Lock()
+
+        async def persist_verified_session() -> None:
+            persist_failed = False
+            try:
+                async with session_persist_lock:
+                    await session_manager.persist(browser_session)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                persist_failed = True
+            if persist_failed:
+                raise DicSessionVaultError("verified DIC session could not be persisted safely")
+
         browser_coordinator = BrowserCoordinator(
             queue=BrowserOperationQueue(workers=settings.dic_max_concurrent_browser_operations),
             read_retry=ReadRetryPolicy(
@@ -207,6 +223,7 @@ async def _adapter(
             quarantine_root=(settings.data_dir / "uploads").resolve(),
             live_writes_enabled=settings.enable_write_actions,
             state_digest_key=state_digest_key,
+            verified_session_callback=persist_verified_session,
         )
         if authenticate_dic:
             username = settings.dic_username
@@ -276,6 +293,7 @@ async def build_runtime(
     )
     approval_repository = SqlAlchemyApprovalRepository(database.sessions)
     upload_repository = SqlAlchemyUploadRepository(database.sessions)
+    model_usage = ModelUsageService(SqlAlchemyModelUsageRepository(database.sessions))
     approval_service = ApprovalService(
         approval_repository,
         ConfirmationHasher(
@@ -350,6 +368,17 @@ async def build_runtime(
         pseudonym_key=hmac.new(audit_material, b"bh-dic:pseudonym:v1", hashlib.sha256).digest(),
         requester_actor_resolver=(
             None if settings.mock_mode or force_mock_components else resolve_requester
+        ),
+        language_profile=settings.language_profile,
+        today_provider=lambda: datetime.now(ZoneInfo(settings.app_timezone)).date(),
+        model_usage=model_usage,
+        model_provider=(
+            "mock" if settings.mock_mode or force_mock_components else settings.model_provider
+        ),
+        model_name=(
+            "deterministic"
+            if settings.mock_mode or force_mock_components
+            else (settings.selected_model or "unconfigured")
         ),
     )
     application_id = _configured_id(

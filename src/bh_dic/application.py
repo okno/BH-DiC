@@ -11,7 +11,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Literal, cast
 
@@ -31,6 +31,7 @@ from bh_dic.dic.errors import (
 from bh_dic.dic.models import (
     DocumentQuery,
     EmployeeFilter,
+    EmployeeListItem,
     EmployeeListQuery,
     FunctionId,
     ReconciliationState,
@@ -47,9 +48,25 @@ from bh_dic.discord.interactions import (
 )
 from bh_dic.files.models import UploadStatus
 from bh_dic.files.service import FileService, UploadResolutionError
+from bh_dic.hr_assistant import (
+    SeniorHrPresenter,
+    is_employee_aggregate_request,
+    local_employee_search_query,
+    minimize_hr_router_request,
+    normalize_hr_intent,
+)
+from bh_dic.language import BotLanguageProfile
 from bh_dic.logging import get_logger
+from bh_dic.model_usage import (
+    ModelUsageKey,
+    ModelUsageService,
+    ModelUsageStart,
+    ModelUsageStatus,
+    ModelUsageTotals,
+)
+from bh_dic.openai.client import IntentProviderError
 from bh_dic.openai.intent_router import IntentRouter
-from bh_dic.openai.redaction import redact_structure
+from bh_dic.openai.redaction import prepare_provider_input, redact_structure
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope
 from bh_dic.policies.catalog import (
     FUNCTION_CATALOG,
@@ -65,6 +82,7 @@ from bh_dic.policies.feature_flags import FeatureFlags
 from bh_dic.policies.roles import LogicalRole, normalize_roles
 from bh_dic.security.cipher import PayloadCipher
 from bh_dic.security.pii import pseudonymize_identifier
+from bh_dic.security.sanitization import InputValidationError, normalize_text
 from bh_dic.services.dic_service import DicService
 
 logger = get_logger("application")
@@ -91,6 +109,7 @@ class ApplicationScope:
 
 
 RequesterActorResolver = Callable[[PendingAction], Awaitable[DiscordActor]]
+TodayProvider = Callable[[], date]
 
 
 class BHApplicationCoordinator(InteractionCoordinator):
@@ -111,6 +130,11 @@ class BHApplicationCoordinator(InteractionCoordinator):
         payload_cipher: PayloadCipher | None = None,
         files: FileService | None = None,
         requester_actor_resolver: RequesterActorResolver | None = None,
+        language_profile: BotLanguageProfile | None = None,
+        today_provider: TodayProvider | None = None,
+        model_usage: ModelUsageService | None = None,
+        model_provider: str = "unconfigured",
+        model_name: str = "unconfigured",
     ) -> None:
         if len(pseudonym_key) < 32:
             raise ValueError("pseudonym key must contain at least 32 bytes")
@@ -125,6 +149,11 @@ class BHApplicationCoordinator(InteractionCoordinator):
         self.payload_cipher = payload_cipher
         self.files = files
         self.requester_actor_resolver = requester_actor_resolver
+        self._presenter = SeniorHrPresenter(language_profile)
+        self._today = today_provider or date.today
+        self._model_usage = model_usage
+        self._model_provider = model_provider
+        self._model_name = model_name
         self._pseudonym_key = bytes(pseudonym_key)
         self._global_write_lock = asyncio.Lock()
         self._target_write_locks: dict[str, asyncio.Lock] = {}
@@ -138,8 +167,66 @@ class BHApplicationCoordinator(InteractionCoordinator):
             operation_scope="aggregate",
         )
         visible = self.policy.visible_function_ids(exposure_context)
-        routed = await self.router.route(request, visible)
-        intent = routed.envelope
+        prepared_request = prepare_provider_input(request)
+        provider_request, explicit_employee_id = minimize_hr_router_request(prepared_request)
+        local_search_query = local_employee_search_query(prepared_request)
+        usage_key = ModelUsageKey(
+            correlation_id=correlation_id,
+            purpose="intent_route",
+            ordinal=1,
+        )
+        if self._model_usage is not None:
+            await self._model_usage.start(
+                ModelUsageStart(
+                    key=usage_key,
+                    provider=self._model_provider,
+                    model=self._model_name,
+                )
+            )
+        try:
+            routed = await self.router.route(provider_request, visible)
+        except IntentProviderError as exc:
+            if self._model_usage is not None:
+                await self._model_usage.complete(
+                    usage_key,
+                    response_received=exc.response_received,
+                    usage=exc.usage,
+                )
+            raise
+        except asyncio.CancelledError:
+            if self._model_usage is not None:
+                await asyncio.shield(
+                    self._model_usage.complete(
+                        usage_key,
+                        response_received=False,
+                        usage=None,
+                    )
+                )
+            raise
+        except Exception:
+            if self._model_usage is not None:
+                await self._model_usage.complete(
+                    usage_key,
+                    response_received=False,
+                    usage=None,
+                )
+            raise
+        if self._model_usage is not None:
+            await self._model_usage.complete(
+                usage_key,
+                response_received=True,
+                usage=routed.metadata.usage,
+            )
+        # Provider identity/search fields are never trusted. A target or search value is restored
+        # only from the locally parsed, validated request after routing.
+        trusted_updates: dict[str, object] = {
+            "employee_id": explicit_employee_id,
+            "query": None,
+        }
+        if routed.envelope.function_id == "EMP-SEARCH-001":
+            trusted_updates["query"] = local_search_query
+        routed_envelope = routed.envelope.model_copy(update=trusted_updates)
+        intent = normalize_hr_intent(routed_envelope, request, today=self._today())
         if intent.requires_clarification:
             await self._audit(
                 actor,
@@ -150,19 +237,21 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 intent.employee_id,
                 {"provider": routed.metadata.provider},
             )
-            return InteractionResult(
+            result = InteractionResult(
                 title="Chiarimento necessario",
                 description=intent.clarification_question or "Specifica meglio la richiesta.",
                 correlation_id=correlation_id,
                 success=False,
             )
+            return await self._with_request_usage(result, correlation_id)
         if intent.function_id == "UNSUPPORTED":
-            return InteractionResult(
+            result = InteractionResult(
                 title="Funzione non disponibile",
                 description="La richiesta non corrisponde a una funzione autorizzata.",
                 correlation_id=correlation_id,
                 success=False,
             )
+            return await self._with_request_usage(result, correlation_id)
 
         scope = self._operation_scope(intent, request)
         decision = self.policy.evaluate(
@@ -194,7 +283,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
             intent.employee_id,
             {"provider": routed.metadata.provider},
         )
-        return result
+        return await self._with_request_usage(result, correlation_id)
 
     async def help(self, actor: DiscordActor) -> InteractionResult:
         context = self._context(
@@ -219,9 +308,11 @@ class BHApplicationCoordinator(InteractionCoordinator):
         write_enabled = self.flags.enabled("ENABLE_WRITE_ACTIONS")
         health = await self.dic.adapter.health()
         operational = health.ready and health.authenticated
+        title, description = self._presenter.operational_status(operational)
+        usage_fields = await self._model_status_fields()
         return InteractionResult(
-            title="Stato BH-DiC",
-            description="Stato operativo redatto.",
+            title=title,
+            description=description,
             fields=(
                 ResultField("Adapter", "READY" if operational else "DEGRADED", True),
                 ResultField(
@@ -233,8 +324,85 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     True,
                 ),
                 ResultField("Write kill switch", "ENABLED" if write_enabled else "DISABLED", True),
+                *usage_fields,
             ),
             success=operational,
+        )
+
+    async def _with_request_usage(
+        self,
+        result: InteractionResult,
+        correlation_id: str,
+    ) -> InteractionResult:
+        if self._model_usage is None:
+            return result
+        current = await self._model_usage.totals(correlation_id=correlation_id)
+        cumulative = await self._model_usage.totals()
+        usage_copy = (
+            f"**Token AI — questa richiesta:** {self._format_request_usage(current)}\n"
+            f"**Token AI — cumulativo locale:** {self._format_cumulative_usage(cumulative)}"
+        )
+        return replace(
+            result,
+            # Discord supports at most 25 fields. Keeping usage in the bounded description makes
+            # the counters visible even when an HR result already fills every data-field slot.
+            description=f"{result.description}\n\n{usage_copy}",
+        )
+
+    async def _model_status_fields(self) -> tuple[ResultField, ...]:
+        provider_value = f"{self._model_provider} · {self._model_name}"
+        if self._model_usage is None:
+            return ()
+        totals = await self._model_usage.totals()
+        latest = await self._model_usage.latest()
+        if latest is None:
+            api_state = "NESSUNA CHIAMATA OSSERVATA IN QUESTO DATABASE"
+        else:
+            observed_at = latest.completed_at or latest.created_at
+            last = observed_at.isoformat(timespec="seconds")
+            api_state = {
+                ModelUsageStatus.STARTED: "ULTIMA CHIAMATA SENZA ESITO TERMINALE",
+                ModelUsageStatus.REPORTED: "ULTIMA RISPOSTA CON CONTATORI",
+                ModelUsageStatus.UNAVAILABLE: "ULTIMA RISPOSTA SENZA CONTATORI",
+                ModelUsageStatus.UNKNOWN: "ULTIMO ESITO REMOTO NON DETERMINABILE",
+            }[latest.status]
+            api_state = f"{api_state} · {last}"
+        return (
+            ResultField("Bot Discord", "ONLINE", True),
+            ResultField("Provider e modello AI", provider_value, False),
+            ResultField("API AI", api_state, False),
+            ResultField("Token AI", self._format_cumulative_usage(totals), False),
+        )
+
+    @staticmethod
+    def _format_request_usage(totals: ModelUsageTotals) -> str:
+        if totals.reported_calls:
+            usage = totals.usage
+            return (
+                f"input {usage.input_tokens} · output {usage.output_tokens} · "
+                f"totale {usage.total_tokens}"
+            )
+        if totals.unavailable_calls:
+            return "Il provider ha completato la risposta senza contatori disponibili."
+        if totals.unknown_calls:
+            return "Esito remoto non determinabile; nessuna stima locale applicata."
+        return "Contatori non disponibili."
+
+    @staticmethod
+    def _format_cumulative_usage(totals: ModelUsageTotals) -> str:
+        if totals.total_calls == 0:
+            return "Nessuna chiamata registrata in questo database."
+        since = (
+            totals.first_recorded_at.date().isoformat()
+            if totals.first_recorded_at is not None
+            else "data non disponibile"
+        )
+        gaps = totals.started_calls + totals.unavailable_calls + totals.unknown_calls
+        usage = totals.usage
+        return (
+            f"Dal {since}: {totals.total_calls} chiamate · input {usage.input_tokens} · "
+            f"output {usage.output_tokens} · totale {usage.total_tokens} · "
+            f"contatori mancanti/incerti {gaps}. Non equivale alla fatturazione provider."
         )
 
     async def health(self, actor: DiscordActor) -> InteractionResult:
@@ -575,18 +743,21 @@ class BHApplicationCoordinator(InteractionCoordinator):
             )
             result = await self.dic.list_employees(employee_query)
             if operation_scope == "aggregate":
+                title, description = self._presenter.employee_count(
+                    result.total, employee_filter.value
+                )
                 return InteractionResult(
-                    title="Conteggio dipendenti",
-                    description=f"Totale nel filtro richiesto: {result.total}",
+                    title=title,
+                    description=description,
                     correlation_id=correlation_id,
                     sensitivity=ResponseSensitivity.PUBLIC_AGGREGATE,
                 )
             fields = tuple(
                 ResultField(
-                    f"Employee ID {item.employee_id}",
+                    self._employee_display_name(item),
                     "\n".join(
                         (
-                            f"Nome redatto: {item.display_name_redacted}",
+                            f"Employee ID: {item.employee_id}",
                             f"Stato dipendente: {item.employee_state.value}",
                             f"Stato account: {item.account_state.value}",
                             f"Stato contratto: {item.contract_state or item.contract_label or '—'}",
@@ -599,12 +770,15 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 )
                 for item in result.items
             )
+            title, description = self._presenter.employee_list(
+                page=result.page,
+                shown=len(result.items),
+                total=result.total,
+                has_next=result.has_next,
+            )
             return InteractionResult(
-                title="Dipendenti",
-                description=(
-                    f"Pagina {result.page}; mostrati {len(result.items)} su {result.total}; "
-                    f"pagina successiva: {'sì' if result.has_next else 'no'}"
-                ),
+                title=title,
+                description=description,
                 fields=fields,
                 correlation_id=correlation_id,
             )
@@ -730,47 +904,86 @@ class BHApplicationCoordinator(InteractionCoordinator):
     async def _render_contracts(
         self, intent: IntentEnvelope, correlation_id: str
     ) -> InteractionResult:
-        employee_ids: list[str]
+        records: list[tuple[date | None, ResultField]] = []
+        unparseable = 0
         if intent.employee_id:
-            employee_ids = [intent.employee_id]
-        else:
-            employee_ids = []
-            page = 1
-            while True:
-                result = await self.dic.list_employees(
-                    EmployeeListQuery(employee_filter=EmployeeFilter.ALL, page=page, page_size=100)
-                )
-                employee_ids.extend(item.employee_id for item in result.items)
-                if not result.has_next:
-                    break
-                page += 1
-                if page > 100:
-                    raise ApplicationError("employee pagination safety limit exceeded")
-        fields: list[ResultField] = []
-        for employee_id in employee_ids:
-            for contract in await self.dic.get_contracts(employee_id):
+            for contract in await self.dic.get_contracts(intent.employee_id):
                 end: date | None = None
                 if contract.end_date:
-                    try:
-                        end = date.fromisoformat(contract.end_date)
-                    except ValueError:
-                        end = None
+                    end = self._parse_dic_date(contract.end_date)
+                    if end is None:
+                        unparseable += 1
+                        continue
                 if intent.date_from and (end is None or end < intent.date_from):
                     continue
                 if intent.date_to and (end is None or end > intent.date_to):
                     continue
-                fields.append(
-                    ResultField(
-                        employee_id,
-                        f"{contract.contract_type or 'contratto'} · "
-                        f"fine {contract.end_date or 'indeterminato'}",
+                records.append(
+                    (
+                        end,
+                        ResultField(
+                            intent.employee_id,
+                            f"{contract.contract_type or 'contratto'} · "
+                            f"fine {contract.end_date or 'indeterminato'}",
+                        ),
                     )
                 )
-        fields.sort(key=lambda item: item.value)
+        else:
+            page = 1
+            expected_total: int | None = None
+            seen_employee_ids: set[str] = set()
+            while True:
+                result = await self.dic.list_employees(
+                    EmployeeListQuery(employee_filter=EmployeeFilter.ALL, page=page, page_size=100)
+                )
+                if expected_total is None:
+                    expected_total = result.total
+                elif result.total != expected_total:
+                    raise ApplicationError("employee total changed during contract analysis")
+                page_start_count = len(seen_employee_ids)
+                for item in result.items:
+                    if item.employee_id in seen_employee_ids:
+                        raise ApplicationError("employee pagination returned a duplicate")
+                    seen_employee_ids.add(item.employee_id)
+                    end = item.current_contract_valid_to
+                    if intent.date_from and (end is None or end < intent.date_from):
+                        continue
+                    if intent.date_to and (end is None or end > intent.date_to):
+                        continue
+                    records.append(
+                        (
+                            end,
+                            ResultField(
+                                f"{self._employee_display_name(item)} · ID {item.employee_id}",
+                                f"{item.contract_label or 'contratto corrente'} · "
+                                f"fine {end.isoformat() if end else 'indeterminato'}",
+                            ),
+                        )
+                    )
+                if len(seen_employee_ids) > (expected_total or 0):
+                    raise ApplicationError("employee pagination exceeded the reported total")
+                if not result.has_next:
+                    break
+                if len(seen_employee_ids) == page_start_count:
+                    raise ApplicationError("employee pagination made no progress")
+                page += 1
+                if page > 100:
+                    raise ApplicationError("employee pagination safety limit exceeded")
+            if len(seen_employee_ids) != (expected_total or 0):
+                raise ApplicationError("employee pagination did not match the reported total")
+        records.sort(key=lambda item: (item[0] is None, item[0] or date.max, item[1].name))
+        fields = tuple(item[1] for item in records[:25])
+        title, description = self._presenter.contract_summary(
+            date_from=intent.date_from,
+            date_to=intent.date_to,
+            found=len(records),
+            shown=len(fields),
+            unparseable=unparseable,
+        )
         return InteractionResult(
-            title="Contratti e scadenze",
-            description=f"Intervallo: {intent.date_from or 'inizio'} → {intent.date_to or 'fine'}",
-            fields=tuple(fields[:25]),
+            title=title,
+            description=description,
+            fields=fields,
             correlation_id=correlation_id,
         )
 
@@ -1486,11 +1699,36 @@ class BHApplicationCoordinator(InteractionCoordinator):
             export_scope = intent.parameters.get("scope")
             if export_scope in {"employees", "balances", "documents"}:
                 return str(export_scope)
-        if intent.function_id == "EMP-READ-001" and any(
-            marker in request.casefold() for marker in ("quanti", "conteggio", "numero")
-        ):
+        if intent.function_id == "EMP-READ-001" and is_employee_aggregate_request(request):
             return "aggregate"
         return "default"
+
+    @staticmethod
+    def _parse_dic_date(value: str) -> date | None:
+        candidate = value.strip()
+        for parser in (
+            date.fromisoformat,
+            lambda raw: datetime.strptime(raw, "%d/%m/%Y").date(),
+        ):
+            try:
+                return parser(candidate)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _employee_display_name(item: EmployeeListItem) -> str:
+        if item.display_name is None:
+            return item.display_name_redacted
+        try:
+            value = normalize_text(
+                item.display_name.get_secret_value(),
+                max_length=256,
+                allow_newlines=False,
+            )
+        except InputValidationError:
+            return item.display_name_redacted
+        return value or item.display_name_redacted
 
     @staticmethod
     def _require_employee(intent: IntentEnvelope) -> str:

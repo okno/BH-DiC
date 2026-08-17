@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 
+from bh_dic.dic.errors import DicUiChangedError
 from bh_dic.discord.bot import BHDiCBot
 from bh_dic.discord.checks import DiscordGate
 from bh_dic.discord.commands import BHCommandGroup
@@ -28,6 +29,7 @@ from bh_dic.discord.views import (
     RejectReasonModal,
 )
 from bh_dic.language import BotLanguageProfile
+from bh_dic.openai.client import IntentProviderError
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 
 ACTION_ID = "12345678-1234-4234-9234-123456789abc"
@@ -85,6 +87,10 @@ class FakeInteraction:
         self.channel = SimpleNamespace(id=20)
         self.response = FakeResponse(done=done)
         self.followup = FakeFollowup()
+        self.edited_original: list[dict[str, object]] = []
+
+    async def edit_original_response(self, **kwargs: object) -> None:
+        self.edited_original.append(kwargs)
 
 
 class FakeMessage:
@@ -192,7 +198,9 @@ def test_embed_is_deterministic_bounded_and_redacted() -> None:
     assert "top-secret-token" not in embed.description
     assert "@\u200bhere" in embed.description
     assert len(embed.fields) == 25
-    assert embed.footer.text == "Correlation ID: corr-safe-123"
+    assert "Contenuto ridotto per i limiti Discord." in embed.footer.text
+    assert "Correlation ID: corr-safe-123" in embed.footer.text
+    assert len(embed) <= 6_000
 
     empty = result_embed(InteractionResult(title="", description="", success=True))
     assert empty.color == discord.Color.green()
@@ -304,6 +312,64 @@ async def test_command_send_success_action_denial_rate_limit_and_failure(
 
     with pytest.raises(ValueError, match="positive"):
         BHCommandGroup(gate=_gate(), coordinator=coordinator, upload_max_bytes=0)
+
+
+@pytest.mark.asyncio
+async def test_public_aggregate_is_published_only_after_private_defer_is_completed() -> None:
+    coordinator, _ = _coordinator()
+    group = BHCommandGroup(gate=_gate(), coordinator=coordinator)
+    interaction, raw = _interaction()
+    result = InteractionResult(
+        title="Organico",
+        description="Totale aggregato: 42",
+        sensitivity=ResponseSensitivity.PUBLIC_AGGREGATE,
+    )
+
+    await group._send(interaction, AsyncMock(return_value=result))
+
+    assert raw.response.deferred == [{"ephemeral": True, "thinking": True}]
+    assert raw.edited_original == [
+        {
+            "content": "Risultato aggregato pubblicato nel canale autorizzato.",
+            "embed": None,
+            "view": None,
+        }
+    ]
+    assert raw.followup.sent[0][1]["ephemeral"] is False
+    assert isinstance(raw.followup.sent[0][1]["embed"], discord.Embed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (
+            DicUiChangedError("EMP-SYNTH-PRIVATE DOM detail"),
+            "Dipendenti in Cloud non è disponibile",
+        ),
+        (
+            IntentProviderError("private provider body", provider="groq"),
+            "Il servizio AI non ha completato",
+        ),
+    ],
+)
+async def test_typed_external_failures_return_redacted_actionable_messages(
+    failure: Exception,
+    expected: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    coordinator, _ = _coordinator()
+    group = BHCommandGroup(gate=_gate(), coordinator=coordinator)
+    interaction, raw = _interaction()
+
+    await group._send(interaction, AsyncMock(side_effect=failure))
+
+    message = cast(str, raw.followup.sent[0][0][0])
+    assert expected in message
+    assert "PRIVATE" not in message
+    assert "private provider body" not in message
+    assert "EMP-SYNTH-PRIVATE" not in caplog.text
+    assert "private provider body" not in caplog.text
 
 
 @pytest.mark.asyncio

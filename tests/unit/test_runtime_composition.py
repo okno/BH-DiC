@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -230,6 +231,12 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
     assert not any(event.startswith("authenticate:") for event in events)
     assert "persist" not in events
 
+    passive_persist = cast(
+        Callable[[], Awaitable[None]], adapter_options["verified_session_callback"]
+    )
+    await passive_persist()
+    assert events[-1] == "persist"
+
     await runtime_module._adapter(
         _live_settings(),
         force_mock_components=False,
@@ -267,6 +274,77 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
             authenticate_dic=True,
         )
     assert events[-1] == "browser-close"
+
+
+@pytest.mark.asyncio
+async def test_passive_verified_session_persistence_is_serialized_and_secret_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter_options: dict[str, object] = {}
+    active_persists = 0
+    maximum_active_persists = 0
+    completed_persists = 0
+    sensitive = "private-passive-session-persistence-marker"
+    session_managers: list[Any] = []
+
+    class FakeSessionManager:
+        def __init__(self, _vault: object) -> None:
+            self.fail = False
+            session_managers.append(self)
+
+        def load_session(self) -> None:
+            return None
+
+        async def persist(self, _session: object) -> None:
+            nonlocal active_persists, maximum_active_persists, completed_persists
+            if self.fail:
+                raise RuntimeError(sensitive)
+            active_persists += 1
+            maximum_active_persists = max(maximum_active_persists, active_persists)
+            await asyncio.sleep(0)
+            active_persists -= 1
+            completed_persists += 1
+
+    class FakeBrowser:
+        def __init__(self, _options: object) -> None:
+            pass
+
+        async def start(self, _state: object, *, session_storage: object = None) -> object:
+            assert session_storage is None
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeLiveAdapter:
+        def __init__(self, _page: object, **kwargs: object) -> None:
+            adapter_options.update(kwargs)
+
+    monkeypatch.setattr(runtime_module, "FernetSessionVault", lambda *_args: object())
+    monkeypatch.setattr(runtime_module, "DicSessionManager", FakeSessionManager)
+    monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
+    monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
+
+    await runtime_module._adapter(
+        _live_settings(),
+        force_mock_components=False,
+        state_digest_key=b"s" * 32,
+        authenticate_dic=False,
+    )
+    callback = cast(Callable[[], Awaitable[None]], adapter_options["verified_session_callback"])
+
+    await asyncio.gather(*(callback() for _ in range(5)))
+
+    assert completed_persists == 5
+    assert maximum_active_persists == 1
+
+    manager = session_managers[0]
+    manager.fail = True
+    with pytest.raises(DicSessionVaultError, match="verified DIC session") as caught:
+        await callback()
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert sensitive not in str(caught.value)
 
 
 @pytest.mark.asyncio

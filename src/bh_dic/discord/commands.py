@@ -9,11 +9,15 @@ from datetime import date
 import discord
 from discord import app_commands
 
+from bh_dic.dic.errors import DicError
 from bh_dic.discord.checks import DiscordAccessDenied, DiscordActor, DiscordGate
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import AttachmentPayload, InteractionCoordinator, InteractionResult
 from bh_dic.discord.views import ApprovalView
+from bh_dic.hr_assistant import HrRequestInputError
 from bh_dic.language import BotLanguageProfile
+from bh_dic.openai.client import IntentProviderError
+from bh_dic.openai.redaction import UnsafePromptError
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,7 @@ class BHCommandGroup(app_commands.Group):
         interaction: discord.Interaction,
         operation: Callable[[DiscordActor], Awaitable[InteractionResult]],
     ) -> None:
+        deferred_ephemeral = False
         try:
             actor = self._actor(interaction)
             rate_limit = await self._rate_limiter.check(str(actor.user_id))
@@ -70,28 +75,78 @@ class BHCommandGroup(app_commands.Group):
                 return
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True, thinking=True)
+                deferred_ephemeral = True
             result = await operation(actor)
             view: discord.ui.View | None = None
             if result.action_id:
                 view = ApprovalView(
                     result.action_id, self._approve_from_view, self._reject_from_view
                 )
+            embed = result_embed(result, self._language_profile)
+            if not result.ephemeral and deferred_ephemeral:
+                # Discord fixes the privacy of the deferred original response.
+                # Complete that private acknowledgement first, then publish a
+                # separate follow-up only for an explicitly public aggregate.
+                await interaction.edit_original_response(
+                    content="Risultato aggregato pubblicato nel canale autorizzato.",
+                    embed=None,
+                    view=None,
+                )
             if view is None:
                 await interaction.followup.send(
-                    embed=result_embed(result, self._language_profile),
+                    embed=embed,
                     ephemeral=result.ephemeral,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 await interaction.followup.send(
-                    embed=result_embed(result, self._language_profile),
+                    embed=embed,
                     ephemeral=result.ephemeral,
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
         except DiscordAccessDenied as exc:
-            logger.warning("discord_access_denied", extra={"reason": exc.reason.value})
+            logger.warning(
+                "discord_access_denied",
+                extra={"details": {"reason": exc.reason.value}},
+            )
             message = "Richiesta non autorizzata per questo server, canale o ruolo."
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except (HrRequestInputError, UnsafePromptError):
+            logger.info("hr_request_rejected_locally")
+            message = (
+                "Per proteggere i dati HR, usa un solo Employee ID esplicito per le richieste "
+                "individuali e non includere istruzioni tecniche o di bypass."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except IntentProviderError as exc:
+            logger.warning(
+                "model_provider_unavailable",
+                extra={"details": {"exception_type": type(exc).__name__}},
+            )
+            message = (
+                "Il servizio AI non ha completato l'interpretazione della richiesta. "
+                "Nessuna operazione DIC è stata eseguita; riprova più tardi."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except (DicError, TimeoutError) as exc:
+            logger.warning(
+                "dic_operation_unavailable",
+                extra={"details": {"exception_type": type(exc).__name__}},
+            )
+            message = (
+                "Dipendenti in Cloud non è disponibile o la sessione verificata è scaduta. "
+                "Il bot resta online, ma questa lettura HR non è stata completata."
+            )
             if interaction.response.is_done():
                 await interaction.followup.send(message, ephemeral=True)
             else:

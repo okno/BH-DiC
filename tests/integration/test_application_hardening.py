@@ -318,7 +318,9 @@ async def test_approver_must_use_explicit_approve_literal() -> None:
     )
     requester = _actor(LogicalRole.HR_WRITE)
     try:
-        preview = await harness.coordinator.ask(requester, "contratto sintetico")
+        preview = await harness.coordinator.ask(
+            requester, "contratto sintetico employee id EMP-SYNTH-001"
+        )
         assert preview.action_id is not None
         await harness.coordinator.approve(
             requester, preview.action_id, _confirmation_code(preview.description)
@@ -743,7 +745,9 @@ async def test_uncertain_write_reconciles_without_retry(
     assert harness.repository is not None
     requester = _actor(LogicalRole.HR_WRITE)
     try:
-        preview = await harness.coordinator.ask(requester, "modifica sintetica")
+        preview = await harness.coordinator.ask(
+            requester, "modifica sintetica employee id EMP-SYNTH-001"
+        )
         assert preview.action_id is not None
         execute = AsyncMock(side_effect=execution_error)
         monkeypatch.setattr(harness.coordinator.dic, "execute", execute)
@@ -791,7 +795,9 @@ async def test_deterministic_execution_failure_is_persisted_and_reraised(
     assert harness.repository is not None
     requester = _actor(LogicalRole.HR_WRITE)
     try:
-        preview = await harness.coordinator.ask(requester, "modifica sintetica")
+        preview = await harness.coordinator.ask(
+            requester, "modifica sintetica employee id EMP-SYNTH-001"
+        )
         assert preview.action_id is not None
         monkeypatch.setattr(
             harness.coordinator.dic,
@@ -841,7 +847,9 @@ async def test_verified_write_persistence_failure_never_downgrades_or_dispatches
     assert harness.repository is not None
     requester = _actor(LogicalRole.HR_WRITE)
     try:
-        preview = await harness.coordinator.ask(requester, "modifica sintetica")
+        preview = await harness.coordinator.ask(
+            requester, "modifica sintetica employee id EMP-SYNTH-001"
+        )
         assert preview.action_id is not None
         execute = AsyncMock(wraps=harness.coordinator.dic.execute)
         complete_failure = AsyncMock(wraps=harness.approvals.complete_failure)
@@ -897,7 +905,9 @@ async def test_verified_write_remains_executing_if_unknown_persistence_also_fail
     assert harness.repository is not None
     requester = _actor(LogicalRole.HR_WRITE)
     try:
-        preview = await harness.coordinator.ask(requester, "modifica sintetica")
+        preview = await harness.coordinator.ask(
+            requester, "modifica sintetica employee id EMP-SYNTH-001"
+        )
         assert preview.action_id is not None
         execute = AsyncMock(wraps=harness.coordinator.dic.execute)
         monkeypatch.setattr(harness.coordinator.dic, "execute", execute)
@@ -939,7 +949,9 @@ async def test_application_audits_success_clarification_and_policy_denial(tmp_pa
     harness = await _harness(envelope, audit=audit)
     router = cast(FixedRouter, harness.coordinator.router)
     try:
-        result = await harness.coordinator.ask(_actor(LogicalRole.HR_READ), "riepilogo")
+        result = await harness.coordinator.ask(
+            _actor(LogicalRole.HR_READ), "riepilogo employee id EMP-SYNTH-001"
+        )
         assert result.success
 
         router.envelope = _intent(
@@ -949,12 +961,17 @@ async def test_application_audits_success_clarification_and_policy_denial(tmp_pa
             requires_clarification=True,
             clarification_question="Specifica il campo.",
         )
-        clarification = await harness.coordinator.ask(_actor(LogicalRole.HR_READ), "ambigua")
+        clarification = await harness.coordinator.ask(
+            _actor(LogicalRole.HR_READ), "ambigua employee id EMP-SYNTH-001"
+        )
         assert not clarification.success
 
         router.envelope = envelope
         with pytest.raises(ApplicationPolicyDenied):
-            await harness.coordinator.ask(_actor(LogicalRole.READ_ONLY), "riepilogo vietato")
+            await harness.coordinator.ask(
+                _actor(LogicalRole.READ_ONLY),
+                "riepilogo vietato employee id EMP-SYNTH-001",
+            )
 
         assert await audit.count() == 3
         assert (await audit.verify_or_raise()).valid
@@ -1043,7 +1060,7 @@ async def test_direct_document_pending_and_balance_commands() -> None:
 
 
 @pytest.mark.asyncio
-async def test_contract_employee_pagination_has_a_hard_safety_cap(
+async def test_contract_employee_pagination_fails_immediately_without_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     harness = await _harness()
@@ -1057,12 +1074,12 @@ async def test_contract_employee_pagination_has_a_hard_safety_cap(
     list_employees = AsyncMock(return_value=never_ending_page)
     monkeypatch.setattr(harness.coordinator.dic, "list_employees", list_employees)
     try:
-        with pytest.raises(ApplicationError, match="pagination safety limit"):
+        with pytest.raises(ApplicationError, match="pagination made no progress"):
             await harness.coordinator._render_contracts(
                 BHApplicationCoordinator._direct_intent("EMP-CONTRACT-001"),
                 "corr-pagination-limit",
             )
-        assert list_employees.await_count == 100
+        assert list_employees.await_count == 1
     finally:
         await harness.close()
 
