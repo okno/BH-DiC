@@ -4,9 +4,11 @@ Questa procedura prepara un'applicazione Discord slash-only limitata al guild e 
 allowlistati nella configurazione locale. I relativi ID non sono conservati nella repository e
 devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarli.
 
-> Stato al 17 agosto 2026: installazione guild-scoped e registrazione sono verificate; il gateway
-> ha risposto prima che un riavvio pre-0.2.7 si fermasse nel bootstrap DIC. Dopo la distribuzione
-> 0.2.7 deve rispondere anche con DIC `DEGRADED`. Il primo smoke storico è stato negato dal gate
+> Stato al 17 agosto 2026: installazione guild-scoped e registrazione sono verificate; dalla 0.2.7
+> il gateway è separato dal login DIC e deve rispondere anche con DIC `DEGRADED`. Il check DIC
+> corrente si è fermato a `TEAMSYSTEM_EMAIL`; i gate locali della candidata 0.2.8 sono verdi, la
+> verifica live resta `PENDING` e la release non modifica i permessi Discord. Il primo smoke
+> storico è stato negato dal gate
 > RBAC prima del dispatch; occorre correggere i ruoli senza ampliare guild o canale. Le istruzioni seguono la
 > documentazione Discord ufficiale
 > per [creare l'app e il bot](https://docs.discord.com/developers/quick-start/getting-started),

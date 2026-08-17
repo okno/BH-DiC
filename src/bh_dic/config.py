@@ -331,6 +331,14 @@ class AppSettings(BaseSettings):
         if self.mock_mode and self.app_env not in {"test", "development", "mock"}:
             raise ValueError("MOCK_MODE may only be used with APP_ENV=test, development, or mock")
 
+        if not self.mock_mode and (
+            self.playwright_trace_mode != "off" or self.save_failure_screenshots
+        ):
+            raise ValueError(
+                "Live DIC operation requires PLAYWRIGHT_TRACE_MODE=off and "
+                "SAVE_FAILURE_SCREENSHOTS=false"
+            )
+
         enabled_write_flags = [name for name in self.WRITE_FLAG_FIELDS if getattr(self, name)]
         if enabled_write_flags and not self.enable_write_actions:
             raise ValueError(

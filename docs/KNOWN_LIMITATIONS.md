@@ -30,6 +30,15 @@
   esatte `LoginEmail`/`LoginPassword` e, prima di compilare il segreto, richiede che l'identità
   esposta dal form password coincida con quella configurata. Qualunque assenza, ambiguità o
   mismatch fallisce chiuso.
+- Il check server corrente della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL` prima delle azioni
+  credenziali. La UI pubblica corrente espone la schermata e-mail anche sulla root TeamSystem
+  esatta e il flusso OIDC attraversa `/connect/authorize` e `/connect/authorize/callback`. La
+  candidata 0.2.8 gestisce soltanto questi path esatti e il legacy `/Account/LoginEmail`; può
+  accettare SSO senza controlli soltanto dopo marker DIC e tenant attestato, con zero azioni
+  credenziali. I gate locali sono verdi; la verifica live resta `PENDING`.
+- Dopo la rotazione di password/account/tenant, il vault precedente deve essere invalidato una
+  volta deliberatamente prima di un unico check live. Questa procedura non autorizza retry dopo
+  `CREDENTIAL_SUBMIT` o un altro esito post-submit incerto.
 - Il gateway 0.2.7 non invia credenziali DIC all'avvio. Un vault mancante, scaduto o illeggibile
   lascia Discord disponibile in stato `DEGRADED`; il check esplicito resta fail-closed e non
   sovrascrive automaticamente un vault illeggibile.
@@ -110,8 +119,9 @@ semantica, permessi e postcondizioni.
   dell'approvazione, ma richiede comunque accesso read al tenant.
 - Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
   offline/online sono stati verificati sul Debian target. Login DIC/tenant e gateway Discord hanno
-  avuto successi storici separati, ma l'ultimo servizio pre-0.2.7 si è fermato prima del gateway;
-  il nuovo restore vault, l'avvio degradato, il restore drill e il carico reale restano da verificare.
+  avuto successi storici separati; il check DIC corrente 0.2.7 si è fermato a
+  `TEAMSYSTEM_EMAIL`. La correzione 0.2.8, il nuovo restore vault, il restore drill e il carico
+  reale restano da verificare sul target.
 
 ## Criterio per rimuovere una limitazione
 

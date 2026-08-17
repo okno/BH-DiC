@@ -5,6 +5,38 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-08-17
+
+### Fixed
+
+- Il login federato riconosce come schermata e-mail TeamSystem sia la root HTTPS esatta `/`,
+  osservata nell'interfaccia pubblica corrente, sia la route legacy esatta
+  `/Account/LoginEmail`. Le transizioni OIDC documentate `/connect/authorize` e
+  `/connect/authorize/callback` sono ammesse soltanto come stati pending bounded sulla stessa
+  origine esatta; non sono stati introdotti prefix match, route generiche o User-Agent spoofing.
+- Una sessione TeamSystem ancora valida può completare il Single Sign-On senza mostrare o usare
+  controlli e-mail/password. Questo percorso viene accettato soltanto dopo route applicativa DIC,
+  marker autenticato e attestazione tenant first-party esatta, e garantisce zero azioni sui
+  controlli delle credenziali. Un risultato non attestabile continua a fallire chiuso.
+
+### Security
+
+- Dopo una rotazione di password/account/tenant il vecchio vault deve essere invalidato una sola
+  volta, deliberatamente e con servizio fermo, prima di un unico `dic-auth-check --live`.
+  `CREDENTIAL_SUBMIT` o qualunque esito post-submit incerto vieta ogni retry automatico o in loop.
+- Schema, host, path, porta, userinfo e fragment restano confrontati fail-closed; query OIDC e
+  `login_hint` rimangono opachi e non vengono letti né registrati.
+- Route, account, CAPTCHA, unicità e stato del controllo vengono rivalidati nello stesso task che
+  compila o invia la password, impedendo il retargeting durante una navigazione concorrente. Le
+  configurazioni non-mock rifiutano trace e screenshot Playwright, che potrebbero acquisire
+  credenziali, cookie o PII.
+
+### Verification
+
+- Gate locali completi della candidata 0.2.8: 655 test passati, branch coverage 85,88%, Ruff,
+  mypy, Bandit, dependency check/audit, YAML, script operativi e link documentali verdi. La
+  correzione non è ancora stata verificata sul target DIC live.
+
 ## [0.2.7] - 2026-08-17
 
 ### Fixed
@@ -180,7 +212,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/okno/BH-DiC/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/okno/BH-DiC/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/okno/BH-DiC/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/okno/BH-DiC/compare/v0.2.4...v0.2.5

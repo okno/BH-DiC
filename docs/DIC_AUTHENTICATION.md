@@ -10,8 +10,12 @@ fragment. Playwright non disabilita TLS e non usa `--ignore-certificate-errors`.
 Il solo flusso federato ammesso aggiunge questi target HTTPS esatti e nessun altro:
 
 - `https://secure.dipendentincloud.it/it/login`;
+- `https://identity.teamsystem.com/`, esclusivamente come schermata e-mail corrente;
 - `https://identity.teamsystem.com/Account/LoginEmail`;
 - `https://identity.teamsystem.com/Account/LoginPassword`;
+- `https://identity.teamsystem.com/connect/authorize`, esclusivamente come stato pending bounded;
+- `https://identity.teamsystem.com/connect/authorize/callback`, esclusivamente come stato pending
+  bounded;
 - `https://secure.dipendentincloud.it/it/callback`, esclusivamente come stato transitorio
   post-submit entro lo stesso budget del login.
 
@@ -19,7 +23,10 @@ Schema, host, porta e path sono confrontati esattamente e i fragment sono
 rifiutati; sulla callback DIC la query opaca può essere presente ma non viene letta né registrata.
 Una porta esplicita, userinfo, trailing slash, path aggiuntivo, altra origine TeamSystem,
 sottodominio somigliante o redirect inatteso falliscono chiuso. Gli eventuali parametri di stato
-dell'IdP non possono cambiare il confronto. Il percorso passwordless non viene usato. La route
+dell'IdP non possono cambiare il confronto e la query opaca, incluso l'eventuale `login_hint`, non
+viene letta né registrata. Non viene mai azionato un controllo passwordless: una sessione SSO
+TeamSystem già valida può invece saltare i form soltanto se il successivo marker applicativo e il
+tenant DIC vengono attestati esattamente, senza compilare credenziali. La route
 `/Account/LoginPasswordExpired` viene riconosciuta soltanto per produrre un errore
 fail-closed che richiede rinnovo umano.
 
@@ -44,6 +51,13 @@ risiedono in `sessionStorage`, che il solo `storage_state` Playwright non conser
 entrambe le transizioni TeamSystem esatte sono ammesse; prima del segreto il form è vincolato
 all'account configurato e il vault cifrato include anche lo snapshot bounded della sola origine
 DIC. Il normale gateway non invia credenziali e resta disponibile `DEGRADED` se il restore manca.
+Il successivo check server della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL`: l'interfaccia pubblica
+corrente espone anche la schermata e-mail sulla root TeamSystem esatta e l'OIDC attraversa le
+route esatte `connect/authorize`/`connect/authorize/callback`. La candidata 0.2.8 tratta questi
+soli stati come documentato sopra. Se una sessione IdP già valida completa il SSO senza schermate
+credenziali, il percorso è accettato soltanto dopo route applicativa DIC, marker autenticato e
+attestazione tenant esatta, con zero fill/click/submit sui controlli e-mail/password. I gate locali
+della 0.2.8 sono verdi; la verifica live resta `PENDING`.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright o una funzione di navigazione arbitraria. Il confine applicativo è il
@@ -96,20 +110,26 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    limitato, ricontrollando a ogni polling la route esatta, il CAPTCHA e
    l'unicità del controllo visibile. Un cambio di origine/path, zero controlli a
    scadenza o più controlli visibili fallisce chiuso.
-4. `authenticate()` segue soltanto la sequenza allowlisted DIC → `LoginEmail` →
-   `LoginPassword` oppure DIC → `LoginPassword` quando TeamSystem usa il `login_hint` già
-   verificato. In quest'ultimo caso non compila né invia nuovamente l'e-mail. Ogni altra route
-   fallisce chiuso; il controllo password resta univoco e il submit resta singolo. I segreti sono
-   compilati direttamente nei controlli previsti.
+4. `authenticate()` segue soltanto la sequenza allowlisted DIC → root TeamSystem esatta oppure
+   `/Account/LoginEmail` → `/Account/LoginPassword`; può anche entrare direttamente su
+   `/Account/LoginPassword` quando TeamSystem usa il `login_hint` già verificato. Le sole
+   `/connect/authorize` e `/connect/authorize/callback` esatte sono pending bounded, mai schermate
+   su cui cercare controlli. Nel percorso password diretto non compila né invia nuovamente
+   l'e-mail. Ogni altra route fallisce chiuso; il controllo password resta univoco e il submit
+   resta singolo. I segreti sono compilati direttamente nei controlli previsti.
    Non espone primitive di navigazione arbitrarie. Il campo e-mail DIC usa l'unico
    input nativo sotto il contenitore pubblico `data-testid="login-email"`, evitando
    il placeholder che nella 0.2.3 risolveva anche il componente padre. Il submit DIC
    usa prima il `data-testid` e poi il fallback pubblico verificato
    `button`/`Accedi` esatto.
-5. Dopo l'unico submit password, la route DIC esatta `/it/callback` è ammessa soltanto come stato
-   transitorio, con query opaca mai ispezionata o registrata. Il polling continua entro il budget
-   residuo; fragment, porta esplicita, userinfo, host somigliante, trailing slash e path aggiuntivi
-   sono rifiutati. Non esiste un secondo submit automatico.
+5. Una sessione TeamSystem già autenticata può saltare entrambe le schermate credenziali. Questo
+   SSO silenzioso è accettato esclusivamente quando raggiunge la route applicativa DIC e il probe
+   conferma sia marker autenticato sia tenant atteso; prima di tale prova non viene dichiarato
+   alcun successo. Il percorso garantisce zero azioni sui controlli e-mail/password. Dopo
+   l'eventuale unico submit password, la route DIC esatta `/it/callback` è ammessa soltanto come
+   stato transitorio, con query opaca mai ispezionata o registrata. Il polling continua entro il
+   budget residuo; fragment, porta esplicita, userinfo, host somigliante, trailing slash e path
+   aggiuntivi sono rifiutati. Non esiste un secondo submit automatico.
 6. Probe di sessione e autenticazione sono serializzati dalla stessa coda e
    acquisiscono lo stesso lock browser, ma vengono eseguiti una sola volta. Il
    valore predefinito usa 60 secondi per il flusso e un guard esterno di 65
@@ -203,7 +223,9 @@ decide se conservarlo o invalidarlo. Questa composizione è testata
 localmente. I tentativi 0.2.2 e 0.2.3 si
 sono fermati prima del submit password; la 0.2.4 ha raggiunto la callback DIC dopo un singolo
 submit, ma l'ha rifiutata fail-closed. Un successivo check headless ha confermato autenticazione e
-tenant nel contesto corrente; la 0.2.7 corregge il ripristino completo dopo il riavvio.
+tenant nel contesto corrente; la 0.2.7 corregge il ripristino completo dopo il riavvio. Il check
+server 0.2.7 successivo si è fermato a `TEAMSYSTEM_EMAIL`; la candidata 0.2.8 amplia soltanto il
+contratto di route esatte descritto sopra e non è ancora verificata live.
 Un errore di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
@@ -241,8 +263,11 @@ nativo univoco, ha effettuato un solo submit e ha poi rifiutato la callback DIC 
 78. La 0.2.5 corregge esclusivamente questo stato transitorio e l'attesa bounded del marker.
 Il check autorizzato 0.2.5 è stato eseguito una sola volta con bot fermo e write disabilitate e ha
 verificato autenticazione, tenant e scrittura del vault nel processo corrente; il riavvio ha poi
-evidenziato il campo `sessionStorage` mancante, corretto nella 0.2.7. In assenza del flag il codice live non
-viene invocato; per futuri rinnovi o invalidazioni resta obbligatoria la stessa procedura singola.
+evidenziato il campo `sessionStorage` mancante, corretto nella 0.2.7. Il check 0.2.7 corrente si è
+fermato prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`; la candidata 0.2.8 corregge il solo
+contratto corrente TeamSystem/OIDC e resta da verificare live. In assenza del flag il codice live
+non viene invocato; per futuri rinnovi o invalidazioni resta obbligatoria la stessa procedura
+singola.
 
 ## Invalidazione e rotazione
 
@@ -262,9 +287,12 @@ indecifrabile. La sequenza sicura è: fermare il servizio, invalidare il vault,
 ruotare la chiave nel secret manager, riavviare e autenticare nuovamente. Non
 conservare copie in chiaro della chiave precedente.
 
-Una rotazione di password, account o tenant richiede sempre l'invalidazione del
-vault. Un cambio di tenant deve aggiornare anche `DIC_EXPECTED_TENANT_ID`; senza
-questa corrispondenza l'adapter rifiuta la sessione.
+Una rotazione di password, account o tenant richiede sempre l'invalidazione deliberata del vault,
+con servizio fermo. Dopo la rotazione eseguire `invalidate-session` esattamente una volta e poi un
+solo `dic-auth-check --live`; non alternare invalidazioni e tentativi e non creare un loop. Un
+cambio di tenant deve aggiornare anche `DIC_EXPECTED_TENANT_ID`; senza questa corrispondenza
+l'adapter rifiuta la sessione. Se il check restituisce `CREDENTIAL_SUBMIT`, l'invio può essere
+partito: fermarsi e non ritentare, anche se il vault è assente.
 
 ## Diagnostica senza segreti
 
@@ -286,6 +314,8 @@ risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con
 Dalla 0.2.7 il normale comando di servizio `run` non invia credenziali DIC e può restare online
 `DEGRADED`; `RestartPreventExitStatus=78` rimane una difesa aggiuntiva. Fermare il check esplicito,
 non rilanciarlo in loop e verificare lo stato dell'account con una procedura umana autorizzata.
+La candidata 0.2.8 non cambia questa regola: il percorso SSO senza credenziali è accettato solo
+dopo marker e tenant e non autorizza un retry quando l'esito del submit è incerto.
 
 Il caso osservato nella 0.2.4 è stato ricondotto alla callback DIC legittima non ancora
 allowlistata, non allo user agent: la 0.2.5 conserva lo user agent Chromium nativo e non introduce

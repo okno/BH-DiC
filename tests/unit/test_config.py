@@ -58,6 +58,37 @@ def test_mock_mode_is_forbidden_in_production_environment() -> None:
         AppSettings(app_env="production", mock_mode=True, _env_file=None)
 
 
+@pytest.mark.parametrize(
+    "unsafe_capture",
+    [
+        {"playwright_trace_mode": "on"},
+        {"playwright_trace_mode": "retain-on-failure"},
+        {"save_failure_screenshots": True},
+    ],
+)
+def test_live_dic_rejects_trace_and_screenshot_capture(
+    unsafe_capture: dict[str, object],
+) -> None:
+    with pytest.raises(
+        ValidationError,
+        match=("PLAYWRIGHT_TRACE_MODE=off and SAVE_FAILURE_SCREENSHOTS=false"),
+    ):
+        AppSettings(**valid_runtime_values(), **unsafe_capture, _env_file=None)
+
+
+def test_synthetic_mock_may_enable_visual_diagnostics() -> None:
+    settings = AppSettings(
+        app_env="test",
+        mock_mode=True,
+        playwright_trace_mode="retain-on-failure",
+        save_failure_screenshots=True,
+        _env_file=None,
+    )
+
+    assert settings.playwright_trace_mode == "retain-on-failure"
+    assert settings.save_failure_screenshots is True
+
+
 def test_openai_provider_storage_is_always_rejected() -> None:
     with pytest.raises(ValidationError, match="OPENAI_STORE=true is forbidden"):
         AppSettings(app_env="test", mock_mode=True, openai_store=True, _env_file=None)

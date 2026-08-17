@@ -7,12 +7,14 @@ deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima
 l'adapter browser.
 
 > Stato al 17 agosto 2026: Debian 12 e Groq `openai/gpt-oss-120b` sono verificati. Un check DIC
-> headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; un riavvio
-> successivo della release precedente alla 0.2.7 ha però perso lo stato federato e si è fermato
-> fail-closed a `TEAMSYSTEM_EMAIL`, lasciando il gateway offline. La 0.2.7 separa l'avvio Discord
-> dal login DIC e conserva cifrato anche `sessionStorage`; è verificata sinteticamente ma non ancora
-> sul target. Il primo smoke Discord storico è stato negato dal gate RBAC prima del dispatch:
-> nessuna Function ID live è collaudata e tutte le write restano `DISABLED_BY_POLICY`.
+> headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; la 0.2.7 è
+> stata poi distribuita, ma il check corrente sul server si è fermato fail-closed a
+> `TEAMSYSTEM_EMAIL`. La candidata 0.2.8 riconosce l'ingresso e-mail TeamSystem corrente sulla root
+> esatta, le transizioni OIDC esatte e il completamento SSO senza credenziali soltanto dopo marker
+> applicativo e attestazione tenant; i gate locali sono verdi e la verifica live resta `PENDING`.
+> Il gateway
+> resta separato dal login DIC. Nessuna Function ID live è collaudata e tutte le write restano
+> `DISABLED_BY_POLICY`.
 
 ## Uso autorizzato
 
@@ -74,9 +76,10 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). L'ultima istanza osservata si è fermata prima del gateway su una
-release precedente alla 0.2.7; dopo l'aggiornamento occorre rigenerare una volta il vault completo,
-avviare systemd e correggere la mappatura RBAC prima dello smoke read-only.
+[Deployment](docs/DEPLOYMENT.md). Il check DIC corrente della 0.2.7 si è fermato a
+`TEAMSYSTEM_EMAIL`; distribuire la candidata 0.2.8 soltanto dopo i gate, invalidare una sola volta
+il vault creato prima della rotazione della credenziale e lanciare esattamente un check live. Il
+gateway può essere avviato `DEGRADED` anche se il check DIC non riesce.
 
 ## Configurazione e operatività
 
@@ -136,6 +139,10 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 - Dalla 0.2.7 il gateway Discord non invia credenziali DIC durante l'avvio: se la sessione cifrata
   è assente, scaduta o illeggibile resta online in modalità `DEGRADED`, mentre le funzioni DIC
   falliscono chiuso e il vault non viene sovrascritto.
+- La 0.2.8 limita le transizioni federate alla root e-mail TeamSystem e alle route OIDC esatte. Un
+  SSO silenzioso non tocca controlli credenziali ed è valido soltanto dopo marker DIC e tenant
+  attestato. Dopo una rotazione credenziale il vecchio vault va invalidato deliberatamente una
+  volta; un esito `CREDENTIAL_SUBMIT` non deve essere ritentato.
 - Prima di qualunque smoke read-only verificare il ruolo Discord dell'operatore. La creazione del
   bot o l'ownership del guild non sostituiscono la mappa RBAC.
 

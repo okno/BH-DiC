@@ -1,6 +1,11 @@
 """Route-scoped DIC page objects."""
 
-from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, PageLike, VerifiedUploadPayload
+from bh_dic.dic.pages.base import (
+    BaseDicPage,
+    LocatorLike,
+    PageLike,
+    VerifiedUploadPayload,
+)
 from bh_dic.dic.pages.routes import (
     EmployeeBalancePage,
     EmployeeContractsPage,

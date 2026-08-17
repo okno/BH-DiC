@@ -7,21 +7,22 @@
   runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- il servizio è stato inizialmente `active/running`, poi un riavvio pre-0.2.7 si è fermato
-  fail-closed con exit 78 a `TEAMSYSTEM_EMAIL`, prima dell'avvio del gateway;
+- la 0.2.7 è stata distribuita; il check DIC corrente si è fermato fail-closed a
+  `TEAMSYSTEM_EMAIL` prima di qualunque azione sulla credenziale, mentre il gateway resta
+  separato dal login DIC;
 - nessuna Function ID DIC read o write verificata live;
 - check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED` e tenant
   `VERIFIED_BY_ADAPTER` nel processo corrente; il vault pre-0.2.7 non conservava `sessionStorage`;
 - comando guild-scoped registrato e gateway storicamente responsivo; primo smoke negato dal gate
-  RBAC prima del dispatch, ma l'ultima istanza osservata è offline;
+  RBAC prima del dispatch;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-La release candidata 0.2.7 separa il gateway dal login DIC, conserva cifrato lo snapshot bounded
-`sessionStorage` e gestisce sia `LoginEmail` sia `LoginPassword` diretto con binding dell'account.
-I gate sintetici della release candidata 0.2.7 sono verdi: 614 test, branch coverage 86%, Ruff,
-mypy, Bandit, audit dipendenze e controlli privacy senza finding. Il dettaglio è
-nell'implementation report. Sul target sono stati eseguiti solo i controlli operativi riportati
-sopra; nessun test live ha eseguito una Function ID DIC.
+La 0.2.7 separa il gateway dal login DIC e conserva cifrato lo snapshot bounded
+`sessionStorage`. La candidata 0.2.8 aggiunge soltanto il contratto corrente verificato
+pubblicamente: root e-mail TeamSystem esatta, legacy `/Account/LoginEmail`, transizioni pending
+bounded `/connect/authorize`/`/connect/authorize/callback` e SSO senza azioni credenziali accettato
+solo dopo marker DIC e tenant attestato. I gate locali 0.2.8 sono verdi, ma la candidata non è
+ancora verificata live. Sul target non è stata eseguita alcuna Function ID DIC.
 
 ## Runbook giornaliero
 
@@ -92,16 +93,20 @@ Se il vault non esiste (prima installazione, rotazione o invalidazione), il fall
 non attesta nulla sul login. In quel caso procedere soltanto con l'unico check live autorizzato
 descritto sotto.
 
-La password TeamSystem è stata rinnovata e il secret locale aggiornato. Per aggiornare un vault
-legacy alla 0.2.7, fermare il servizio, mantenere le write disabilitate ed eseguire una sola volta:
+La password TeamSystem è stata rinnovata e il secret locale aggiornato. Il vault esistente precede
+quella rotazione: dopo aver distribuito la candidata 0.2.8 e completato i gate, fermare il servizio,
+mantenere le write disabilitate, invalidarlo deliberatamente una sola volta e poi eseguire un solo
+check live:
 
 ```bash
+.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ```
 
-Non invalidare preventivamente un vault leggibile soltanto perché è legacy: il check può
-aggiornarlo in modo atomico. Invalidare è un'azione distinta, riservata a compromissione, rotazione
-della chiave del vault o errore `DicSessionVaultError` verificato dall'operatore. Il comando prova la
+Non invalidare un vault leggibile per un semplice upgrade; in questo caso l'invalidazione è invece
+richiesta perché la credenziale è stata ruotata. Invalidare resta un'azione distinta e deliberata
+per compromissione, rotazione di password/account/tenant o della chiave del vault, oppure errore
+`DicSessionVaultError` verificato dall'operatore. Il comando prova la
 route applicativa fissa e richiede l'attestazione passiva dell'azienda corrente. Se serve login,
 accetta solo origini/route TeamSystem esatte e vincola l'account osservato all'utente configurato
 prima di compilare il segreto. Qualunque mismatch, risposta mancante, password scaduta,
@@ -128,7 +133,10 @@ trailing slash e path aggiuntivi. Il marker autenticato viene atteso entro la ca
 `/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il singolo
 check headless successivo al login manuale è stato completato. La 0.2.7 ammette anche l'ingresso
 diretto alla route password quando DIC usa `login_hint`, senza cambio user agent né fallback
-generici; un nuovo exit 78 impone nuovamente lo stop del check senza retry.
+generici. Il check server 0.2.7 corrente si è fermato a `TEAMSYSTEM_EMAIL`. La candidata 0.2.8
+riconosce anche la root e-mail esatta corrente e le sole transizioni OIDC esatte; un SSO silenzioso
+non esegue fill/click/submit credenziali ed è valido solo dopo marker DIC e tenant attestato. Un
+nuovo exit 78 o `CREDENTIAL_SUBMIT` impone lo stop del check senza retry né nuova invalidazione.
 
 ### Log
 

@@ -3,8 +3,9 @@
 Il debug deve preservare gli stessi confini di produzione. Non disabilitare TLS, host-key
 checking, RBAC, redazione, ClamAV, audit o feature flag per ottenere un test verde. Usare solo
 dati sintetici. Sul target sono stati verificati separatamente provider, autenticazione/tenant e
-trasporto Discord, senza eseguire Function ID HR; l'ultimo servizio pre-0.2.7 si è fermato prima
-del gateway. La correzione 0.2.7 resta da distribuire e verificare live.
+trasporto Discord, senza eseguire Function ID HR. La 0.2.7 è distribuita, ma il check DIC corrente
+si è fermato a `TEAMSYSTEM_EMAIL`; la correzione candidata 0.2.8 ha gate locali verdi e verifica
+live `PENDING`.
 
 ## Modalità DEBUG locale
 
@@ -29,9 +30,16 @@ ma messaggi aggiunti manualmente possono essere pericolosi: non loggare request 
 
 ## Playwright headed, trace e screenshot
 
-Per diagnosticare UI drift su ambiente autorizzato e con dati sintetici:
+Trace e screenshot Playwright possono contenere credenziali, cookie e PII. Per questo motivo una
+configurazione non-mock viene rifiutata se `PLAYWRIGHT_TRACE_MODE` non è `off` oppure
+`SAVE_FAILURE_SCREENSHOTS` non è `false`. Non abilitarli durante `dic-auth-check --live`, sul
+tenant reale o sul servizio di produzione.
+
+Per eventuali harness di sviluppo usare esclusivamente componenti mock e dati sintetici:
 
 ```dotenv
+APP_ENV=development
+MOCK_MODE=true
 DIC_HEADLESS=false
 PLAYWRIGHT_TRACE_MODE=retain-on-failure
 SAVE_FAILURE_SCREENSHOTS=true
@@ -39,9 +47,9 @@ TRACE_RETENTION_HOURS=4
 ENABLE_WRITE_ACTIONS=false
 ```
 
-Eseguire un solo smoke test read-only, poi ripristinare `DIC_HEADLESS=true`, trace `off` e
-screenshot `false`. Trace e immagini possono contenere PII/cookie: salvarli in `var/` con `0600`,
-non allegarli a issue, eseguire redazione/manual review e cancellarli alla scadenza.
+Anche questi artefatti sintetici vanno salvati in `var/` con `0600`, non allegati automaticamente
+a issue e cancellati alla scadenza. Le variabili di cattura non autorizzano né implementano una
+cattura sul flusso live.
 
 ## Correlation ID
 
@@ -87,7 +95,7 @@ Non usare employee ID reale come chiave di ricerca nei log.
 ### Selettori rotti / UI drift
 
 - acquisire route e nome page object dall'errore;
-- usare headed/trace soltanto read-only;
+- riprodurre headed/trace soltanto in mock con fixture sintetiche;
 - aggiornare il selector registry e fixture DOM sintetica/redatta in una modifica separata;
 - eseguire unit test page object e smoke read-only autorizzato;
 - non correggere un selettore direttamente in produzione e non provare una write.

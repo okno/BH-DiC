@@ -6,10 +6,12 @@ specialistici collegati approfondiscono i singoli controlli.
 
 > Stato al 17 agosto 2026: runtime Debian 12 e Groq `openai/gpt-oss-120b` sono verificati. La 0.2.5
 > ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER` nel processo corrente; un
-> riavvio successivo pre-0.2.7 ha perso lo stato federato non incluso nel vecchio vault e si è
-> fermato a `TEAMSYSTEM_EMAIL`, prima del gateway. La 0.2.7 corregge il vault e separa Discord dal
-> login DIC; è testata sinteticamente ma non ancora distribuita. Nessuna Function ID DIC è stata
-> collaudata live e tutte le write devono restare `DISABLED_BY_POLICY`.
+> riavvio successivo pre-0.2.7 ha perso lo stato federato non incluso nel vecchio vault. La 0.2.7
+> è stata distribuita, ma il check DIC corrente si è fermato a `TEAMSYSTEM_EMAIL` prima delle
+> azioni credenziali. La candidata 0.2.8 corregge il contratto corrente TeamSystem/OIDC; i gate
+> locali sono verdi e la verifica live resta `PENDING`. Nessuna Function ID DIC è stata collaudata
+> live e tutte
+> le write devono restare `DISABLED_BY_POLICY`.
 
 ## 1. Decisioni prima dell'installazione
 
@@ -286,11 +288,13 @@ del vault fa fallire correttamente questo comando: non è un errore di login e n
 bootstrap live.
 
 Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale e
-aggiornare `DIC_PASSWORD` localmente senza mostrarla. Non invalidare preventivamente un vault
-leggibile soltanto per l'upgrade: la 0.2.7 può convertirlo al formato completo. Distribuire la
-release 0.2.7 e, con autorizzazione esplicita alla rete DIC, eseguire una sola verifica:
+aggiornare `DIC_PASSWORD` localmente senza mostrarla. Non invalidare un vault leggibile per il
+solo upgrade, ma dopo una rotazione di password/account/tenant l'invalidazione è obbligatoria. Nel
+caso corrente, distribuire la candidata 0.2.8 dopo i gate e, con servizio fermo e autorizzazione
+esplicita alla rete DIC, eseguire una sola invalidazione seguita da una sola verifica:
 
 ```bash
+sudo -u bh-dic -H .venv/bin/python -m bh_dic invalidate-session
 sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check --live
 ```
 
@@ -314,10 +318,18 @@ partito senza che completamento, tenant o vault siano dimostrabili: fermarsi e v
 procedura umana, senza un nuovo login.
 
 La 0.2.7 ammette l'ingresso TeamSystem soltanto sulle route esatte `LoginEmail` e
-`LoginPassword`; prima del segreto verifica che l'account del form coincida con
+`LoginPassword`; il check server corrente si è però fermato a `TEAMSYSTEM_EMAIL`. La candidata
+0.2.8 riconosce anche la root e-mail TeamSystem esatta corrente e soltanto le transizioni pending
+bounded `/connect/authorize`/`/connect/authorize/callback`; prima del segreto verifica che
+l'account del form coincida con
 `DIC_USERNAME`. Il vault cifra cookie/localStorage e lo snapshot bounded `sessionStorage` della
 sola origine DIC. Il normale gateway non invia credenziali: se la sessione è mancante, scaduta o
 non utilizzabile, Discord resta online `DEGRADED` e le funzioni DIC falliscono chiuso.
+
+Se TeamSystem completa il SSO senza mostrare email/password, l'adapter non esegue alcuna azione
+credenziale: accetta il risultato soltanto dopo route applicativa DIC, marker autenticato e tenant
+attestato. Se il check restituisce `CREDENTIAL_SUBMIT`/exit 78, non ritentare e non invalidare
+nuovamente il vault per forzare un altro login.
 
 La registrazione guild-scoped va eseguita una volta dopo l'installazione o quando cambiano schema
 dei comandi, application ID o guild; non va ripetuta per modifiche RBAC o `.env`:

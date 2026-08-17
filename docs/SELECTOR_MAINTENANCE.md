@@ -23,7 +23,7 @@ non evidenza di stabilità sul DOM corrente.
 
 | Page Object | Route esatta ammessa | Namespace selettori |
 | --- | --- | --- |
-| `LoginPage` | `/it/login`; redirect federato limitato ai path TeamSystem documentati | `auth.*` |
+| `LoginPage` | `/it/login`; root e-mail TeamSystem `/`, legacy `/Account/LoginEmail`, `/Account/LoginPassword`; `/connect/authorize` e `/connect/authorize/callback` soltanto pending bounded | `auth.*` |
 | `EmployeesListPage` | `/it/app/employees/list` | `employees.*`, `row.*` |
 | `EmployeeSummaryPage` | `/it/app/employees/info/{employee_id}/summary` | `summary.*` |
 | `EmployeeRolesPage` | `/it/app/employees/info/{employee_id}/roles` | `roles.*` |
@@ -38,7 +38,10 @@ non evidenza di stabilità sul DOM corrente.
 fragment; valida il formato di `employee_id`, costruisce una route prevista e
 controlla origine e path con `open()`. L'autenticatore usa `navigate()` soltanto
 per le route fisse di login/session probe e valida ogni redirect contro l'allowlist
-esatta DIC/TeamSystem. Le altre navigazioni cross-origin o verso route diverse
+esatta DIC/TeamSystem. La root TeamSystem corrente riusa i controlli e-mail esatti del percorso
+legacy; le route OIDC pending non sono pagine su cui cercare selettori. Un SSO senza controlli
+deve raggiungere marker DIC e tenant attestato senza alcun fill/click/submit credenziale. Le altre
+navigazioni cross-origin o verso route diverse
 generano errore. Non esiste un metodo per aprire URL o selettori arbitrari.
 
 ## Inventario completo delle chiavi
@@ -127,7 +130,7 @@ Non salvare HTML autenticato grezzo. Se è necessaria una fixture DOM:
 - mantenere solo struttura accessibile e attributi coinvolti dal selettore;
 - riesaminare manualmente la fixture con una ricerca di PII/secret prima del
   commit;
-- non acquisire screenshot o trace live salvo autorizzazione e retention
+- non acquisire screenshot o trace live; riprodurre soltanto in mock con dati sintetici
   configurata; `SAVE_FAILURE_SCREENSHOTS=false` e `PLAYWRIGHT_TRACE_MODE=off`
   sono i default.
 

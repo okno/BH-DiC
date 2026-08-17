@@ -54,9 +54,13 @@ class FlowLocator:
         *,
         present: Callable[[], bool] = lambda: False,
         on_click: Callable[[], None] | None = None,
+        on_visible: Callable[[], None] | None = None,
+        on_evaluate: Callable[[str, object], object] | None = None,
     ) -> None:
         self._present = present
         self._on_click = on_click
+        self._on_visible = on_visible
+        self._on_evaluate = on_evaluate
         self.filled: list[str] = []
         self.clicks = 0
 
@@ -73,7 +77,18 @@ class FlowLocator:
         return int(self._present())
 
     async def is_visible(self) -> bool:
+        if self._on_visible is not None:
+            self._on_visible()
         return self._present()
+
+    async def evaluate(self, expression: str, argument: object = None) -> object:
+        if self._on_evaluate is not None:
+            return self._on_evaluate(expression, argument)
+        if isinstance(argument, dict) and "secret" in argument:
+            await self.fill(str(argument["secret"]))
+            return "CONTROL_OK"
+        await self.click()
+        return "CONTROL_OK"
 
     async def fill(self, value: str) -> None:
         self.filled.append(value)
@@ -173,6 +188,15 @@ class FailingFillLocator(FlowLocator):
         raise RuntimeError(f"{self.sensitive_message}:{value}")
 
 
+class FailingEvaluateLocator(FlowLocator):
+    def __init__(self, sensitive_message: str, *, present: Callable[[], bool]) -> None:
+        super().__init__(present=present)
+        self.sensitive_message = sensitive_message
+
+    async def evaluate(self, expression: str, argument: object = None) -> object:
+        raise RuntimeError(f"{self.sensitive_message}:{expression}:{argument}")
+
+
 class FailingProbeLocator(FlowLocator):
     def __init__(
         self,
@@ -194,6 +218,18 @@ class FailingProbeLocator(FlowLocator):
         if self.failure == "is_visible":
             raise RuntimeError(self.sensitive_message)
         return await super().is_visible()
+
+
+class TransientFailingProbeLocator(FlowLocator):
+    def __init__(self, *, failures: int, present: Callable[[], bool]) -> None:
+        super().__init__(present=present)
+        self.failures = failures
+
+    async def count(self) -> int:
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("synthetic transient probe failure")
+        return await super().count()
 
 
 class ManualMonotonic:
@@ -264,6 +300,7 @@ class AuthFlowPage:
         self.handlers: list[Callable[[FakeResponse], None]] = []
         self.goto_urls: list[str] = []
         self.waits = 0
+        self.identity_secret_value = ""
         self.dic_email = FlowLocator(
             present=lambda: self._url == f"{DIC_ORIGIN}/it/login",
         )
@@ -275,18 +312,34 @@ class AuthFlowPage:
             on_click=lambda: self._set_url(f"{IDENTITY_ORIGIN}/Account/LoginEmail?flow=x"),
         )
         self.identity_email = FlowLocator(
-            present=lambda: self._identity_path("/Account/LoginEmail"),
+            present=self._identity_email_route,
         )
         self.identity_email_submit = FlowLocator(
-            present=lambda: self._identity_path("/Account/LoginEmail"),
+            present=self._identity_email_route,
             on_click=self._finish_email,
         )
         self.identity_password = FlowLocator(
             present=lambda: self._identity_path("/Account/LoginPassword"),
         )
+        self.identity_password._on_evaluate = lambda expression, argument: (
+            self._atomic_credential_boundary(
+                self.identity_password,
+                "fill",
+                expression,
+                argument,
+            )
+        )
         self.identity_password_submit = FlowLocator(
             present=lambda: self._identity_path("/Account/LoginPassword"),
             on_click=self._finish_password,
+        )
+        self.identity_password_submit._on_evaluate = lambda expression, argument: (
+            self._atomic_credential_boundary(
+                self.identity_password_submit,
+                "submit",
+                expression,
+                argument,
+            )
         )
         self.identity_accounts = HiddenAccountLocator(
             identity_accounts,
@@ -313,8 +366,71 @@ class AuthFlowPage:
     def _identity_path(self, path: str) -> bool:
         return self._url.startswith(f"{IDENTITY_ORIGIN}{path}")
 
+    def _identity_email_route(self) -> bool:
+        return (
+            self._identity_path("/Account/LoginEmail")
+            or self._url
+            in {
+                IDENTITY_ORIGIN,
+                f"{IDENTITY_ORIGIN}/",
+            }
+            or self._url.startswith(f"{IDENTITY_ORIGIN}/?")
+        )
+
     def _set_url(self, url: str) -> None:
         self._url = url
+
+    def _atomic_credential_boundary(
+        self,
+        locator: FlowLocator,
+        operation: str,
+        expression: str,
+        argument: object,
+    ) -> object:
+        del expression
+        try:
+            exact_route = PlaywrightAuthenticator._is_exact_route(
+                self.url,
+                IDENTITY_ORIGIN,
+                "/Account/LoginPassword",
+            )
+        except DicAuthenticationError:
+            exact_route = False
+        if not exact_route or not isinstance(argument, dict):
+            return "CONTROL_INVALID"
+        if self.captcha_enabled:
+            return "CAPTCHA_PRESENT"
+        username = argument.get("username")
+        if not isinstance(username, str) or not username.strip():
+            return "CONTROL_INVALID"
+        expected = username.strip().casefold()
+        if not 1 <= len(self.identity_accounts.values) <= 4 or any(
+            value.strip().casefold() != expected for value in self.identity_accounts.values
+        ):
+            return "CONTROL_INVALID"
+        if operation == "fill":
+            secret = argument.get("secret")
+            if (
+                locator is not self.identity_password
+                or not locator._present()
+                or not isinstance(secret, str)
+                or not secret
+            ):
+                return "CONTROL_INVALID"
+            self.identity_secret_value = secret
+            locator.filled.append(secret)
+            return "CONTROL_OK"
+        if (
+            operation != "submit"
+            or locator is not self.identity_password_submit
+            or not locator._present()
+            or not self.identity_secret_value
+        ):
+            return "CONTROL_INVALID"
+        locator.clicks += 1
+        if locator._on_click is not None:
+            locator._on_click()
+        return "CONTROL_OK"
 
     def _finish_password(self) -> None:
         if self.identity_result == "authenticated":
@@ -393,6 +509,14 @@ class AuthFlowPage:
             else:
                 if self.session_result == "expired":
                     self._url = f"{IDENTITY_ORIGIN}/Account/LoginPasswordExpired?flow=session"
+                elif self.session_result == "root":
+                    self._url = f"{IDENTITY_ORIGIN}/?flow=session"
+                elif self.session_result == "authorize":
+                    self._url = f"{IDENTITY_ORIGIN}/connect/authorize?flow=session"
+                elif self.session_result == "authorize-callback":
+                    self._url = f"{IDENTITY_ORIGIN}/connect/authorize/callback?flow=session"
+                elif self.session_result == "dic-callback":
+                    self._url = f"{DIC_ORIGIN}/it/callback?flow=session"
                 else:
                     self._url = f"{IDENTITY_ORIGIN}/Account/LoginEmail?flow=session"
         elif url == f"{DIC_ORIGIN}/it/login":
@@ -492,6 +616,20 @@ async def test_restored_session_marker_hydration_timeout_fails_closed() -> None:
 @pytest.mark.asyncio
 async def test_session_status_is_unknown_after_exact_identity_redirect() -> None:
     page = AuthFlowPage(authenticated=False)
+
+    assert (await authenticator(page).status()).state is SessionState.UNKNOWN
+    assert page.handlers == []
+
+
+@pytest.mark.parametrize(
+    "session_result",
+    ("root", "authorize", "authorize-callback", "dic-callback"),
+)
+@pytest.mark.asyncio
+async def test_session_status_is_unknown_on_exact_federated_entry_routes(
+    session_result: str,
+) -> None:
+    page = AuthFlowPage(session_result=session_result)
 
     assert (await authenticator(page).status()).state is SessionState.UNKNOWN
     assert page.handlers == []
@@ -597,6 +735,241 @@ async def test_exact_dic_and_teamsystem_login_flow_attests_tenant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_current_teamsystem_root_email_form_completes_login() -> None:
+    page = AuthFlowPage()
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(f"{IDENTITY_ORIGIN}/?flow=opaque-synthetic-value"),
+    )
+
+    result = await authenticator(page).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.identity_email.filled == ["synthetic@example.invalid"]
+    assert page.identity_email_submit.clicks == 1
+    assert page.identity_password.filled == ["synthetic-password"]
+
+
+@pytest.mark.asyncio
+async def test_exact_authorize_routes_are_bounded_pending_before_root_email_form() -> None:
+    page = AuthFlowPage()
+    transitions = [
+        f"{IDENTITY_ORIGIN}/connect/authorize/callback?flow=opaque-synthetic-value",
+        f"{IDENTITY_ORIGIN}/?flow=opaque-synthetic-value",
+    ]
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/connect/authorize?flow=opaque-synthetic-value"
+        ),
+    )
+
+    async def advance_redirect(_delay: float) -> None:
+        if transitions:
+            page._set_url(transitions.pop(0))
+
+    result = await authenticator(page, sleeper=advance_redirect).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert transitions == []
+    assert page.identity_email.filled == ["synthetic@example.invalid"]
+    assert page.identity_password.filled == ["synthetic-password"]
+
+
+@pytest.mark.asyncio
+async def test_existing_idp_sso_is_tenant_attested_without_credential_actions() -> None:
+    page = AuthFlowPage()
+    transitions = [
+        f"{IDENTITY_ORIGIN}/connect/authorize/callback?flow=opaque-synthetic-value",
+        f"{DIC_ORIGIN}/it/callback?code=opaque-synthetic-value",
+        f"{DIC_ORIGIN}/it/app/dashboard",
+    ]
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/connect/authorize?flow=opaque-synthetic-value"
+        ),
+    )
+
+    async def complete_sso(_delay: float) -> None:
+        if transitions:
+            next_url = transitions.pop(0)
+            page._set_url(next_url)
+            if next_url == f"{DIC_ORIGIN}/it/app/dashboard":
+                page.authenticated = True
+
+    result = await authenticator(page, sleeper=complete_sso).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert transitions == []
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_existing_idp_sso_rejects_wrong_tenant_without_credential_actions() -> None:
+    class OtherTenantResponse(FakeResponse):
+        async def body(self) -> bytes:
+            return b'{"data":{"company":{"id":987654321}}}'
+
+    page = AuthFlowPage(response=OtherTenantResponse())
+    transitions = [
+        f"{DIC_ORIGIN}/it/callback?code=opaque-synthetic-value",
+        f"{DIC_ORIGIN}/it/app/dashboard",
+    ]
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/connect/authorize?flow=opaque-synthetic-value"
+        ),
+    )
+
+    async def complete_sso(_delay: float) -> None:
+        if transitions:
+            next_url = transitions.pop(0)
+            page._set_url(next_url)
+            if next_url == f"{DIC_ORIGIN}/it/app/dashboard":
+                page.authenticated = True
+
+    with pytest.raises(DicAuthorizationError, match="does not match"):
+        await authenticator(page, sleeper=complete_sso).authenticate(credentials())
+
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_email_route_reclassifies_if_captcha_probe_advances_to_password() -> None:
+    page = AuthFlowPage()
+
+    def enter_email_route() -> None:
+        page._set_url(f"{IDENTITY_ORIGIN}/Account/LoginEmail?flow=synthetic")
+        page.captcha = DelayedLocator(
+            missing_counts=1,
+            present=lambda: False,
+            on_missing=lambda: page._set_url(
+                f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value"
+            ),
+        )
+
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=enter_email_route,
+    )
+
+    result = await authenticator(page).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == ["synthetic-password"]
+
+
+@pytest.mark.asyncio
+async def test_email_control_hydration_may_advance_to_exact_password_route() -> None:
+    page = AuthFlowPage()
+    page.identity_email = DelayedLocator(
+        missing_counts=1,
+        present=lambda: page._identity_email_route(),
+        on_missing=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value"
+        ),
+    )
+
+    result = await authenticator(page).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == ["synthetic-password"]
+
+
+@pytest.mark.asyncio
+async def test_email_submit_hydration_may_advance_to_exact_password_route() -> None:
+    page = AuthFlowPage()
+    page.identity_email_submit = DelayedLocator(
+        missing_counts=1,
+        present=lambda: page._identity_email_route(),
+        on_missing=lambda: page._set_url(
+            f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value"
+        ),
+    )
+
+    result = await authenticator(page).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.identity_email.filled == ["synthetic@example.invalid"]
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == ["synthetic-password"]
+
+
+@pytest.mark.asyncio
+async def test_transient_entry_probe_error_retries_without_credential_action() -> None:
+    page = AuthFlowPage()
+
+    def enter_password_route() -> None:
+        page._set_url(f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value")
+        page.captcha = TransientFailingProbeLocator(
+            failures=1,
+            present=lambda: False,
+        )
+
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=enter_password_route,
+    )
+
+    result = await authenticator(
+        page,
+        monotonic=lambda: 0.0,
+        sleeper=_no_sleep,
+    ).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.captcha.failures == 0
+    assert page.identity_email.filled == []
+    assert page.identity_password.filled == ["synthetic-password"]
+
+
+@pytest.mark.asyncio
+async def test_permanent_entry_probe_error_times_out_before_credentials() -> None:
+    page = AuthFlowPage()
+    clock = ManualMonotonic()
+
+    def enter_password_route() -> None:
+        page._set_url(f"{IDENTITY_ORIGIN}/Account/LoginPassword?flow=opaque-synthetic-value")
+        page.captcha = FailingProbeLocator(
+            "count",
+            "synthetic permanent probe failure",
+            present=lambda: False,
+        )
+
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=enter_password_route,
+    )
+
+    async def expire_flow(_delay: float) -> None:
+        clock.value = 15.0
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(
+            page,
+            monotonic=clock,
+            sleeper=expire_flow,
+        ).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_EMAIL
+    assert page.identity_email.filled == []
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
 async def test_dic_login_hint_may_enter_exact_teamsystem_password_route_directly() -> None:
     page = AuthFlowPage()
     page.dic_submit = FlowLocator(
@@ -686,6 +1059,111 @@ async def test_teamsystem_account_binding_read_failure_is_redacted(
     assert page.identity_password_submit.clicks == 0
 
 
+@pytest.mark.asyncio
+async def test_password_route_change_during_visibility_never_sets_secret() -> None:
+    page = AuthFlowPage()
+    page.identity_password._on_visible = lambda: page._set_url(
+        "https://identity.teamsystem.com.evil.invalid/Account/LoginPassword"
+    )
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL
+    assert page.identity_password.filled == []
+    assert page.identity_secret_value == ""
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_late_captcha_during_password_visibility_never_sets_secret() -> None:
+    page = AuthFlowPage()
+    page.identity_password._on_visible = lambda: setattr(page, "captcha_enabled", True)
+
+    with pytest.raises(DicCaptchaRequiredError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL  # type: ignore[attr-defined]
+    assert page.identity_password.filled == []
+    assert page.identity_secret_value == ""
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.parametrize("drift", ["account", "route", "captcha"])
+@pytest.mark.asyncio
+async def test_submit_boundary_rejects_late_drift_without_dispatch(drift: str) -> None:
+    page = AuthFlowPage()
+
+    def mutate_submit_precondition() -> None:
+        if drift == "account":
+            page.identity_accounts.values = ("different@example.invalid",)
+        elif drift == "route":
+            page._set_url("https://identity.teamsystem.com.evil.invalid/Account/LoginPassword")
+        else:
+            page.captcha_enabled = True
+
+    page.identity_password_submit._on_visible = mutate_submit_precondition
+
+    if drift == "captcha":
+        with pytest.raises(DicCaptchaRequiredError) as caught:
+            await authenticator(page).authenticate(credentials())
+    else:
+        with pytest.raises(DicAuthUiChangedError) as caught:
+            await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL_SUBMIT  # type: ignore[attr-defined]
+    assert page.identity_password.filled == ["synthetic-password"]
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_atomic_secret_evaluate_failure_is_redacted_before_submit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = AuthFlowPage()
+    sensitive = "private-atomic-fill-marker"
+    page.identity_password = FailingEvaluateLocator(
+        sensitive,
+        present=lambda: page._identity_path("/Account/LoginPassword"),
+    )
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert sensitive not in str(caught.value)
+    assert "synthetic-password" not in str(caught.value)
+    assert sensitive not in caplog.text
+    assert "synthetic-password" not in caplog.text
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_atomic_submit_evaluate_failure_is_redacted_and_outcome_unknown(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = AuthFlowPage()
+    sensitive = "private-atomic-submit-marker"
+    page.identity_password_submit = FailingEvaluateLocator(
+        sensitive,
+        present=lambda: page._identity_path("/Account/LoginPassword"),
+    )
+
+    with pytest.raises(DicAuthOutcomeUnknownError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.CREDENTIAL_SUBMIT
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert sensitive not in str(caught.value)
+    assert "synthetic-password" not in str(caught.value)
+    assert sensitive not in caplog.text
+    assert "synthetic-password" not in caplog.text
+    assert page.identity_password_submit.clicks == 0
+
+
 @pytest.mark.parametrize(
     "password_url",
     [
@@ -705,6 +1183,42 @@ async def test_dic_login_hint_rejects_nonexact_teamsystem_password_routes(
     page.dic_submit = FlowLocator(
         present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
         on_click=lambda: page._set_url(password_url),
+    )
+
+    with pytest.raises(DicAuthUiChangedError) as caught:
+        await authenticator(page).authenticate(credentials())
+
+    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_EMAIL
+    assert page.identity_email.filled == []
+    assert page.identity_email_submit.clicks == 0
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.parametrize(
+    "entry_url",
+    [
+        IDENTITY_ORIGIN,
+        f"{IDENTITY_ORIGIN}//",
+        f"{IDENTITY_ORIGIN}/extra",
+        f"{IDENTITY_ORIGIN}/#fragment",
+        f"{IDENTITY_ORIGIN}:443/",
+        "https://user@identity.teamsystem.com/",
+        "https://identity.teamsystem.com.evil.invalid/",
+        f"{IDENTITY_ORIGIN}/connect/authorize/",
+        f"{IDENTITY_ORIGIN}/connect/authorize/extra",
+        f"{IDENTITY_ORIGIN}/connect/authorize#fragment",
+        f"{IDENTITY_ORIGIN}/connect/authorize/callback/",
+        f"{IDENTITY_ORIGIN}/connect/authorize/callback/extra",
+        f"{IDENTITY_ORIGIN}/connect/authorize/callback#fragment",
+    ],
+)
+@pytest.mark.asyncio
+async def test_federated_entry_rejects_nonexact_route_variants(entry_url: str) -> None:
+    page = AuthFlowPage()
+    page.dic_submit = FlowLocator(
+        present=lambda: page.url == f"{DIC_ORIGIN}/it/login",
+        on_click=lambda: page._set_url(entry_url),
     )
 
     with pytest.raises(DicAuthUiChangedError) as caught:
@@ -778,6 +1292,36 @@ async def test_exact_dic_callback_is_pending_until_app_route_then_attests_tenant
 
 
 @pytest.mark.asyncio
+async def test_exact_teamsystem_authorize_callback_is_pending_post_password() -> None:
+    page = AuthFlowPage()
+
+    def enter_callback() -> None:
+        page._set_url(f"{IDENTITY_ORIGIN}/connect/authorize/callback?flow=opaque-synthetic-value")
+        page.captcha = FailingProbeLocator(
+            "count",
+            "callback document has no stable controls",
+            present=lambda: False,
+        )
+
+    page.identity_password_submit = FlowLocator(
+        present=lambda: page._identity_path("/Account/LoginPassword"),
+        on_click=enter_callback,
+    )
+
+    async def complete_callback(_delay: float) -> None:
+        if page.url.startswith(f"{IDENTITY_ORIGIN}/connect/authorize/callback"):
+            page._set_url(f"{DIC_ORIGIN}/it/callback?code=opaque-synthetic-value")
+        elif page.url.startswith(f"{DIC_ORIGIN}/it/callback"):
+            page.authenticated = True
+            page._set_url(f"{DIC_ORIGIN}/it/app/dashboard")
+
+    result = await authenticator(page, sleeper=complete_callback).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.identity_password_submit.clicks == 1
+
+
+@pytest.mark.asyncio
 async def test_dic_email_fill_uses_native_input_despite_ambiguous_placeholder() -> None:
     page = AuthFlowPage()
 
@@ -822,14 +1366,34 @@ async def test_login_rejects_lookalike_identity_origin() -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_never_accepts_passwordless_identity_completion() -> None:
+async def test_sso_completion_is_accepted_only_after_tenant_attestation() -> None:
     page = AuthFlowPage(email_result="passwordless")
 
-    with pytest.raises(DicAuthUiChangedError) as caught:
+    result = await authenticator(page).authenticate(credentials())
+
+    assert result.state is SessionState.AUTHENTICATED
+    assert page.identity_email.filled == ["synthetic@example.invalid"]
+    assert page.identity_email_submit.clicks == 1
+    assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_sso_completion_rejects_a_different_tenant_without_password_action() -> None:
+    class OtherTenantResponse(FakeResponse):
+        async def body(self) -> bytes:
+            return b'{"data":{"company":{"id":987654321}}}'
+
+    page = AuthFlowPage(
+        email_result="passwordless",
+        response=OtherTenantResponse(),
+    )
+
+    with pytest.raises(DicAuthorizationError, match="does not match"):
         await authenticator(page).authenticate(credentials())
 
-    assert caught.value.stage is DicAuthStage.TEAMSYSTEM_CREDENTIAL
     assert page.identity_password.filled == []
+    assert page.identity_password_submit.clicks == 0
 
 
 @pytest.mark.asyncio

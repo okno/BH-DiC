@@ -128,6 +128,10 @@ SAVE_FAILURE_SCREENSHOTS=false
 PLAYWRIGHT_TRACE_MODE=off
 ```
 
+In ogni configurazione non-mock questi due valori sono invarianti: trace e screenshot vengono
+rifiutati perché possono acquisire credenziali, cookie e PII durante il login DIC. La diagnostica
+visuale è ammessa soltanto in un ambiente mock con dati sintetici.
+
 Ogni write richiede `ENABLE_WRITE_ACTIONS=true` **AND** il flag specifico **AND** policy/RBAC,
 conferma, approvazioni e precondizioni runtime. Un override runtime può soltanto restringere una
 baseline, mai abilitare un flag spento nella configurazione. Le azioni critiche richiedono A2

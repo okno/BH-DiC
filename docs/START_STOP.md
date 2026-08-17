@@ -1,9 +1,10 @@
 # Start e stop
 
-> Stato osservato al 17 agosto 2026: Doctor, Groq e un check DIC headless sono riusciti; il
-> comando guild-scoped è registrato. Un riavvio successivo della release precedente alla 0.2.7
-> si è fermato fail-closed su `TEAMSYSTEM_EMAIL`, lasciando il gateway offline. La 0.2.7 separa
-> l'avvio Discord dal login DIC e ripristina anche `sessionStorage` cifrato.
+> Stato osservato al 17 agosto 2026: Doctor, Groq e un check DIC headless storico sono riusciti;
+> il comando guild-scoped è registrato. La 0.2.7 è stata distribuita, ma il check DIC corrente si
+> è fermato fail-closed su `TEAMSYSTEM_EMAIL`. Il gateway resta separato dal login DIC. La
+> candidata 0.2.8 corregge il contratto corrente TeamSystem/OIDC; i gate locali sono verdi e la
+> verifica live resta `PENDING`.
 
 ## Prerequisiti
 
@@ -124,8 +125,8 @@ usare `kill -9` manualmente e non eliminare PID/lock senza verificare il process
 
 ## Sequenza di ripresa sul target
 
-Dopo l'aggiornamento alla release 0.2.7, mantenere le write disabilitate e fermare il servizio
-prima di creare o sostituire il vault:
+Dopo i gate e l'aggiornamento alla candidata 0.2.8, mantenere le write disabilitate e fermare il
+servizio prima di creare o sostituire il vault:
 
 ```bash
 cd /opt/bh-dic
@@ -135,9 +136,11 @@ cd /opt/bh-dic
 ```
 
 Il rinnovo umano della password TeamSystem e l'aggiornamento locale di `DIC_PASSWORD` sono già
-stati completati. Eseguire una sola verifica live autorizzata:
+stati completati. Poiché il vault precede quella rotazione, invalidarlo deliberatamente una sola
+volta e poi eseguire esattamente una verifica live autorizzata:
 
 ```bash
+.venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 systemctl start bh-dic.service
 systemctl is-active bh-dic.service
@@ -151,7 +154,12 @@ registrare la query, e attende il marker entro lo stesso budget mantenendo obbli
 La 0.2.7 accetta l'ingresso TeamSystem esatto sia su `LoginEmail` sia direttamente su
 `LoginPassword` quando DIC passa il `login_hint`; non cambia lo User-Agent e non aggiunge route
 generiche. Il vault conserva cifrati anche i token DIC in `sessionStorage`, così il riavvio può
-ripristinare la sessione completa. Eseguire il check live esattamente una volta. Se restituisce
+ripristinare la sessione completa. Il check server 0.2.7 corrente si è però fermato a
+`TEAMSYSTEM_EMAIL`. La candidata 0.2.8 riconosce anche la root e-mail TeamSystem esatta corrente e
+le sole transizioni bounded `/connect/authorize`/`/connect/authorize/callback`. Se l'IdP completa
+un SSO senza mostrare controlli, non viene eseguita alcuna azione credenziale e il successo
+richiede comunque marker DIC e attestazione tenant esatta. Eseguire invalidazione e check live
+esattamente una volta. Se il check restituisce
 JSON con `error_type`/`stage`, non trasformarlo in un loop: il servizio può comunque essere
 avviato in modalità degradata per rispondere a status/health, ma nessuna funzione DIC sarà
 operativa finché una sessione non viene verificata.
@@ -178,7 +186,9 @@ l'avvio e non attesta il tenant DIC.
 
 Al 17 agosto 2026 preparazione, provider e un check headless sono riusciti: sessione
 `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`. Il successivo riavvio ha perso i token conservati
-solo in `sessionStorage` e il servizio pre-0.2.7 si è fermato su `TEAMSYSTEM_EMAIL`; nessuna
-Function ID read/write DIC live è stata completata e le write restano disabilitate.
+solo in `sessionStorage`; dopo la distribuzione della 0.2.7, il check corrente si è fermato di
+nuovo su `TEAMSYSTEM_EMAIL` prima delle azioni credenziali. La candidata 0.2.8 e i suoi gate
+completi non sono ancora verificati live; nessuna Function ID read/write DIC live è stata
+completata e le write restano disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

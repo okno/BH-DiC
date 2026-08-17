@@ -81,7 +81,7 @@ The deployment owner must document concrete retention periods. Technical default
 | --- | --- | --- |
 | Pending approval | actionable for `PENDING_ACTION_TTL_MINUTES` (default 10) | retention of terminal metadata |
 | Attachment bytes | expires after `UPLOAD_RETENTION_HOURS` (default 24) | scheduled purge and exception process |
-| Playwright traces | disabled by default; bounded by `TRACE_RETENTION_HOURS` when enabled | approve diagnostic capture |
+| Playwright traces | vietati in non-mock; solo fixture sintetiche in ambiente mock | cancellazione alla scadenza |
 | Browser session | encrypted until expiry/invalidation | invalidate after personnel/credential changes |
 | Application/security logs | structured and redacted | rotation and deletion interval |
 | Audit chain | integrity/accountability record | statutory/HR retention and protected archival |
