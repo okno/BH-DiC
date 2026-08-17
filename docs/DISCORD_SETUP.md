@@ -6,9 +6,11 @@ devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarl
 
 > Stato al 17 agosto 2026: installazione guild-scoped e registrazione hanno evidenza storica; il
 > gateway resta separato dal login DIC e può rispondere anche con DIC `DEGRADED`. Il primo smoke è
-> stato negato dal gate RBAC prima del dispatch. La candidata 0.3.0 separa gli aggregati pubblici
-> dai dettagli ephemeral, ma deployment e smoke dei nuovi flussi restano `PENDING`. Correggere i
-> ruoli senza ampliare guild o canale. Le istruzioni seguono la
+> stato negato dal gate RBAC prima del dispatch. Il gate applicativo 0.3.0 ha verificato la
+> classificazione `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, ma non il trasporto Discord. Il
+> servizio è `active/running`, con gateway `discord_ready`, e lo smoke slash resta `PENDING`.
+> Correggere i ruoli senza ampliare guild o
+> canale. Le istruzioni seguono la
 > documentazione Discord ufficiale
 > per [creare l'app e il bot](https://docs.discord.com/developers/quick-start/getting-started),
 > [OAuth2](https://docs.discord.com/developers/topics/oauth2) e [application

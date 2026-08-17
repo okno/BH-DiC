@@ -7,10 +7,12 @@
   runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- la 0.2.7 è stata distribuita; il check DIC corrente si è fermato fail-closed a
-  `TEAMSYSTEM_EMAIL` prima di qualunque azione sulla credenziale, mentre il gateway resta
-  separato dal login DIC;
-- nessuna Function ID DIC read o write verificata live;
+- versione `0.3.0`, SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, distribuita e
+  verificata con un unico gate applicativo live autorizzato in sola lettura;
+- autenticazione/tenant, conteggio aggregato `PUBLIC`/non-ephemeral, scadenze bounded del prossimo
+  mese di calendario `SENSITIVE`/ephemeral, telemetria token e status API/token verificati;
+- servizio `active/running`, zero riavvii osservati e gateway `discord_ready`; smoke del trasporto
+  Discord 0.3.0 ancora `PENDING`;
 - check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED` e tenant
   `VERIFIED_BY_ADAPTER` nel processo corrente; il vault pre-0.2.7 non conservava `sessionStorage`;
 - comando guild-scoped registrato e gateway storicamente responsivo; primo smoke negato dal gate
@@ -18,14 +20,11 @@
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
 La 0.2.7 separa il gateway dal login DIC e conserva cifrato lo snapshot bounded
-`sessionStorage`. La candidata 0.2.8 aggiunge soltanto il contratto corrente verificato
-pubblicamente: root e-mail TeamSystem esatta, legacy `/Account/LoginEmail`, transizioni pending
-bounded `/connect/authorize`/`/connect/authorize/callback` e SSO senza azioni credenziali accettato
-solo dopo marker DIC e tenant attestato. La candidata 0.3.0 aggiunge presenter Senior HR, lettura
-passiva elenco, refresh del vault e telemetria token. I gate locali completi sono verdi; deployment
-e smoke Discord/DIC restano `PENDING`. Sul target non è ancora promossa alcuna nuova Function ID
-live. Il
-primo deny RBAC resta un'evidenza separata dal funzionamento DIC.
+`sessionStorage`; la 0.2.8 limita il contratto TeamSystem/OIDC alle route esatte documentate. La
+0.3.0 aggiunge presenter Senior HR, lettura passiva elenco, refresh del vault e telemetria token.
+Soltanto i due subset read bounded attraversati dal gate sono `LIVE_READ_VERIFIED`; altre read,
+trasporto Discord e tutte le write restano separati. Il primo deny RBAC resta un'evidenza storica,
+non il risultato dello smoke Discord ancora da eseguire.
 
 ## Runbook giornaliero
 
@@ -101,18 +100,17 @@ Se il vault non esiste (prima installazione, rotazione o invalidazione), il fall
 non attesta nulla sul login. In quel caso procedere soltanto con l'unico check live autorizzato
 descritto sotto.
 
-La password TeamSystem è stata rinnovata e il secret locale aggiornato. Il vault esistente precede
-quella rotazione: dopo aver distribuito la candidata 0.2.8 e completato i gate, fermare il servizio,
-mantenere le write disabilitate, invalidarlo deliberatamente una sola volta e poi eseguire un solo
-check live:
+La rotazione storica della password e il relativo gate 0.3.0 sono già conclusi. Non invalidare il
+vault corrente. Soltanto dopo una futura rotazione o compromissione, fermare il servizio,
+mantenere le write disabilitate e usare una volta la sequenza seguente:
 
 ```bash
 .venv/bin/python -m bh_dic invalidate-session
 .venv/bin/python -m bh_dic dic-auth-check --live
 ```
 
-Non invalidare un vault leggibile per un semplice upgrade; in questo caso l'invalidazione è invece
-richiesta perché la credenziale è stata ruotata. Invalidare resta un'azione distinta e deliberata
+Non invalidare un vault leggibile per un semplice upgrade o per ripetere il gate già riuscito.
+Invalidare resta un'azione distinta e deliberata
 per compromissione, rotazione di password/account/tenant o della chiave del vault, oppure errore
 `DicSessionVaultError` verificato dall'operatore. Il comando prova la
 route applicativa fissa e richiede l'attestazione passiva dell'azienda corrente. Se serve login,
@@ -141,7 +139,7 @@ trailing slash e path aggiuntivi. Il marker autenticato viene atteso entro la ca
 `/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il singolo
 check headless successivo al login manuale è stato completato. La 0.2.7 ammette anche l'ingresso
 diretto alla route password quando DIC usa `login_hint`, senza cambio user agent né fallback
-generici. Il check server 0.2.7 corrente si è fermato a `TEAMSYSTEM_EMAIL`. La candidata 0.2.8
+generici. Un check server 0.2.7 storico si è fermato a `TEAMSYSTEM_EMAIL`. La 0.2.8
 riconosce anche la root e-mail esatta corrente e le sole transizioni OIDC esatte; un SSO silenzioso
 non esegue fill/click/submit credenziali ed è valido solo dopo marker DIC e tenant attestato. Un
 nuovo exit 78 o `CREDENTIAL_SUBMIT` impone lo stop del check senza retry né nuova invalidazione.
@@ -231,10 +229,11 @@ reinstalla lockfile/editable, migra e testa. L'opzione `--restart` riavvia solo 
 attivo; non usarla durante preparazione/deployment fermo.
 
 Dopo l'update 0.3.0 verificare che `bh_dic version` mostri `0.3.0` e che Alembic sia alla revisione
-`0002_model_usage`. Poi, con write ancora disabilitate, eseguire i due smoke distinti: totale
-organico tramite un attore `READ_ONLY` e scadenze del prossimo mese tramite un attore `HR_READ`.
-Il primo può produrre soltanto un aggregato pubblico nel canale allowlistato; il secondo deve
-restare ephemeral. Se uno dei due confini non è rispettato, fermare il rollout.
+`0002_model_usage`. Il gate applicativo dei due percorsi è già riuscito; resta da eseguirne lo
+smoke attraverso il trasporto Discord. Con write ancora disabilitate, usare un attore `READ_ONLY`
+per il conteggio aggregato e un attore `HR_READ` per le scadenze del prossimo mese. Il primo può
+produrre soltanto un aggregato pubblico nel canale allowlistato; il secondo deve restare ephemeral.
+Se uno dei due confini non è rispettato, fermare il rollout.
 
 ## Sessione DIC e rotazione token
 

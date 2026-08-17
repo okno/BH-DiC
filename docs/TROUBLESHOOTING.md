@@ -17,10 +17,11 @@ legittima non era ancora allowlistata. Un successivo accesso manuale autorizzato
 ha confermato credenziali, callback, dashboard e marker della lista dipendenti; il check headless
 0.2.5 ha poi attestato tenant e sessione nel processo corrente. Il riavvio successivo ha però
 dimostrato che il vault pre-0.2.7 non conservava `sessionStorage`.
-La 0.2.7 è stata quindi distribuita, ma l'ultimo `dic-auth-check --live` sul server si è fermato
-prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`. La candidata 0.2.8 riconosce la root e-mail
-TeamSystem corrente e le sole transizioni OIDC esatte; i gate locali sono verdi e il nuovo check
-live resta `PENDING`.
+Un check 0.2.7 si è poi fermato prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`; la 0.2.8 ha
+ristretto il supporto alle route TeamSystem/OIDC esatte documentate. Il successivo gate 0.3.0 ha
+attestato autenticazione/tenant e i due subset read bounded. Nello snapshot corrente il servizio è
+`active/running`, con zero riavvii osservati e gateway `discord_ready`; lo smoke del trasporto
+Discord resta `PENDING`.
 
 | Sintomo | Verifica | Azione sicura |
 |---|---|---|
@@ -37,7 +38,7 @@ live resta `PENDING`.
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
 | login DIC fallisce | JSON `error_type`/`stage`, route DIC/TeamSystem, sessione, MFA/CAPTCHA | usare solo lo stage chiuso; invalidare il vault quando pertinente; mai stampare l'errore interno né usare passwordless o ampliare l'allowlist |
-| `DicAuthUiChangedError` a `TEAMSYSTEM_EMAIL` | release installata, rotazione credenziale e transizione IdP | il fallimento corrente è osservato sulla 0.2.7; la candidata 0.2.8 ammette la root e-mail TeamSystem esatta, la legacy `/Account/LoginEmail`, la password esatta e soltanto le transizioni bounded `/connect/authorize`/`callback`; dopo una rotazione invalidare deliberatamente il vecchio vault una volta, senza cambio User-Agent o fallback generici |
+| `DicAuthUiChangedError` a `TEAMSYSTEM_EMAIL` | release installata, rotazione credenziale e transizione IdP | il fallimento storico è stato osservato sulla 0.2.7; dalla 0.2.8 sono ammesse la root e-mail TeamSystem esatta, la legacy `/Account/LoginEmail`, la password esatta e soltanto le transizioni bounded `/connect/authorize`/`callback`; dopo una rotazione invalidare deliberatamente il vecchio vault una volta, senza cambio User-Agent o fallback generici |
 | `DicAuthOutcomeUnknownError`, exit 78 | stage `CREDENTIAL_SUBMIT`; invio forse partito ma completamento/tenant/vault non dimostrabili | non ritentare; mantenere DIC degradato e fare escalation, lasciando il gateway privo di credenziali online se necessario |
 | attestazione tenant fallisce | route fissa, risposta first-party, schema/ID configurato | mantenere DIC degradato; nessun fallback su nome o DOM, patchare solo con nuova evidenza redatta |
 | UI drift/selettore rotto | route/page object, trace protetto | smoke read-only e patch testata; nessuna write live |
@@ -62,7 +63,7 @@ soltanto questo significato operativo:
 | Stage | Confine verificato | Azione sicura |
 |---|---|---|
 | `DIC_EMAIL`, `DIC_SUBMIT` | pagina login DIC esatta | verificare release e disponibilità del sito; dalla 0.2.4 è usato l'input nativo univoco nel contenitore pubblico, senza aggiungere click o selettori generici |
-| `TEAMSYSTEM_EMAIL`, `TEAMSYSTEM_EMAIL_SUBMIT` | ingresso TeamSystem esatto: root e-mail corrente o legacy `/Account/LoginEmail`; può saltare alla password o completare SSO senza controlli | usare almeno la candidata 0.2.8 dopo i gate; invalidare una sola volta il vault se la credenziale è stata ruotata e fare un solo check live; verificare CAPTCHA/MFA o manutenzione IdP con procedura umana |
+| `TEAMSYSTEM_EMAIL`, `TEAMSYSTEM_EMAIL_SUBMIT` | ingresso TeamSystem esatto: root e-mail corrente o legacy `/Account/LoginEmail`; può saltare alla password o completare SSO senza controlli | usare almeno la 0.2.8; invalidare una sola volta il vault se la credenziale è stata ruotata e fare un solo check live; verificare CAPTCHA/MFA o manutenzione IdP con procedura umana |
 | `TEAMSYSTEM_CREDENTIAL`, `TEAMSYSTEM_CREDENTIAL_SUBMIT` | passaggio credenziale TeamSystem esatto e account del form uguale a `DIC_USERNAME` | non ripetere automaticamente la password; verificare stato account tramite il flusso umano |
 | `CREDENTIAL_SUBMIT` | esito post-submit non dimostrabile | trattare exit 78 come stop non riavviabile; nessun nuovo login automatico o manuale senza revisione |
 | `SESSION_PROBE` | verifica bounded di una sessione ripristinata già sulla route applicativa | non considerare autenticata una risposta oltre deadline; mantenere DIC degradato e verificare sessione/tenant senza nuovi submit |
@@ -85,7 +86,7 @@ singolo `dic-auth-check --live` esplicito con servizio fermo. Il vault include l
 `sessionStorage` bounded della sola origine DIC; una release precedente perdeva i token federati
 al riavvio pur conservando cookie e `localStorage`.
 
-La candidata 0.2.8 mantiene il confronto esatto e aggiunge soltanto la root `/` come schermata
+La 0.2.8 mantiene il confronto esatto e aggiunge soltanto la root `/` come schermata
 e-mail TeamSystem corrente e `/connect/authorize`/`/connect/authorize/callback` come transizioni
 pending bounded. Un SSO che salta email/password non esegue alcuna azione credenziale ed è
 considerato riuscito solo dopo route applicativa, marker DIC e attestazione tenant. Dopo una

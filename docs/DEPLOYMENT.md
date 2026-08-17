@@ -7,15 +7,13 @@ installato senza sostituire il Python di sistema, virtualenv e dipendenze, migra
 directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
 doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-Il check headless 0.2.5 ha restituito sessione `AUTHENTICATED` e tenant
-`VERIFIED_BY_ADAPTER` nel processo corrente. Il comando guild-scoped è registrato e il gateway ha
-risposto, ma il primo smoke è stato negato dal gate RBAC. La 0.2.7 è stata distribuita; il check
-DIC corrente si è fermato con `TEAMSYSTEM_EMAIL` prima delle azioni credenziali. La candidata
-0.2.8 corregge il contratto TeamSystem/OIDC e lo snapshot `sessionStorage`. La candidata 0.3.0
-aggiunge lettura passiva elenco, presenter Senior HR, ripersistenza della sessione e telemetria
-token. I gate locali completi sono verdi; deployment/migrazione e smoke live 0.3.0 restano
-`PENDING`; non promuovere
-ancora le nuove letture a `LIVE_READ_VERIFIED`.
+La versione `0.3.0`, SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, è stata distribuita
+e ha superato un unico gate applicativo live autorizzato in sola lettura: autenticazione e tenant,
+conteggio aggregato `PUBLIC`/non-ephemeral, scadenze bounded del prossimo mese di calendario
+`SENSITIVE`/ephemeral, telemetria token e status API/token. Il servizio è `active/running`, con
+zero riavvii osservati e gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING`.
+Non confondere il PASS applicativo o il gateway pronto con un
+round-trip slash riuscito.
 `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
 restano `false`.
 
@@ -103,7 +101,7 @@ obbligatori. Eseguire `dic-auth-check --live` una sola volta dopo il deployment:
 impone stop e non autorizza un secondo tentativo. La 0.2.7 accetta inoltre soltanto
 `LoginEmail`/`LoginPassword` TeamSystem esatte, vincola l'identità del form all'account configurato
 prima del segreto e conserva cifrato anche `sessionStorage`; lo user agent Chromium resta nativo.
-La candidata 0.2.8 ammette come schermata e-mail anche la root TeamSystem HTTPS esatta corrente e
+La 0.2.8 ammette come schermata e-mail anche la root TeamSystem HTTPS esatta corrente e
 tratta esclusivamente `/connect/authorize` e `/connect/authorize/callback` esatte come stati
 pending bounded. Un SSO che salta i controlli non esegue azioni credenziali ed è accettato solo
 dopo route applicativa DIC, marker autenticato e attestazione tenant. Qualunque esito
@@ -133,8 +131,8 @@ resta bloccante; l'indisponibilità della sola sessione DIC è invece uno stato 
 - `.env.example` presente; `.env` assente o protetto e valorizzato localmente;
 - directory e file con i permessi documentati;
 - `doctor.sh` riuscito, con risultato online separato se autorizzato;
-- gestore systemd unico, servizio `active/running` dopo il deployment 0.3.0 e risposta di
-  `/bh status` anche quando DIC è `DEGRADED`;
+- gestore systemd unico; nello snapshot corrente il servizio è `active/running`, con zero riavvii
+  osservati e gateway `discord_ready`, in attesa del solo smoke Discord autorizzato;
 - `/bh status` con provider/modello, stato API e token cumulativi locali; totale organico pubblico
   con `READ_ONLY`, scadenze individuali ephemeral con ruolo dedicato `HR_READ`;
 - nessun processo Chromium/Playwright residuo;
@@ -142,7 +140,7 @@ resta bloccante; l'indisponibilità della sola sessione DIC è invece uno stato 
 
 Se viene scelto systemd, usare esclusivamente `systemctl`/`journalctl` per il lifecycle; non
 mescolare l'unit con gli script PID `start.sh`, `stop.sh` o `restart.sh`. La procedura completa
-Debian, provider, Discord e prima verifica read-only è in
+Debian, provider e smoke del trasporto Discord è in
 [Installazione e runbook](INSTALLATION.md).
 
 ## Rollback

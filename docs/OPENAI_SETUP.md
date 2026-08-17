@@ -2,7 +2,8 @@
 
 > Il nome del file è mantenuto per compatibilità con i link esistenti. La configurazione è ora
 > multi-provider. Groq `openai/gpt-oss-120b` ha evidenza di un probe live chiuso separato;
-> OpenAI, llama e il deployment della candidata 0.3.0 restano verifiche indipendenti.
+> OpenAI, llama e lo smoke del trasporto Discord restano verifiche indipendenti. Il deployment e
+> il gate applicativo bounded della 0.3.0 sono documentati separatamente nello stato live.
 
 Il modello è usato esclusivamente come router di intento. Non controlla browser o file, non riceve
 credenziali e non decide autorizzazioni, approvazioni o risultati. L'applicazione espone solo i

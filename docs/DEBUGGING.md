@@ -3,9 +3,9 @@
 Il debug deve preservare gli stessi confini di produzione. Non disabilitare TLS, host-key
 checking, RBAC, redazione, ClamAV, audit o feature flag per ottenere un test verde. Usare solo
 dati sintetici. Sul target sono stati verificati separatamente provider, autenticazione/tenant e
-trasporto Discord, senza eseguire Function ID HR. La 0.2.7 è distribuita, ma il check DIC corrente
-si è fermato a `TEAMSYSTEM_EMAIL`; la correzione candidata 0.2.8 ha gate locali verdi e verifica
-live `PENDING`. I gate locali 0.3.0 sono verdi; deployment e smoke restano `PENDING`.
+i due subset read bounded della 0.3.0. Il servizio è `active/running`, con zero riavvii osservati e
+gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING` e tutte le write restano
+disabilitate.
 
 ## Modalità DEBUG locale
 

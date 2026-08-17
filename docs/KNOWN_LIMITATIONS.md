@@ -2,11 +2,11 @@
 
 ## Verifica live e compatibilità UI
 
-- Una ricognizione autorizzata in sola lettura ha osservato la struttura corrente del login e la
-  sorgente first-party dell'identità aziendale. Non ha eseguito Function ID DIC, smoke read-only
-  applicativi o write live.
-- La baseline di Fase 1 documenta route, etichette e controlli osservati, ma non
-  certifica il DOM attuale. Nessuna read ha quindi stato `LIVE_READ_VERIFIED`.
+- Oltre alla ricognizione iniziale, lo SHA 0.3.0 esatto documentato ha superato un unico gate live
+  autorizzato in sola lettura per autenticazione/tenant, conteggio aggregato e scadenze bounded del
+  prossimo mese di calendario. Non sono state eseguite write live.
+- La baseline di Fase 1 non certifica da sola il DOM attuale. Soltanto i due subset bounded
+  attraversati dal gate hanno stato `LIVE_READ_VERIFIED`; le altre read restano da validare.
 - `data-testid`, attributi `data-*`, ordinamento dei fallback e controlli distintivi delle pagine
   HR richiedono validazione live autorizzata. Un cambio UI può produrre `DicUiChangedError` e
   aprire il circuit breaker.
@@ -25,17 +25,18 @@
   precedente salvava soltanto cookie/localStorage. DIC conserva anche token federati in
   `sessionStorage`, perciò il riavvio successivo li ha persi e si è fermato a `TEAMSYSTEM_EMAIL`.
   La 0.2.7 cifra uno snapshot bounded della sola origine DIC e ne ripristina l'origine esatta prima
-  della navigazione; il nuovo formato resta da verificare sul server.
+  della navigazione; il gate 0.3.0 ha successivamente verificato autenticazione e tenant sul
+  server, senza rendere il formato portabile ad altri ambienti.
 - DIC può usare `login_hint` e saltare `LoginEmail`. La 0.2.7 ammette soltanto le route TeamSystem
   esatte `LoginEmail`/`LoginPassword` e, prima di compilare il segreto, richiede che l'identità
   esposta dal form password coincida con quella configurata. Qualunque assenza, ambiguità o
   mismatch fallisce chiuso.
-- Il check server corrente della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL` prima delle azioni
+- Un check server storico della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL` prima delle azioni
   credenziali. La UI pubblica corrente espone la schermata e-mail anche sulla root TeamSystem
   esatta e il flusso OIDC attraversa `/connect/authorize` e `/connect/authorize/callback`. La
-  candidata 0.2.8 gestisce soltanto questi path esatti e il legacy `/Account/LoginEmail`; può
+  0.2.8 gestisce soltanto questi path esatti e il legacy `/Account/LoginEmail`; può
   accettare SSO senza controlli soltanto dopo marker DIC e tenant attestato, con zero azioni
-  credenziali. I gate locali sono verdi; la verifica live resta `PENDING`.
+  credenziali. Il gate 0.3.0 ha poi attestato autenticazione e tenant sullo SHA verificato.
 - Dopo la rotazione di password/account/tenant, il vault precedente deve essere invalidato una
   volta deliberatamente prima di un unico check live. Questa procedura non autorizza retry dopo
   `CREDENTIAL_SUBMIT` o un altro esito post-submit incerto.
@@ -52,8 +53,13 @@
   paginator osservati usano il path distinto `/employees`. Non esiste un adapter API pubblico
   supportato né un fallback a chiamate HTTP dirette. I due path non sono intercambiabili; gli URL
   pagina devono ripetere l'intera query UI validata cambiando soltanto `page`. Drift di origin,
-  path, query, boundary link, schema o paginazione fallisce chiuso. Deployment e smoke end-to-end
-  della candidata restano `PENDING`.
+  path, query, boundary link, schema o paginazione fallisce chiuso. I due percorsi bounded descritti
+  nello stato live sono verificati; altre read e lo smoke del trasporto Discord restano `PENDING`.
+- `current_contract` accetta per-record soltanto il keyset esatto `BASE` oppure
+  `EXTENDED=BASE+6` chiavi tecniche. L'esteso richiede booleani stretti per
+  `flexible_workinghours`, `hours_alert` e `ongoing`, e `null` stretti per `note`, `workinghours` e
+  `workinghours_list`; i campi tecnici vengono scartati senza proiezione. Qualunque subset,
+  superset, shape diversa o chiave futura interrompe la read finché non viene riesaminata.
 - Il totale non qualificato significa l'intero organico; “attivi” o “disattivati” devono essere
   espliciti. Questo elimina l'ambiguità del modello ma non risolve eventuali categorie DIC future
   fuori dal campo `active` osservato.
@@ -141,10 +147,10 @@ semantica, permessi e postcondizioni.
 - La riconciliazione può essere eseguita anche dopo kill switch o scadenza
   dell'approvazione, ma richiede comunque accesso read al tenant.
 - Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
-  offline/online sono stati verificati sul Debian target. Login DIC/tenant e gateway Discord hanno
-  avuto successi storici separati; il check DIC corrente 0.2.7 si è fermato a
-  `TEAMSYSTEM_EMAIL`. Deployment 0.3.0, migrazione token, refresh vault, smoke funzionali, restore
-  drill e carico reale restano da verificare sul target.
+  offline/online sono stati verificati sul Debian target. La versione 0.3.0 allo SHA esatto
+  documentato ha superato il gate applicativo live; il servizio è `active/running`, con zero
+  riavvii osservati e gateway `discord_ready`. Smoke del trasporto Discord, restore drill e carico
+  reale restano da verificare sul target.
 
 ## Criterio per rimuovere una limitazione
 

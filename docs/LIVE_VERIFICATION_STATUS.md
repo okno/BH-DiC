@@ -7,13 +7,17 @@
 | OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
-| Discord | `LIVE_DISCORD_TRANSPORT_VERIFIED` storico: comando guild-scoped registrato e gateway responsivo; dalla 0.2.7 l'avvio non invia credenziali DIC | Dopo i gate 0.3.0 verificare `active/running`, RBAC, aggregato pubblico `READ_ONLY` e dettaglio ephemeral `HR_READ` |
-| DIC | check headless storico `LIVE_AUTHENTICATED`: sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; successivo stop 0.2.7 a `TEAMSYSTEM_EMAIL` prima delle azioni credenziali | Distribuire la candidata 0.3.0 dopo i gate e verificare lettura passiva elenco, totale, scadenze e refresh `sessionStorage`; funzioni applicative ancora `NEEDS_VALIDATION`, nessuna write live |
-| Debian deployment | prerequisiti runtime `VERIFIED`; gate locali 0.3.0 verdi, candidata non ancora live | Migrazione `0002_model_usage`, avvio anche `DEGRADED`, log, smoke RBAC/read-only/HR-read e restore drill: `PENDING` |
+| Discord | trasporto storico verificato su una release precedente; servizio 0.3.0 `active/running`, zero riavvii osservati e gateway `discord_ready`; il gate applicativo ha verificato sensibilità `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, non il round-trip slash | Smoke trasporto 0.3.0 RBAC/read-only/HR-read ancora `PENDING` |
+| DIC | `LIVE_AUTHENTICATED` e tenant attestato sullo SHA 0.3.0 verificato; conteggio aggregato e scadenze bounded del prossimo mese di calendario `LIVE_READ_VERIFIED` | Altre modalità read `NEEDS_VALIDATION`; nessuna write live |
+| Debian deployment | versione `0.3.0`, SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, gate applicativo live PASS; servizio `active/running`, zero riavvii osservati, gateway `discord_ready` | Smoke trasporto Discord e restore drill `PENDING` |
 
-Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. DIC e trasporto
-Discord hanno evidenze live separate; nessuna di esse attesta una Function ID HR. Il doctor Debian
-attesta i prerequisiti controllati, non il restore né l'autorizzazione RBAC dell'operatore.
+Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. Il gate DIC
+applicativo promuove soltanto i due subset read bounded indicati; non attesta il trasporto Discord.
+Il doctor Debian attesta i prerequisiti controllati, non il restore né lo smoke slash.
+
+Per lo stesso SHA: 834 test locali PASS; branch coverage 85% su 10.361 statement e 3.258 branch;
+Ruff, mypy, Bandit e `pip-audit` verdi; CI e CodeQL remoti riusciti. Nessuno di questi gate statici
+o sintetici sostituisce le evidenze live separate.
 
 ## Legenda ed evidenza disponibile
 
@@ -26,6 +30,8 @@ attesta i prerequisiti controllati, non il restore né l'autorizzazione RBAC del
   read-only di Fase 1.
 - `NEEDS_VALIDATION`: la specifica funzione non è stata verificata end-to-end sul sito live;
   non va interpretato come `LIVE_READ_VERIFIED`.
+- `LIVE_READ_VERIFIED`: soltanto il subset operativo esplicitamente descritto è stato attraversato
+  end-to-end nel gate live autorizzato; non promuove altre modalità dello stesso Function ID.
 - `LIVE_WRITE_UNVERIFIED`: la write non è mai stata eseguita su dati live.
 - `NOT_AVAILABLE`: il percorso live viene rifiutato esplicitamente anziché simulare un supporto
   non osservato.
@@ -41,34 +47,39 @@ rifiutato fail-closed la callback DIC legittima, con `CREDENTIAL_SUBMIT`/exit 78
 automatico. Un successivo accesso manuale autorizzato in browser fresco ha accettato le
 credenziali con un solo submit e ha osservato la sequenza password TeamSystem → callback DIC esatta
 → dashboard → route e marker esatti della lista dipendenti. Dopo il deployment, un singolo check
-headless 0.2.5 ha verificato sessione e tenant nel processo corrente. Un riavvio successivo ha
+headless 0.2.5 ha verificato sessione e tenant `VERIFIED_BY_ADAPTER` nel processo corrente. Un
+riavvio successivo ha
 mostrato che il vault precedente non conservava i token federati in `sessionStorage`; la route
 TeamSystem è passata direttamente a `LoginPassword`, mentre il codice pretendeva ancora
 `LoginEmail`, e systemd si è fermato con exit 78 prima del gateway. La 0.2.7 accetta soltanto le due
 route TeamSystem esatte, vincola l'identità prima del segreto, cifra anche lo snapshot bounded
 `sessionStorage` e mantiene Discord online in stato `DEGRADED` senza login implicito. Dopo la sua
-distribuzione, il check server corrente si è fermato a `TEAMSYSTEM_EMAIL` prima delle azioni
-credenziali. La candidata 0.2.8 riconosce la root e-mail TeamSystem esatta corrente, la legacy
+distribuzione, un check server 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL` prima delle azioni
+credenziali. La 0.2.8 riconosce la root e-mail TeamSystem esatta corrente, la legacy
 `/Account/LoginEmail` e soltanto le transizioni pending bounded `/connect/authorize` e
 `/connect/authorize/callback`; un SSO senza controlli è accettato soltanto dopo marker DIC e tenant
-attestato e non esegue fill/click/submit credenziali. I gate locali sono verdi; la verifica live
-resta `PENDING`.
-Dalla candidata 0.3.0 la UI può essere usata per osservare passivamente la risposta esatta
+attestato e non esegue fill/click/submit credenziali. Sullo SHA 0.3.0 esatto documentato, il
+successivo gate unico ha attestato autenticazione e tenant prima delle due letture bounded.
+Dalla 0.3.0 la UI può essere usata per osservare passivamente la risposta esatta
 `GET /backend_apiV2/employees`: origine, query, metodo, status, media type, limite, schema,
 paginazione e tenant vengono validati prima di creare una proiezione tipizzata. Una diagnostica
 live autorizzata e minimizzata ha inoltre confermato che i metadati URL del paginator usano la
 stessa origine esatta e il path distinto `/employees`; la validazione fail-closed non rende i due
 path intercambiabili. Ogni URL pagina preserva i nove parametri della query UI validata e modifica
 soltanto `page`; precedente/successivo e pagina attiva sono correlati senza usare le label come
-fonte autorevole. Il display name in chiaro è protetto come `SecretStr` e può essere aperto soltanto
-per risultati `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e matricola restano mascherati.
-Queste osservazioni determinano il contratto tecnico, ma deployment della release, totale organico,
-analisi scadenze, pubblicazione Discord e telemetria token non sono ancora promossi come smoke live
-riusciti. Il provider resta intent-only e riceve categorie semantiche canoniche, mai nomi, Employee
-ID o risultati DIC.
+fonte autorevole. `current_contract` viene validato per-record come keyset esatto `BASE` oppure
+`EXTENDED=BASE+6` chiavi tecniche: booleani stretti per `flexible_workinghours`, `hours_alert` e
+`ongoing`; `null` stretti per `note`, `workinghours` e `workinghours_list`. I campi tecnici sono
+discard-only e non vengono proiettati. Il display name in chiaro è protetto come `SecretStr` e può
+essere aperto soltanto per risultati `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e
+matricola restano mascherati. Il gate ha verificato il conteggio aggregato `PUBLIC`/non-ephemeral,
+le scadenze bounded del prossimo mese di calendario `SENSITIVE`/ephemeral, la telemetria token di
+entrambe e lo status API/token completo. Il provider resta intent-only e riceve categorie
+semantiche canoniche, mai nomi, Employee ID o risultati DIC.
 Dopo la rotazione del secret il vault precedente va invalidato deliberatamente una volta prima di
 un unico check live; un esito `CREDENTIAL_SUBMIT` non va ritentato. Le write restano disabilitate.
-Nessuna Function ID DIC è quindi classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono
+Soltanto i subset bounded di `EMP-READ-001` e `EMP-CONTRACT-001` sono quindi classificati
+`LIVE_READ_VERIFIED`. Tutte le write rimangono
 `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY` e `DISABLED_BY_DEFAULT`, anche quando il relativo
 controllo era visibile nella baseline. `TESTED_WITH_MOCK` indica test sintetici
 del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
@@ -77,13 +88,13 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 
 | Function ID | Funzione | Implementazione e test | Evidenza live | Stato predefinito |
 | --- | --- | --- | --- | --- |
-| `EMP-READ-001` | Elenco e conteggio dipendenti | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
+| `EMP-READ-001` | Elenco e conteggio dipendenti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED soltanto per conteggio aggregato bounded; elenco e altre modalità NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-READ-002` | Dettaglio anagrafico redatto | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-SEARCH-001` | Ricerca dipendente | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-FILTER-001` | Filtri elenco | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-SORT-001` | Ordinamento elenco | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-PAGE-001` | Paginazione | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-CONTRACT-001` | Consultazione contratti | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
+| `EMP-CONTRACT-001` | Consultazione contratti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED soltanto per scadenze bounded del prossimo mese di calendario; altre modalità NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-RBAC-001` | Consultazione gruppi e ruoli | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-TIME-001` | Consultazione timbratura | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED (link/controlli) — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-MAT-001` | Consultazione maturazioni | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |

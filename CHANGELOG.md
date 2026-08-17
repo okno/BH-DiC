@@ -50,6 +50,12 @@ stable public API is declared.
 - Allineato il contratto di `current_contract.part_time_percentage` alla struttura osservata con
   diagnostica live minimizzata: la chiave resta obbligatoria, accetta `null` e, se valorizzata,
   richiede un intero stretto nell'intervallo 0-100, senza registrare dati tenant o PII.
+- Allineato `current_contract` ai due soli keyset osservati per singolo record: `BASE` oppure
+  `EXTENDED`, composto da `BASE` più le sei chiavi tecniche `flexible_workinghours`, `hours_alert`,
+  `note`, `ongoing`, `workinghours` e `workinghours_list`. Nel formato esteso
+  `flexible_workinghours`, `hours_alert` e `ongoing` sono booleani JSON stretti; `note`,
+  `workinghours` e `workinghours_list` sono `null` stretti. I campi tecnici vengono validati e
+  scartati, mai proiettati; subset, superset e varianti sconosciute falliscono chiuso.
 
 ### Security
 
@@ -68,10 +74,16 @@ stable public API is declared.
 
 ### Verification
 
-- Gate locali completi: 787 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
-  Bandit, dependency audit, YAML, script shell, documentazione e link locali verdi. Deployment
-  Debian della 0.3.0, migrazione sul target e smoke Discord/DIC restano `PENDING`. Non promuovere
-  le nuove letture a `LIVE_READ_VERIFIED` prima delle evidenze separate.
+- Gate locali completi sul rilascio: 834 test passati, branch coverage 85% su 10.361 statement e
+  3.258 branch, Ruff, mypy, Bandit e `pip-audit` verdi. CI e CodeQL sono riusciti sullo SHA esatto
+  `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`.
+- Lo stesso SHA, versione `0.3.0`, è stato verificato sul target Debian con un unico gate live
+  autorizzato in sola lettura: autenticazione e tenant attestati; conteggio aggregato
+  `PUBLIC`/non-ephemeral con telemetria token; scadenze del prossimo mese di calendario
+  `SENSITIVE`/ephemeral, bounded e con telemetria token; stato API/token completo. Le write sono
+  rimaste disabilitate. Il gate applicativo non attesta il trasporto Discord: lo smoke slash
+  Discord resta `PENDING`. Dopo il gate il servizio è stato avviato `active/running`, con zero
+  riavvii osservati e gateway `discord_ready`.
 
 ## [0.2.8] - 2026-08-17
 

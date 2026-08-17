@@ -1,10 +1,9 @@
 # Start e stop
 
-> Stato osservato al 17 agosto 2026: Doctor, Groq e un check DIC headless storico sono riusciti;
-> il comando guild-scoped è registrato. La 0.2.7 è stata distribuita, ma il check DIC corrente si
-> è fermato fail-closed su `TEAMSYSTEM_EMAIL`. Il gateway resta separato dal login DIC. La
-> candidata 0.2.8 corregge il contratto corrente TeamSystem/OIDC; i gate locali sono verdi e la
-> verifica live resta `PENDING`.
+> Stato osservato al 17 agosto 2026: la 0.3.0 allo SHA esatto documentato ha superato il gate
+> applicativo live bounded con write disabilitate. Il servizio target è `active/running`, con zero
+> riavvii osservati e gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING`. Il
+> gateway resta separato dal login DIC.
 
 ## Prerequisiti
 
@@ -125,23 +124,14 @@ usare `kill -9` manualmente e non eliminare PID/lock senza verificare il process
 
 ## Sequenza di ripresa sul target
 
-Dopo i gate e l'aggiornamento alla candidata 0.2.8, mantenere le write disabilitate e fermare il
-servizio prima di creare o sostituire il vault:
+Il gate live 0.3.0 ha già attestato sessione e tenant: non invalidare il vault e non ripetere il
+login. Mantenere le write disabilitate, verificare localmente il vault e avviare una sola istanza
+per lo smoke Discord ancora pending:
 
 ```bash
 cd /opt/bh-dic
 ./scripts/doctor.sh
-./scripts/doctor.sh --online
-.venv/bin/python -m bh_dic model-check --live
-```
-
-Il rinnovo umano della password TeamSystem e l'aggiornamento locale di `DIC_PASSWORD` sono già
-stati completati. Poiché il vault precede quella rotazione, invalidarlo deliberatamente una sola
-volta e poi eseguire esattamente una verifica live autorizzata:
-
-```bash
-.venv/bin/python -m bh_dic invalidate-session
-.venv/bin/python -m bh_dic dic-auth-check --live
+.venv/bin/python -m bh_dic dic-auth-check
 systemctl start bh-dic.service
 systemctl is-active bh-dic.service
 ```
@@ -154,12 +144,13 @@ registrare la query, e attende il marker entro lo stesso budget mantenendo obbli
 La 0.2.7 accetta l'ingresso TeamSystem esatto sia su `LoginEmail` sia direttamente su
 `LoginPassword` quando DIC passa il `login_hint`; non cambia lo User-Agent e non aggiunge route
 generiche. Il vault conserva cifrati anche i token DIC in `sessionStorage`, così il riavvio può
-ripristinare la sessione completa. Il check server 0.2.7 corrente si è però fermato a
-`TEAMSYSTEM_EMAIL`. La candidata 0.2.8 riconosce anche la root e-mail TeamSystem esatta corrente e
+ripristinare la sessione completa. Un check server 0.2.7 storico si è però fermato a
+`TEAMSYSTEM_EMAIL`. La 0.2.8 riconosce anche la root e-mail TeamSystem esatta corrente e
 le sole transizioni bounded `/connect/authorize`/`/connect/authorize/callback`. Se l'IdP completa
 un SSO senza mostrare controlli, non viene eseguita alcuna azione credenziale e il successo
 richiede comunque marker DIC e attestazione tenant esatta. Eseguire invalidazione e check live
-esattamente una volta. Se il check restituisce
+esattamente una volta soltanto dopo una futura rotazione o compromissione; la sequenza storica è
+già conclusa. Se un futuro check restituisce
 JSON con `error_type`/`stage`, non trasformarlo in un loop: il servizio può comunque essere
 avviato in modalità degradata per rispondere a status/health, ma nessuna funzione DIC sarà
 operativa finché una sessione non viene verificata.
@@ -169,8 +160,7 @@ Se `dic-auth-check --live` restituisce `DicAuthOutcomeUnknownError` con stage
 probe o persistenza del vault non sono dimostrabili. Fermarsi e verificare umanamente lo stato
 dell'account/sessione; non ripetere il comando. Il normale `run` non esegue questo submit.
 
-Dopo il check (riuscito oppure DIC degradato) avviare il gateway; se autenticazione e tenant sono
-attestati, eseguire poi lo smoke funzionale autorizzato. Con systemd usare esclusivamente
+Dopo i gate locali avviare il gateway ed eseguire lo smoke Discord autorizzato. Con systemd usare esclusivamente
 `systemctl`/`journalctl`. La registrazione guild-scoped già completata non va ripetuta per una
 modifica di ruoli o `.env`:
 
@@ -184,11 +174,10 @@ I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. 
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 17 agosto 2026 preparazione, provider e un check headless sono riusciti: sessione
-`AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`. Il successivo riavvio ha perso i token conservati
-solo in `sessionStorage`; dopo la distribuzione della 0.2.7, il check corrente si è fermato di
-nuovo su `TEAMSYSTEM_EMAIL` prima delle azioni credenziali. La candidata 0.2.8 e i suoi gate
-completi non sono ancora verificati live; nessuna Function ID read/write DIC live è stata
-completata e le write restano disabilitate.
+Al 17 agosto 2026 preparazione, provider, autenticazione/tenant e i due subset read bounded
+documentati sono riusciti sullo SHA 0.3.0 verificato. Il servizio è stato avviato
+`active/running`, con zero riavvii osservati e gateway `discord_ready`. Verificare ora il
+round-trip slash autorizzato e poi decidere esplicitamente il lifecycle; le write restano
+disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

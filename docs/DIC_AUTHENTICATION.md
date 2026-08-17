@@ -53,15 +53,16 @@ all'account configurato e il vault cifrato include anche lo snapshot bounded del
 DIC. Il normale gateway non invia credenziali e resta disponibile `DEGRADED` se il restore manca.
 Il successivo check server della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL`: l'interfaccia pubblica
 corrente espone anche la schermata e-mail sulla root TeamSystem esatta e l'OIDC attraversa le
-route esatte `connect/authorize`/`connect/authorize/callback`. La candidata 0.2.8 tratta questi
+route esatte `connect/authorize`/`connect/authorize/callback`. La 0.2.8 tratta questi
 soli stati come documentato sopra. Se una sessione IdP già valida completa il SSO senza schermate
 credenziali, il percorso è accettato soltanto dopo route applicativa DIC, marker autenticato e
-attestazione tenant esatta, con zero fill/click/submit sui controlli e-mail/password. I gate locali
-della 0.2.8 sono verdi; la verifica live resta `PENDING`.
+attestazione tenant esatta, con zero fill/click/submit sui controlli e-mail/password.
 
-La candidata 0.3.0 conserva questi confini e aggiunge soltanto l'osservazione passiva della
-risposta elenco e la ripersistenza di una sessione già attestata. Gate completi, deployment e
-smoke della 0.3.0 restano `PENDING`; nessuna nuova lettura viene promossa da questa descrizione.
+La 0.3.0 conserva questi confini e aggiunge l'osservazione passiva della risposta elenco e la
+ripersistenza di una sessione già attestata. Sul target Debian lo SHA esatto
+`c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe` ha poi superato un unico gate live autorizzato in sola
+lettura: autenticazione e tenant sono stati attestati prima delle due letture bounded. Questo
+risultato non autorizza write, non estende le route ammesse e non attesta il trasporto Discord.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright, righe dipendente, nomi, Employee ID, risultati DIC o una funzione di navigazione
@@ -195,9 +196,9 @@ l'intera query UI validata di nove parametri e può cambiare soltanto il valore 
 I boundary precedente/successivo e il link attivo vengono correlati alla pagina corrente e
 all'ultima pagina senza fidarsi delle label visuali. Il parser rifiuta userinfo, porta esplicita,
 fragment, origin o path lookalike e anche la sostituzione reciproca dei due path. Ogni difformità
-produce un errore generico fail-closed senza includere URL, query, body o PII. Questa osservazione
-definisce soltanto il contratto tecnico: deployment e smoke end-to-end della 0.3.0 restano
-`PENDING`.
+produce un errore generico fail-closed senza includere URL, query, body o PII. Questo contratto è
+stato attraversato dal gate live bounded della 0.3.0; restano separate e non verificate le altre
+modalità read e lo smoke del trasporto Discord.
 
 La query catturata deve corrispondere all'azione UI appena eseguita: pagina, page size fisso,
 ricerca, campi di ricerca, ordinamento e filtro `active` sono confrontati con un insieme chiuso.
@@ -208,12 +209,18 @@ coerenti.
 
 Lo schema root chiuso comprende soltanto `current_page`, `data`, `first_page_url`, `from`,
 `last_page`, `last_page_url`, `links`, `next_page_url`, `path`, `per_page`, `prev_page_url`, `to` e
-`total`. Ogni riga deve rispettare il contratto dipendente noto; `current_contract` ammette
-esattamente `hours_type`, `id`, `part_time_percentage`, `permanent`, `valid_from` e `valid_to`.
-La chiave `part_time_percentage` è obbligatoria ma nullable; quando non è `null` deve essere un
-intero JSON stretto compreso tra 0 e 100 inclusi (`bool`, float e stringhe sono rifiutati).
-Campi o tipi inattesi, date non ISO, company ID difforme, ID duplicati o paginazione instabile
-producono un errore generico senza body o PII.
+`total`. Ogni riga viene validata indipendentemente e `current_contract` ammette due soli keyset
+esatti. `BASE` contiene `hours_type`, `id`, `part_time_percentage`, `permanent`, `valid_from` e
+`valid_to`. `EXTENDED` contiene tutto `BASE` più `flexible_workinghours`, `hours_alert`, `note`,
+`ongoing`, `workinghours` e `workinghours_list`. Nel formato esteso `flexible_workinghours`,
+`hours_alert` e `ongoing` devono essere booleani JSON stretti; `note`, `workinghours` e
+`workinghours_list` devono essere `null` stretti. I sei campi tecnici vengono validati e scartati:
+non entrano nella proiezione, nella persistenza o nei log. Una risposta può contenere record `BASE`
+e `EXTENDED` insieme; qualunque subset, superset, chiave sconosciuta o shape diversa fallisce
+chiuso. `part_time_percentage` resta obbligatoria ma nullable; quando non è `null` deve essere un
+intero JSON stretto compreso tra 0 e 100 inclusi (`bool`, float e stringhe sono rifiutati). Campi o
+tipi inattesi, date non ISO, company ID difforme, ID duplicati o paginazione instabile producono un
+errore generico senza body o PII.
 
 All'esterno del parser esce soltanto una proiezione tipizzata. Il nome visualizzato completo è
 conservato transitoriamente come `SecretStr`, escluso da `repr` e mascherato nei dump del modello;
@@ -280,8 +287,9 @@ localmente. I tentativi 0.2.2 e 0.2.3 si
 sono fermati prima del submit password; la 0.2.4 ha raggiunto la callback DIC dopo un singolo
 submit, ma l'ha rifiutata fail-closed. Un successivo check headless ha confermato autenticazione e
 tenant nel contesto corrente; la 0.2.7 corregge il ripristino completo dopo il riavvio. Il check
-server 0.2.7 successivo si è fermato a `TEAMSYSTEM_EMAIL`; la candidata 0.2.8 amplia soltanto il
-contratto di route esatte descritto sopra e non è ancora verificata live.
+server 0.2.7 successivo si è fermato a `TEAMSYSTEM_EMAIL`; la 0.2.8 ha ampliato soltanto il
+contratto di route esatte descritto sopra. Il gate live bounded della 0.3.0 ha successivamente
+verificato autenticazione, tenant e letture riuscite sullo SHA documentato, senza abilitare write.
 Un errore di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
@@ -319,11 +327,12 @@ nativo univoco, ha effettuato un solo submit e ha poi rifiutato la callback DIC 
 78. La 0.2.5 corregge esclusivamente questo stato transitorio e l'attesa bounded del marker.
 Il check autorizzato 0.2.5 è stato eseguito una sola volta con bot fermo e write disabilitate e ha
 verificato autenticazione, tenant e scrittura del vault nel processo corrente; il riavvio ha poi
-evidenziato il campo `sessionStorage` mancante, corretto nella 0.2.7. Il check 0.2.7 corrente si è
-fermato prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`; la candidata 0.2.8 corregge il solo
-contratto corrente TeamSystem/OIDC e resta da verificare live. In assenza del flag il codice live
-non viene invocato; per futuri rinnovi o invalidazioni resta obbligatoria la stessa procedura
-singola.
+evidenziato il campo `sessionStorage` mancante, corretto nella 0.2.7. Un check 0.2.7 successivo si è
+fermato prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`; la 0.2.8 ha corretto il solo contratto
+TeamSystem/OIDC. Infine, il gate live unico della 0.3.0 sullo SHA documentato ha verificato
+autenticazione e tenant prima delle letture bounded, mantenendo tutte le write disabilitate. In
+assenza del flag il codice live non viene invocato; per futuri rinnovi o invalidazioni resta
+obbligatoria la stessa procedura singola.
 
 ## Invalidazione e rotazione
 
@@ -370,7 +379,7 @@ risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con
 Dalla 0.2.7 il normale comando di servizio `run` non invia credenziali DIC e può restare online
 `DEGRADED`; `RestartPreventExitStatus=78` rimane una difesa aggiuntiva. Fermare il check esplicito,
 non rilanciarlo in loop e verificare lo stato dell'account con una procedura umana autorizzata.
-La candidata 0.2.8 non cambia questa regola: il percorso SSO senza credenziali è accettato solo
+La 0.2.8 non cambia questa regola: il percorso SSO senza credenziali è accettato solo
 dopo marker e tenant e non autorizza un retry quando l'esito del submit è incerto.
 
 Il caso osservato nella 0.2.4 è stato ricondotto alla callback DIC legittima non ancora

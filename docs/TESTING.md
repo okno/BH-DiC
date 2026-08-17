@@ -38,6 +38,10 @@ make check
 `make check` non include automaticamente `gitleaks`; verificare ogni comando singolarmente e
 registrare exit code. Se un tool non è installato, il gate è `BLOCKED`, non `PASS`.
 
+Per lo SHA 0.3.0 verificato: 834 test locali PASS; branch coverage 85% su 10.361 statement e 3.258
+branch; Ruff, mypy, Bandit e `pip-audit` verdi; CI e CodeQL riusciti. Questi risultati non
+sostituiscono le evidenze live bounded riportate in [Stato di verifica](LIVE_VERIFICATION_STATUS.md).
+
 ## Suite e marker
 
 ```bash
@@ -47,9 +51,10 @@ pytest tests/security
 pytest tests/integration/test_approval_sqlalchemy.py
 ```
 
-I marker `integration` ed `e2e` non implicano accesso live. Un test network/live deve avere
-marker esplicito, opt-in separato e tenant/employee sintetici dedicati. Nel rilascio corrente non
-sono autorizzati test live, né read né write.
+I marker `integration` ed `e2e` non implicano accesso live. Un test network/live deve avere marker
+esplicito, opt-in separato e tenant/employee sintetici dedicati. L'unico gate operatore live
+documentato ha autorizzato soltanto autenticazione/tenant e due subset read bounded; non autorizza
+nuovi test live automatici, lo smoke Discord o alcuna write.
 
 ## Copertura richiesta
 
@@ -69,6 +74,8 @@ sono autorizzati test live, né read né write.
   retry read e no-retry write;
 - cattura passiva della risposta elenco: origine/path/query/metodo/MIME/schema/body bounded,
   duplicati, tenant e paginazione fail-closed;
+- `current_contract` per-record nei soli keyset esatti `BASE` o `EXTENDED=BASE+6`, con shape
+  tecniche strette, discard-only e rifiuto di subset/superset/chiavi sconosciute;
 - display name `SecretStr`: chiaro soltanto nel renderer `SENSITIVE`/ephemeral `HR_READ`, mascherato
   in repr/model dump e assente da aggregati, provider, log, audit e telemetria;
 - totale non qualificato `all`, intervalli mensili con rollover anno, date ISO/italiane, scadenze

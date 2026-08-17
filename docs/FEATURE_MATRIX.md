@@ -6,7 +6,9 @@ non deve essere mantenuta come secondo catalogo runtime.
 ## Stato verificato
 
 - **32/32** Function ID hanno specifica policy e percorso mock sintetico testato.
-- **13 read**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `NEEDS_VALIDATION`.
+- **13 read**: `IMPLEMENTED`, `TESTED_WITH_MOCK`; il conteggio aggregato bounded di
+  `EMP-READ-001` e le scadenze bounded del prossimo mese di calendario di `EMP-CONTRACT-001` sono
+  `LIVE_READ_VERIFIED`. Ogni altra modalità resta `NEEDS_VALIDATION`.
 - **13 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; **6 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
@@ -14,17 +16,18 @@ non deve essere mantenuta come secondo catalogo runtime.
   `EMP-DOC-003` e `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. I 19 Function ID write
   sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
-- Nessuna nuova Function ID della candidata 0.3.0 è promossa a `LIVE_READ_VERIFIED`. Il runtime
-  Debian, Groq e le evidenze storiche DIC/Discord restano verifiche separate. DIC resta
-  `NEEDS_VALIDATION`; i gate locali sono verdi, mentre deployment e smoke della 0.3.0 sono
-  `PENDING`. Tutte le write
-  restano disabilitate.
+- La versione 0.3.0, SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target
+  Debian un unico gate applicativo live autorizzato in sola lettura per i due subset sopra. Lo
+  smoke del trasporto Discord resta `PENDING`; il servizio è `active/running`, con zero riavvii
+  osservati e gateway `discord_ready`, mentre tutte le write restano disabilitate.
 
 La 0.3.0 estende i percorsi read senza ampliare il catalogo: `EMP-READ-001` usa la risposta elenco
 emessa dalla UI sotto schema chiuso; `EMP-CONTRACT-001` può analizzare le date del contratto
 corrente sull'intero elenco paginato senza fetch per-dipendente. La semantica “totale” e gli
-intervalli relativi sono risolti localmente. Queste proprietà implementative non sono da sole una
-prova live.
+intervalli relativi sono risolti localmente. `current_contract` accetta per-record soltanto i
+keyset esatti `BASE` o `EXTENDED=BASE+6` chiavi tecniche; queste ultime hanno shape stretta e sono
+discard-only. Il gate live prova soltanto i due subset esplicitamente indicati, non l'intera
+superficie read.
 
 “Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
 Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il
@@ -34,13 +37,13 @@ catalogo esclude anche dalla tool exposure ordinaria.
 
 | Function ID | Funzione | Ruolo/scope minimo | Flag | Tool | Stato |
 |---|---|---|---|---|---|
-| `EMP-READ-001` | elenco/conteggio; totale non qualificato = intero organico | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-READ-001` | elenco/conteggio; totale non qualificato = intero organico | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per il solo conteggio aggregato bounded; altre modalità NEEDS_VALIDATION |
 | `EMP-READ-002` | riepilogo anagrafico redatto | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-SEARCH-001` | ricerca dipendente | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-FILTER-001` | filtri elenco | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-SORT-001` | ordinamento | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-PAGE-001` | paginazione | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-CONTRACT-001` | contratti e scadenze bulk senza N+1 | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-CONTRACT-001` | contratti e scadenze bulk senza N+1 | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per le sole scadenze bounded del prossimo mese di calendario; altre modalità NEEDS_VALIDATION |
 | `EMP-RBAC-001` | gruppi/ruoli | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |

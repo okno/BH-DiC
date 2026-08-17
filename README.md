@@ -6,13 +6,18 @@ Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello sele
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 17 agosto 2026: Debian 12 e Groq `openai/gpt-oss-120b` hanno evidenza live separata. Un
-> check storico DIC ha restituito sessione `AUTHENTICATED` e tenant `VERIFIED_BY_ADAPTER`; la
-> diagnosi successiva `TEAMSYSTEM_EMAIL`, il restore cifrato di `sessionStorage`, lo stato gateway
-> `DEGRADED` e il primo deny RBAC restano documentati come evidenze distinte. La candidata 0.3.0
-> aggiunge l'assistente Senior HR, la lettura passiva dell'elenco e la telemetria token. I gate
-> locali completi sono verdi; deployment della 0.3.0 e smoke funzionali Discord/DIC restano
-> `PENDING`. Tutte le write restano `DISABLED_BY_POLICY`.
+> Stato al 17 agosto 2026: la versione `0.3.0`, SHA esatto
+> `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target Debian un unico gate live
+> autorizzato in sola lettura. Il gate ha attestato autenticazione/tenant, conteggio aggregato
+> `PUBLIC` non-ephemeral, scadenze bounded del prossimo mese di calendario `SENSITIVE`/ephemeral,
+> stato API e telemetria token. Non è uno smoke del trasporto Discord: il round-trip slash nel
+> canale resta `PENDING`; il servizio è `active/running`, con zero riavvii osservati e gateway
+> `discord_ready`. Tutte le write restano
+> `DISABLED_BY_POLICY`.
+
+Le evidenze storiche `VERIFIED_BY_ADAPTER`, `TEAMSYSTEM_EMAIL`, restore `sessionStorage`, gateway
+`DEGRADED` e primo deny RBAC restano nel report come tappe separate; non sostituiscono né
+contraddicono il gate 0.3.0 corrente.
 
 ## Uso autorizzato
 
@@ -57,7 +62,9 @@ dell'adapter.
 - preview, conferma monouso hashata, TTL, idempotenza, A1/A2 distinti e riconciliazione;
 - adapter mock deterministico e adapter Playwright con tenant guard first-party, osservazione
   passiva della risposta UI `GET /backend_apiV2/employees` e dei metadati paginator sul path
-  distinto `/employees`, sotto contratti esatti, schema chiuso e bounded; vault cifrato
+  distinto `/employees`, sotto contratti esatti, schema chiuso e bounded; `current_contract` viene
+  accettato per-record soltanto nel keyset `BASE` oppure nel keyset `EXTENDED` completo osservato,
+  i cui sei campi tecnici sono validati e scartati senza proiezione; vault cifrato
   cookie/localStorage/`sessionStorage` ripersistito dopo letture verificate e avvio Discord
   degradabile senza submit implicito di credenziali;
 - nome visualizzato disponibile in chiaro soltanto come `SecretStr` transitorio per elenchi e
@@ -67,8 +74,8 @@ dell'adapter.
 - quarantena UUID, hash/deduplica, MIME/estensione, ClamAV fail-closed e retention;
 - persistenza async SQLite/PostgreSQL, migrazioni Alembic e test sintetici.
 
-La matrice puntuale è in [Feature matrix](docs/FEATURE_MATRIX.md). Nessuna riga della matrice
-costituisce prova di verifica live.
+La matrice puntuale è in [Feature matrix](docs/FEATURE_MATRIX.md), che separa esplicitamente i due
+percorsi read bounded verificati live da tutte le altre modalità ancora da validare.
 
 ## Requisiti
 
@@ -91,10 +98,12 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). Distribuire la candidata 0.3.0 soltanto dopo i gate e applicare
-la migrazione `0002_model_usage`. Invalidare il vault esclusivamente dopo rotazione o compromissione
-documentata; un semplice upgrade non richiede un nuovo login. Il gateway può essere avviato
-`DEGRADED` se la sessione verificata non è disponibile.
+[Deployment](docs/DEPLOYMENT.md). Il target verificato eseguiva la versione `0.3.0` allo SHA esatto
+riportato nello stato live; applicare sempre la migrazione `0002_model_usage` su altre
+installazioni. Invalidare il vault esclusivamente dopo rotazione o compromissione documentata; un
+semplice upgrade non richiede un nuovo login. Il gateway può essere avviato `DEGRADED` se la
+sessione verificata non è disponibile. Nello snapshot corrente il servizio target è fermo: il
+prossimo passo autorizzato è lo smoke del trasporto Discord, non l'abilitazione delle write.
 
 ## Configurazione e operatività
 
@@ -152,8 +161,10 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 
 ## Sicurezza e limiti
 
-- Il progetto è alpha. La lettura passiva dell'elenco e le nuove risposte Senior HR della 0.3.0
-  restano da validare end-to-end sul target prima della promozione live.
+- Il progetto è alpha. Il gate live copre soltanto conteggio aggregato e scadenze bounded del
+  prossimo mese di calendario; ricerca, altre letture e altri intervalli restano da validare.
+- Lo smoke del trasporto Discord 0.3.0 è ancora `PENDING`; nello snapshot documentato il servizio
+  è `active/running`, con zero riavvii osservati e gateway `discord_ready`.
 - MFA, CAPTCHA e UI drift possono impedire l'automazione.
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.

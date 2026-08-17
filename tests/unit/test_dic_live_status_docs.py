@@ -21,6 +21,7 @@ PARTIALLY_COMPLETED_FUNCTIONS = {
     "EMP-INVITE-001",
 }
 LIVE_NOT_AVAILABLE_FUNCTIONS = PARTIALLY_COMPLETED_FUNCTIONS - {"EMP-CREATE-001"}
+LIVE_READ_VERIFIED_FUNCTIONS = {"EMP-READ-001", "EMP-CONTRACT-001"}
 
 
 def _matrix_rows() -> dict[str, str]:
@@ -49,7 +50,11 @@ def test_live_matrix_preserves_truthful_read_and_write_statuses() -> None:
         row = rows[function_id]
         assert "IMPLEMENTED — TESTED_WITH_MOCK" in row
         assert "NEEDS_VALIDATION" in row
-        assert "LIVE_READ_VERIFIED" not in row
+        if function_id in LIVE_READ_VERIFIED_FUNCTIONS:
+            assert "LIVE_READ_VERIFIED" in row
+            assert "soltanto" in row
+        else:
+            assert "LIVE_READ_VERIFIED" not in row
 
     for function_id in WRITE_FUNCTION_IDS:
         row = rows[function_id]

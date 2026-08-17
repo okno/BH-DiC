@@ -1,8 +1,8 @@
 # Implementation report
 
-Snapshot documentale: **17 agosto 2026**. Lo SHA autorevole è riportato nel report di consegna perché
-un commit non può auto-referenziare il proprio hash. Aggiornare questo file dopo il deployment senza
-sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
+Snapshot documentale: **17 agosto 2026**. L'artefatto verificato sul server è la versione `0.3.0`,
+SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`. Gli stati successivi restano
+separati: non sostituire `PENDING` o `UNVERIFIED` con inferenze.
 
 ## Repository
 
@@ -13,8 +13,8 @@ sostituire `BLOCKED` o `UNVERIFIED` con inferenze.
 | Remote | `https://github.com/okno/BH-DiC.git` |
 | Visibilità | `PUBLIC`, verificata tramite GitHub API e scelta esplicitamente dal titolare |
 | Branch | `main` |
-| Commit SHA | riportato nel report di consegna; non auto-referenziato nel commit stesso |
-| Git | branch `main` pushato; worktree e tracking remoto verificati dal gate di consegna |
+| Commit SHA verificato | `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe` |
+| Git | branch `main`; CI e CodeQL riusciti sullo SHA verificato |
 
 Il tree corrente del remote pubblico non contiene credenziali o PII rilevate ed è limitato a
 sorgenti, configurazioni di esempio e fixture sintetiche. Segreti, identificatori operativi, stato
@@ -34,7 +34,7 @@ problemi residui. Nessuna licenza open source è stata aggiunta.
 | Database server | SQLite presente e migrazione alla head verificata |
 | Antivirus | ClamAV attivo; socket `0660` e scansione applicativa riuscita |
 | Doctor | offline e online riusciti |
-| Bot target | baseline precedente con evidenze Discord/DIC separate; candidata 0.3.0 non ancora distribuita né verificata live |
+| Bot target | versione `0.3.0` allo SHA verificato; gate applicativo live PASS; servizio `active/running`, zero riavvii osservati, gateway `discord_ready`; smoke trasporto Discord `PENDING` |
 
 Il provider Groq e il modello configurato hanno superato il probe live chiuso. La password
 TeamSystem è stata rinnovata nel flusso umano e il secret locale aggiornato. I check DIC headless
@@ -46,13 +46,17 @@ deployment 0.2.5, un singolo `dic-auth-check --live` ha attestato sessione `AUTH
 `VERIFIED_BY_ADAPTER` nel processo corrente. Il comando guild-scoped è stato registrato e il
 gateway ha risposto; il primo smoke è stato negato dal gate RBAC prima del dispatch. Il riavvio
 successivo ha evidenziato che il vault non conservava `sessionStorage` e si è fermato sulla route
-TeamSystem password diretta, prima del gateway. La 0.2.7 è stata distribuita; il check DIC corrente
-si è fermato a `TEAMSYSTEM_EMAIL` prima di qualunque azione credenziale. La candidata 0.2.8
+TeamSystem password diretta, prima del gateway. La 0.2.7 è stata distribuita; un check DIC storico
+si è fermato a `TEAMSYSTEM_EMAIL` prima di qualunque azione credenziale. La 0.2.8
 corregge il contratto corrente TeamSystem/OIDC e il restore di `sessionStorage`. La candidata
 0.3.0 aggiunge lettura passiva elenco, presenter Senior HR, persistenza della sessione ruotata e
-telemetria token. I gate locali completi sono verdi; deployment, migrazione e smoke live 0.3.0
-restano `PENDING`.
-Nessuna nuova Function ID DIC è promossa a verificata live da questo documento.
+telemetria token. Sullo SHA documentato un unico gate live autorizzato in sola lettura ha attestato
+autenticazione e tenant, quindi due percorsi applicativi bounded: conteggio aggregato
+`PUBLIC`/non-ephemeral e scadenze del prossimo mese di calendario `SENSITIVE`/ephemeral. Entrambi
+hanno riportato telemetria token; lo status ha riportato API e token completi. Nessun conteggio HR,
+identificatore o dato personale è conservato in questo report. Tutte le write sono rimaste
+disabilitate. Il servizio è stato poi avviato `active/running`, con zero riavvii osservati e gateway
+`discord_ready`; lo smoke del trasporto Discord resta `PENDING`.
 
 ## Implementazione
 
@@ -104,12 +108,12 @@ Completati nel codice e testati con risorse sintetiche:
 - avvio 0.2.7 separato dal login: il gateway non invia credenziali DIC, un vault mancante/scaduto o
   illeggibile produce stato `DEGRADED` e le sole funzioni DIC falliscono chiuso; l'autenticazione e
   la persistenza restano confinate a `dic-auth-check --live` esplicito;
-- candidata 0.2.8: ingresso e-mail sulla root TeamSystem HTTPS esatta corrente oppure legacy
+- release 0.2.8: ingresso e-mail sulla root TeamSystem HTTPS esatta corrente oppure legacy
   `/Account/LoginEmail`, con `/connect/authorize` e `/connect/authorize/callback` ammesse soltanto
   come transizioni pending bounded; SSO senza email/password accettato esclusivamente dopo route
   applicativa DIC, marker autenticato e attestazione tenant, con zero azioni sui controlli
   credenziali; query e `login_hint` restano opachi e nessuna route generica viene aggiunta;
-- candidata 0.3.0: cattura passiva della sola risposta UI `GET /backend_apiV2/employees`, con URL
+- versione 0.3.0: cattura passiva della sola risposta UI `GET /backend_apiV2/employees`, con URL
   della risposta distinto dagli URL del paginator sul path esatto `/employees`; una diagnostica
   live autorizzata e minimizzata ha confermato questa separazione, ora validata fail-closed senza
   rendere i due path intercambiabili. Gli URL pagina devono preservare la query UI completa di nove
@@ -118,6 +122,12 @@ Completati nel codice e testati con risorse sintetiche:
   tipizzata; il display name completo è un `SecretStr` transitorio aperto soltanto dal renderer
   `SENSITIVE`/ephemeral per `HR_READ`, mentre e-mail, codice fiscale e matricola restano mascherati
   e nessun endpoint viene chiamato direttamente;
+- contratto `current_contract` per-record limitato a due keyset esatti: `BASE`, con i sei campi
+  funzionali noti, oppure `EXTENDED`, cioè `BASE` più `flexible_workinghours`, `hours_alert`,
+  `note`, `ongoing`, `workinghours` e `workinghours_list`. I campi
+  `flexible_workinghours`/`hours_alert`/`ongoing` sono `bool` stretti; gli altri tre sono `null`
+  stretti. Tutti vengono scartati senza proiezione; subset, superset e chiavi sconosciute
+  falliscono chiuso;
 - ripersistenza serializzata del vault soltanto dopo sessione autenticata e tenant attestato o
   lettura riuscita, mai dopo errori o stati ignoti;
 - trasporto Discord con acknowledgement privato e follow-up pubblico soltanto per
@@ -131,7 +141,9 @@ Completati nel codice e testati con risorse sintetiche:
 
 Stato funzionale:
 
-- 13 read: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `NEEDS_VALIDATION`;
+- 13 read: `IMPLEMENTED`, `TESTED_WITH_MOCK`; `EMP-READ-001` è `LIVE_READ_VERIFIED` soltanto per
+  il conteggio aggregato bounded e `EMP-CONTRACT-001` soltanto per le scadenze bounded del prossimo
+  mese di calendario; tutte le altre modalità restano `NEEDS_VALIDATION`;
 - 13 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; 6 write sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`: `EMP-CREATE-001` supporta live soltanto il subset
@@ -140,14 +152,16 @@ Stato funzionale:
   sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
-- bot target da aggiornare alla candidata 0.3.0 soltanto dopo i gate; nessuna modifica DIC di
-  produzione e nessuna Function ID live autorizzata.
+- bot target aggiornato alla 0.3.0 sullo SHA verificato; servizio `active/running`, zero riavvii
+  osservati, gateway `discord_ready`, smoke trasporto Discord ancora `PENDING`, nessuna modifica
+  DIC di produzione e nessuna write
+  autorizzata.
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — candidata 0.3.0
+## Test e gate — versione 0.3.0
 
-I gate completi del worktree candidato 0.3.0 sono conclusi. Le verifiche live DIC, provider e
+I gate completi della versione 0.3.0 sono conclusi. Le verifiche live DIC, provider e
 Discord sono evidenze separate e non vengono sostituite dai gate né promuovono automaticamente le
 Function ID HR a verificate.
 
@@ -156,10 +170,10 @@ Function ID HR a verificate.
 | `ruff format --check .` | PASS, 196 file |
 | `ruff check .` | PASS |
 | `mypy src` | PASS, 114 file sorgente |
-| `pytest` | PASS, 787 test; un warning `audioop` di terza parte |
-| `coverage run --branch -m pytest` | PASS, 787 test |
-| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.289 statement; 3.226 branch) |
-| `bandit -q -r src` | PASS, 18.931 linee di codice; zero issue |
+| `pytest` | PASS, 834 test; un warning `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 834 test |
+| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.361 statement; 3.258 branch) |
+| `bandit -q -r src` | PASS |
 | `python -m pip check` | PASS, nessuna dipendenza rotta |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note |
 | `git diff --check` | PASS |
@@ -167,10 +181,10 @@ Function ID HR a verificate.
 | parsing configurazioni/workflow YAML | PASS, 3 file |
 | scansione hygiene/versione/documentazione | PASS, 46 test mirati |
 | script `bash -n` + contratti/lifecycle ops | PASS, 22 script |
-| link Markdown locali | PASS, 72 riferimenti |
+| link Markdown locali | PASS, 73 riferimenti |
 
-I workflow remoti restano da verificare dopo il push. Le evidenze Debian/Groq e il login manuale
-riportati sopra derivano da controlli separati; non promuovono adapter DIC o Discord a verificati.
+CI e CodeQL sono riusciti sullo SHA esatto verificato. Le evidenze provider, DIC, gate applicativo
+e trasporto Discord restano distinte: il PASS applicativo non promuove lo smoke slash Discord.
 
 ## Operatività
 
@@ -204,8 +218,9 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 - parametri pending cifrati; audit HMAC; file in quarantena con antivirus fail-closed;
 - il pending file conserva solo l'`upload_id`; path e SHA-256 non sono esposti in eventi, log,
   Discord o al provider, e lo SHA-256 è visibile soltanto all'operatore locale nei metadati file;
-- nessuna nuova Function ID DIC 0.3.0 promossa live; deployment e smoke della candidata restano
-  `PENDING`, mentre le evidenze storiche `TEAMSYSTEM_EMAIL`/`VERIFIED_BY_ADAPTER` restano separate;
+- soltanto i subset bounded di `EMP-READ-001` e `EMP-CONTRACT-001` descritti sopra sono promossi a
+  `LIVE_READ_VERIFIED`; lo smoke del trasporto Discord resta `PENDING`, mentre il servizio è
+  `active/running` con zero riavvii osservati e gateway `discord_ready`;
 - l'unit systemd impedisce il restart su exit 78; dalla 0.2.7 il comando `run` non esegue alcun
   login automatico e il codice 78 resta per l'autenticazione esplicita incerta; su Debian 12
   l'unit dalla 0.2.4 usa
@@ -214,9 +229,12 @@ stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.
 
 ## Problemi residui
 
-- mappatura RBAC Discord e smoke 0.3.0 `READ_ONLY`/`HR_READ` ancora da verificare sul target;
+- smoke trasporto Discord 0.3.0 `READ_ONLY`/`HR_READ` ancora da verificare sul target; il gate
+  applicativo ha confermato la sensibilità `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, ma non
+  il round-trip slash;
 - Groq/modello verificati live; OpenAI e llama restano non verificati;
-- selettori e route delle funzioni HR Playwright non validati live; UI drift possibile;
+- selettori e route al di fuori dei due percorsi read bounded verificati non sono validati live;
+  UI drift resta possibile;
 - form write, delete/export/download e postcondizioni non verificati live;
 - MFA/CAPTCHA e funzionalità TeamSystem non documentate possono bloccare flussi;
 - rotazione log e Wazuh non installati/testati sul target;

@@ -4,11 +4,10 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato al 17 agosto 2026: runtime Debian 12 e Groq `openai/gpt-oss-120b` hanno evidenza verificata
-> separata. Lo storico DIC include `AUTHENTICATED`/`VERIFIED_BY_ADAPTER`, il successivo stop
-> `TEAMSYSTEM_EMAIL` e la correzione del vault `sessionStorage`. La candidata 0.3.0 aggiunge la
-> lettura passiva dell'elenco, l'assistente Senior HR e la telemetria token; gate completi,
-> deployment e smoke live restano `PENDING`. Tutte le write devono restare
+> Stato al 17 agosto 2026: la versione 0.3.0 allo SHA esatto documentato è installata sul target
+> Debian e ha superato il gate applicativo live bounded con autenticazione/tenant e write
+> disabilitate. Il servizio è `active/running`, con zero riavvii osservati e gateway
+> `discord_ready`; lo smoke del trasporto Discord resta `PENDING`. Tutte le write devono restare
 > `DISABLED_BY_POLICY`.
 
 ## 1. Decisioni prima dell'installazione
@@ -294,8 +293,9 @@ bootstrap live.
 Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flusso umano normale e
 aggiornare `DIC_PASSWORD` localmente senza mostrarla. Non invalidare un vault leggibile per il
 solo upgrade, ma dopo una rotazione di password/account/tenant l'invalidazione è obbligatoria. Nel
-caso corrente, distribuire la candidata 0.3.0 dopo i gate e, con servizio fermo e autorizzazione
-esplicita alla rete DIC, eseguire una sola invalidazione seguita da una sola verifica:
+caso di una futura rotazione, con servizio fermo e autorizzazione esplicita alla rete DIC, eseguire
+una sola invalidazione seguita da una sola verifica. Sul target documentato la 0.3.0 ha già
+superato il gate live: non ripetere questa sequenza senza una nuova rotazione o compromissione.
 
 ```bash
 sudo -u bh-dic -H .venv/bin/python -m bh_dic invalidate-session
@@ -322,8 +322,8 @@ partito senza che completamento, tenant o vault siano dimostrabili: fermarsi e v
 procedura umana, senza un nuovo login.
 
 La 0.2.7 ammette l'ingresso TeamSystem soltanto sulle route esatte `LoginEmail` e
-`LoginPassword`; il check server corrente si è però fermato a `TEAMSYSTEM_EMAIL`. La candidata
-0.2.8 riconosce anche la root e-mail TeamSystem esatta corrente e soltanto le transizioni pending
+`LoginPassword`; un check storico si è però fermato a `TEAMSYSTEM_EMAIL`. La 0.2.8 riconosce anche
+la root e-mail TeamSystem esatta corrente e soltanto le transizioni pending
 bounded `/connect/authorize`/`/connect/authorize/callback`; prima del segreto verifica che
 l'account del form coincida con
 `DIC_USERNAME`. Il vault cifra cookie/localStorage e lo snapshot bounded `sessionStorage` della
