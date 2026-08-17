@@ -7,8 +7,10 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 from typing import Any, Protocol, cast
 
+from openai import BadRequestError
 from pydantic import ValidationError
 
 from bh_dic.openai.prompts import INTENT_ROUTER_PROMPT
@@ -33,6 +35,13 @@ from bh_dic.policies.catalog import (
 )
 
 
+class ProviderFailureKind(StrEnum):
+    """Closed, non-sensitive classification of a failed provider request."""
+
+    UNCLASSIFIED = "UNCLASSIFIED"
+    TOOL_USE_FAILED = "TOOL_USE_FAILED"
+
+
 class IntentProviderError(RuntimeError):
     """Sanitized provider failure with optional completed-response telemetry.
 
@@ -49,12 +58,14 @@ class IntentProviderError(RuntimeError):
         model: str | None = None,
         usage: ProviderTokenUsage | None = None,
         response_received: bool = False,
+        failure_kind: ProviderFailureKind = ProviderFailureKind.UNCLASSIFIED,
     ) -> None:
         super().__init__(message)
         self.provider = provider
         self.model = model
         self.usage = usage
         self.response_received = response_received
+        self.failure_kind = failure_kind
 
 
 _FORBIDDEN_SDK_ENVIRONMENT = (
@@ -211,7 +222,36 @@ def _response_error_with_context(
         model=model,
         usage=usage,
         response_received=True,
+        failure_kind=error.failure_kind,
     )
+
+
+def _classify_provider_failure(
+    error: Exception,
+    *,
+    provider: str,
+) -> ProviderFailureKind:
+    """Classify only bounded SDK metadata, never a provider body or message."""
+
+    if provider != "groq" or type(error) is not BadRequestError:
+        return ProviderFailureKind.UNCLASSIFIED
+    status_code: object | None = None
+    code: object | None = None
+    metadata_failed = False
+    try:
+        status_code = error.status_code
+        code = error.code
+    except Exception:
+        metadata_failed = True
+    if (
+        not metadata_failed
+        and type(status_code) is int
+        and status_code == 400
+        and type(code) is str
+        and code == "tool_use_failed"
+    ):
+        return ProviderFailureKind.TOOL_USE_FAILED
+    return ProviderFailureKind.UNCLASSIFIED
 
 
 def envelope_from_call(
@@ -354,18 +394,22 @@ class ResponsesIntentClient:
         if self._reasoning_effort and self._reasoning_effort != "none":
             request["reasoning"] = {"effort": self._reasoning_effort}
         response: Any = _MISSING
-        provider_failed = False
+        provider_failure_kind = ProviderFailureKind.UNCLASSIFIED
         try:
             response = await self._provider.responses.create(**request)
-        except Exception:  # provider exceptions and response bodies are private
-            provider_failed = True
-        if provider_failed or response is _MISSING:
+        except Exception as exc:  # provider exceptions and response bodies are private
+            provider_failure_kind = _classify_provider_failure(
+                exc,
+                provider=self._provider_name,
+            )
+        if response is _MISSING:
             raise IntentProviderError(
                 f"{self._provider_name} intent routing failed",
                 provider=self._provider_name,
                 model=self._model,
-                response_received=False,
-            )
+                response_received=(provider_failure_kind is ProviderFailureKind.TOOL_USE_FAILED),
+                failure_kind=provider_failure_kind,
+            ) from None
 
         usage: ProviderTokenUsage | None = None
         usage_failure: IntentProviderError | None = None
@@ -572,18 +616,19 @@ class LlamaChatCompletionsIntentClient:
             "max_tokens": self._max_output_tokens,
         }
         response: object = _MISSING
-        provider_failed = False
+        provider_failure_kind = ProviderFailureKind.UNCLASSIFIED
         try:
             response = await self._provider.chat.completions.create(**request)
-        except Exception:  # provider exceptions and response bodies are private
-            provider_failed = True
-        if provider_failed or response is _MISSING:
+        except Exception as exc:  # provider exceptions and response bodies are private
+            provider_failure_kind = _classify_provider_failure(exc, provider="llama")
+        if response is _MISSING:
             raise IntentProviderError(
                 "llama intent routing failed",
                 provider="llama",
                 model=self._model,
                 response_received=False,
-            )
+                failure_kind=provider_failure_kind,
+            ) from None
 
         usage: ProviderTokenUsage | None = None
         usage_failure: IntentProviderError | None = None

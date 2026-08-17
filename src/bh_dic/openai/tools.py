@@ -232,8 +232,20 @@ def _parameters_schema(function_ids: list[str]) -> dict[str, Any]:
                 "maxLength": 4_000,
                 "description": parameter_description,
             },
-            "date_from": {**nullable_string, "description": "Data ISO YYYY-MM-DD o null."},
-            "date_to": {**nullable_string, "description": "Data ISO YYYY-MM-DD o null."},
+            "date_from": {
+                **nullable_string,
+                "description": (
+                    "Data assoluta ISO YYYY-MM-DD; null per un periodo relativo di lettura, "
+                    "risolto localmente."
+                ),
+            },
+            "date_to": {
+                **nullable_string,
+                "description": (
+                    "Data assoluta ISO YYYY-MM-DD; null per un periodo relativo di lettura, "
+                    "risolto localmente."
+                ),
+            },
             "requires_clarification": {"type": "boolean"},
             "clarification_question": {**nullable_string, "maxLength": 300},
             "sensitivity": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},

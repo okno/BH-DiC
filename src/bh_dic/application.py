@@ -51,6 +51,7 @@ from bh_dic.files.service import FileService, UploadResolutionError
 from bh_dic.hr_assistant import (
     SeniorHrPresenter,
     is_employee_aggregate_request,
+    local_contract_expiry_fallback_interval,
     local_employee_search_query,
     minimize_hr_router_request,
     normalize_hr_intent,
@@ -64,10 +65,14 @@ from bh_dic.model_usage import (
     ModelUsageStatus,
     ModelUsageTotals,
 )
-from bh_dic.openai.client import IntentProviderError
+from bh_dic.openai.client import (
+    IntentProviderError,
+    ProviderFailureKind,
+    RoutedIntent,
+)
 from bh_dic.openai.intent_router import IntentRouter
 from bh_dic.openai.redaction import prepare_provider_input, redact_structure
-from bh_dic.openai.schemas import ActionClass, IntentEnvelope
+from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata
 from bh_dic.policies.catalog import (
     FUNCTION_CATALOG,
     FunctionSpec,
@@ -170,6 +175,19 @@ class BHApplicationCoordinator(InteractionCoordinator):
         prepared_request = prepare_provider_input(request)
         provider_request, explicit_employee_id = minimize_hr_router_request(prepared_request)
         local_search_query = local_employee_search_query(prepared_request)
+        request_today = self._today()
+        contract_expiry_fallback_interval = None
+        provider_visible = visible
+        if "EMP-CONTRACT-001" in visible:
+            contract_expiry_fallback_interval = local_contract_expiry_fallback_interval(
+                prepared_request,
+                provider_request,
+                today=request_today,
+            )
+            if contract_expiry_fallback_interval is not None:
+                # The local classifier does not select the final intent. It only removes
+                # unrelated tools from this exact, non-ambiguous read request.
+                provider_visible = frozenset({"EMP-CONTRACT-001"})
         usage_key = ModelUsageKey(
             correlation_id=correlation_id,
             purpose="intent_route",
@@ -183,8 +201,10 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     model=self._model_name,
                 )
             )
+        routed: RoutedIntent
+        usage_completed = False
         try:
-            routed = await self.router.route(provider_request, visible)
+            routed = await self.router.route(provider_request, provider_visible)
         except IntentProviderError as exc:
             if self._model_usage is not None:
                 await self._model_usage.complete(
@@ -192,7 +212,27 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     response_received=exc.response_received,
                     usage=exc.usage,
                 )
-            raise
+                usage_completed = True
+            if (
+                self._model_provider != "groq"
+                or exc.provider != "groq"
+                or exc.failure_kind is not ProviderFailureKind.TOOL_USE_FAILED
+                or not exc.response_received
+                or contract_expiry_fallback_interval is None
+            ):
+                raise
+            routed = RoutedIntent(
+                envelope=self._direct_intent(
+                    "EMP-CONTRACT-001",
+                    date_from=contract_expiry_fallback_interval[0],
+                    date_to=contract_expiry_fallback_interval[1],
+                ),
+                metadata=RouteMetadata(
+                    provider="local_fallback",
+                    model="deterministic",
+                    tool_name="get_contracts",
+                ),
+            )
         except asyncio.CancelledError:
             if self._model_usage is not None:
                 await asyncio.shield(
@@ -211,7 +251,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     usage=None,
                 )
             raise
-        if self._model_usage is not None:
+        if self._model_usage is not None and not usage_completed:
             await self._model_usage.complete(
                 usage_key,
                 response_received=True,
@@ -226,7 +266,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
         if routed.envelope.function_id == "EMP-SEARCH-001":
             trusted_updates["query"] = local_search_query
         routed_envelope = routed.envelope.model_copy(update=trusted_updates)
-        intent = normalize_hr_intent(routed_envelope, request, today=self._today())
+        intent = normalize_hr_intent(routed_envelope, request, today=request_today)
         if intent.requires_clarification:
             await self._audit(
                 actor,

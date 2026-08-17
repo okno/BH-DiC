@@ -6,12 +6,14 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from openai import BadRequestError
 from pydantic import ValidationError
 
 from bh_dic.openai.client import (
     GroqResponsesIntentClient,
     IntentProviderError,
     LlamaChatCompletionsIntentClient,
+    ProviderFailureKind,
     ResponsesIntentClient,
     envelope_from_call,
 )
@@ -231,6 +233,30 @@ def _client(responses: _ResponsesStub, *, reasoning_effort: str = "low") -> Resp
     )
 
 
+def _groq_client(responses: _ResponsesStub) -> GroqResponsesIntentClient:
+    return GroqResponsesIntentClient(
+        api_key="synthetic-groq-key",
+        model="openai/gpt-oss-120b",
+        provider=SimpleNamespace(responses=responses),
+    )
+
+
+def _bad_request(code: object, marker: str, *, status_code: object = 400) -> BadRequestError:
+    response = cast(
+        Any,
+        SimpleNamespace(
+            status_code=status_code,
+            request=SimpleNamespace(),
+            headers={},
+        ),
+    )
+    return BadRequestError(
+        marker,
+        response=response,
+        body={"code": code, "failed_generation": marker},
+    )
+
+
 def test_responses_client_requires_key_and_model() -> None:
     provider = SimpleNamespace(responses=_ResponsesStub())
     with pytest.raises(ValueError, match="API key"):
@@ -281,6 +307,154 @@ async def test_responses_client_normalizes_provider_failures_and_call_count() ->
     duplicate = _client(_ResponsesStub(output=[call, call]))
     with pytest.raises(IntentProviderError, match="exactly one"):
         await duplicate.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+
+@pytest.mark.asyncio
+async def test_provider_tool_use_failure_has_only_closed_sanitized_classification() -> None:
+    private_marker = "PRIVATE_FAILED_TOOL_GENERATION_MARKER"
+    failing = _groq_client(_ResponsesStub(error=_bad_request("tool_use_failed", private_marker)))
+    with pytest.raises(IntentProviderError, match="routing failed") as caught:
+        await failing.route(
+            "employment_contract contract_deadline next_period calendar_month",
+            frozenset({"EMP-CONTRACT-001"}),
+        )
+
+    assert caught.value.failure_kind is ProviderFailureKind.TOOL_USE_FAILED
+    assert caught.value.response_received is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "code", "use_groq"),
+    [
+        (400, "different_code", True),
+        (422, "tool_use_failed", True),
+        (True, "tool_use_failed", True),
+        (400, None, True),
+        (400, "tool_use_failed", False),
+    ],
+)
+async def test_provider_failure_classification_rejects_near_matches(
+    status_code: object,
+    code: object,
+    use_groq: bool,
+) -> None:
+    responses = _ResponsesStub(
+        error=_bad_request(
+            code,
+            "PRIVATE_PROVIDER_FAILURE",
+            status_code=status_code,
+        )
+    )
+    client = _groq_client(responses) if use_groq else _client(responses)
+    with pytest.raises(IntentProviderError) as caught:
+        await client.route(
+            "richiesta sintetica",
+            frozenset({"EMP-CONTRACT-001"}),
+        )
+
+    assert caught.value.failure_kind is ProviderFailureKind.UNCLASSIFIED
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_classification_rejects_duck_typed_error() -> None:
+    class FakeBadRequest(RuntimeError):
+        status_code = 400
+        code = "tool_use_failed"
+
+    with pytest.raises(IntentProviderError) as caught:
+        await _groq_client(_ResponsesStub(error=FakeBadRequest("PRIVATE_DUCK_TYPED_ERROR"))).route(
+            "richiesta sintetica",
+            frozenset({"EMP-CONTRACT-001"}),
+        )
+
+    assert caught.value.failure_kind is ProviderFailureKind.UNCLASSIFIED
+    assert caught.value.response_received is False
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_classification_rejects_bad_request_subclass() -> None:
+    private_marker = "PRIVATE_BAD_REQUEST_SUBCLASS_MARKER"
+
+    class PrivateBadRequestSubclass(BadRequestError):
+        def __getattribute__(self, name: str) -> object:
+            if name in {"status_code", "code", "body", "message"}:
+                raise RuntimeError(private_marker)
+            return super().__getattribute__(name)
+
+    response = cast(
+        Any,
+        SimpleNamespace(
+            status_code=400,
+            request=SimpleNamespace(),
+            headers={},
+        ),
+    )
+    failure = PrivateBadRequestSubclass(
+        private_marker,
+        response=response,
+        body={"code": "tool_use_failed", "failed_generation": private_marker},
+    )
+    with pytest.raises(IntentProviderError) as caught:
+        await _groq_client(_ResponsesStub(error=failure)).route(
+            "richiesta sintetica",
+            frozenset({"EMP-CONTRACT-001"}),
+        )
+
+    assert caught.value.failure_kind is ProviderFailureKind.UNCLASSIFIED
+    assert caught.value.response_received is False
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_classification_contains_property_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_marker = "PRIVATE_BAD_REQUEST_PROPERTY_MARKER"
+    failure = _bad_request("tool_use_failed", private_marker)
+
+    def raise_private(_error: object) -> object:
+        raise RuntimeError(private_marker)
+
+    monkeypatch.setattr(BadRequestError, "code", property(raise_private), raising=False)
+    with pytest.raises(IntentProviderError) as caught:
+        await _groq_client(_ResponsesStub(error=failure)).route(
+            "richiesta sintetica",
+            frozenset({"EMP-CONTRACT-001"}),
+        )
+
+    assert caught.value.failure_kind is ProviderFailureKind.UNCLASSIFIED
+    assert caught.value.response_received is False
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_classification_does_not_compare_untrusted_code_objects() -> None:
+    private_marker = "PRIVATE_BAD_REQUEST_CODE_MARKER"
+
+    class RaisingCode:
+        def __eq__(self, _other: object) -> bool:
+            raise RuntimeError(private_marker)
+
+    failure = _bad_request(RaisingCode(), private_marker)
+    with pytest.raises(IntentProviderError) as caught:
+        await _groq_client(_ResponsesStub(error=failure)).route(
+            "richiesta sintetica",
+            frozenset({"EMP-CONTRACT-001"}),
+        )
+
+    assert caught.value.failure_kind is ProviderFailureKind.UNCLASSIFIED
+    assert caught.value.response_received is False
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
 
 
 @pytest.mark.asyncio

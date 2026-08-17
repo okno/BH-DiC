@@ -13,8 +13,9 @@ _SECURITY_RULES: Final[tuple[str, ...]] = (
     "usa employee_id solo se esplicitamente presente e non ambiguo;",
     "se manca un dato indispensabile imposta requires_clarification=true e formula una "
     "sola domanda breve;",
-    "normalizza le date in YYYY-MM-DD; per una write, una data relativa ambigua richiede "
-    "chiarimento;",
+    "normalizza soltanto le date assolute in YYYY-MM-DD; per una lettura con periodo relativo "
+    "imposta date_from e date_to a null, perche l'intervallo viene risolto localmente; per una "
+    "write, una data relativa ambigua richiede chiarimento;",
     "parameters_json deve essere null oppure un oggetto JSON piccolo con soli parametri "
     "operativi dichiarati dalla richiesta;",
     "se nessun tool autorizzato e adatto, usa unsupported_request;",

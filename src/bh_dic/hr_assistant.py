@@ -28,6 +28,7 @@ _THIS_MONTH = re.compile(
     r"\b(?:in\s+)?questo\s+mese\b",
     re.IGNORECASE,
 )
+_NEGATED_REQUEST = re.compile(r"\b(?:no|non|senza)\b", re.IGNORECASE)
 _NEXT_DAYS = re.compile(r"\bprossim[ioe]?\s+(\d{1,3})\s+giorn[io]\b", re.IGNORECASE)
 _EXPLICIT_EMPLOYEE_ID = re.compile(
     r"(?i)\b(?:employee\s*id|dipendente\s+id|id\s+dipendente|id)\s*[:#]?\s*"
@@ -103,6 +104,18 @@ def _canonical_router_terms() -> dict[str, str]:
 
 
 _ROUTER_CANONICAL_TERMS = _canonical_router_terms()
+_CONTRACT_EXPIRY_REQUIRED_TERMS = frozenset({"employment_contract", "contract_deadline"})
+_CONTRACT_EXPIRY_ALLOWED_TERMS = frozenset(
+    {
+        "request",
+        "employee_records",
+        "employment_contract",
+        "contract_deadline",
+        "next_period",
+        "current_period",
+        "calendar_month",
+    }
+)
 
 
 class HrRequestInputError(ValueError):
@@ -193,6 +206,58 @@ def _next_month_interval(today: date) -> tuple[date, date]:
     return _month_interval(year, month)
 
 
+def _supported_contract_interval(request: str, *, today: date) -> tuple[date, date] | None:
+    if _NEXT_MONTH.search(request):
+        return _next_month_interval(today)
+    if _THIS_MONTH.search(request):
+        return _month_interval(today.year, today.month)
+    next_days = _NEXT_DAYS.search(request)
+    if next_days is None:
+        return None
+    days = int(next_days.group(1))
+    if not 1 <= days <= 366:
+        return None
+    return today, today + timedelta(days=days)
+
+
+def local_contract_expiry_fallback_interval(
+    request: str,
+    projected_request: str,
+    *,
+    today: date,
+) -> tuple[date, date] | None:
+    """Recognize only the closed, locally resolvable contract-expiry read subset.
+
+    The projected request contains canonical routing terms and no DIC result. Unknown terms,
+    identity placeholders, other HR functions, and every write marker keep the request on the
+    normal fail-closed provider path.
+    """
+
+    terms = frozenset(projected_request.split())
+    if _NEGATED_REQUEST.search(request) is not None:
+        return None
+    if not _CONTRACT_EXPIRY_REQUIRED_TERMS.issubset(terms):
+        return None
+    if not terms.issubset(_CONTRACT_EXPIRY_ALLOWED_TERMS):
+        return None
+    next_month = _NEXT_MONTH.search(request) is not None
+    this_month = _THIS_MONTH.search(request) is not None
+    if next_month == this_month:
+        return None
+    interval = _supported_contract_interval(request, today=today)
+    if interval is None:
+        return None
+    if next_month:
+        required_period_terms = {"next_period", "calendar_month"}
+    elif this_month:
+        required_period_terms = {"current_period", "calendar_month"}
+    else:
+        return None
+    if not required_period_terms.issubset(terms):
+        return None
+    return interval
+
+
 def normalize_hr_intent(intent: IntentEnvelope, request: str, *, today: date) -> IntentEnvelope:
     """Apply closed local semantics that must not depend on provider inference."""
 
@@ -213,17 +278,7 @@ def normalize_hr_intent(intent: IntentEnvelope, request: str, *, today: date) ->
         updates["parameters"] = {"status": status}
 
     if intent.function_id == "EMP-CONTRACT-001":
-        interval: tuple[date, date] | None = None
-        if _NEXT_MONTH.search(request):
-            interval = _next_month_interval(today)
-        elif _THIS_MONTH.search(request):
-            interval = _month_interval(today.year, today.month)
-        else:
-            next_days = _NEXT_DAYS.search(request)
-            if next_days is not None:
-                days = int(next_days.group(1))
-                if 1 <= days <= 366:
-                    interval = today, today + timedelta(days=days)
+        interval = _supported_contract_interval(request, today=today)
         if interval is not None:
             updates["date_from"], updates["date_to"] = interval
 
@@ -380,6 +435,7 @@ __all__ = [
     "HrRequestInputError",
     "SeniorHrPresenter",
     "is_employee_aggregate_request",
+    "local_contract_expiry_fallback_interval",
     "local_employee_search_query",
     "minimize_hr_router_request",
     "normalize_hr_intent",

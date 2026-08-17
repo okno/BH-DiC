@@ -8,6 +8,7 @@ from bh_dic.hr_assistant import (
     HrRequestInputError,
     SeniorHrPresenter,
     is_employee_aggregate_request,
+    local_contract_expiry_fallback_interval,
     local_employee_search_query,
     minimize_hr_router_request,
     normalize_hr_intent,
@@ -85,6 +86,70 @@ def test_next_month_is_calendar_based_and_does_not_depend_on_provider_dates(
     )
     assert normalized.date_from == expected_from
     assert normalized.date_to == expected_to
+
+
+@pytest.mark.parametrize(
+    ("request_text", "expected_from", "expected_to"),
+    [
+        (
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+            date(2026, 9, 1),
+            date(2026, 9, 30),
+        ),
+        (
+            "Mostra i contratti in scadenza in questo mese",
+            date(2026, 8, 1),
+            date(2026, 8, 31),
+        ),
+    ],
+)
+def test_contract_expiry_fallback_accepts_only_locally_supported_intervals(
+    request_text: str,
+    expected_from: date,
+    expected_to: date,
+) -> None:
+    projected, _ = minimize_hr_router_request(request_text)
+
+    interval = local_contract_expiry_fallback_interval(
+        request_text,
+        projected,
+        today=date(2026, 8, 17),
+    )
+
+    assert interval == (expected_from, expected_to)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Dimmi i dipendenti nel prossimo mese",
+        "Dimmi i contratti in scadenza a settembre 2026",
+        "Modifica i contratti in scadenza nel prossimo mese",
+        "Elimina i contratti in scadenza nel prossimo mese",
+        "Dimmi i contratti in scadenza nel prossimo mese del reparto Segreto",
+        "Dimmi il bilancio e i contratti in scadenza nel prossimo mese",
+        "Dimmi i contratti in scadenza nei prossimi 0 giorni",
+        "Dimmi i contratti in scadenza nei prossimi 30 giorni",
+        "Dimmi i contratti in scadenza nei prossimi 367 giorni",
+        "Dimmi i contratti in scadenza nel prossimo mese e in questo mese",
+        "Non dirmi i contratti in scadenza nel prossimo mese",
+        "Dimmi i dipendenti senza contratti in scadenza nel prossimo mese",
+        "No, dimmi i contratti in scadenza nel prossimo mese",
+    ],
+)
+def test_contract_expiry_fallback_rejects_ambiguous_unsupported_or_write_requests(
+    request_text: str,
+) -> None:
+    projected, _ = minimize_hr_router_request(request_text)
+
+    assert (
+        local_contract_expiry_fallback_interval(
+            request_text,
+            projected,
+            today=date(2026, 8, 17),
+        )
+        is None
+    )
 
 
 def test_presenter_changes_copy_without_changing_facts() -> None:

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from bh_dic.language import BotLanguageProfile
 from bh_dic.openai.client import IntentProviderError, ResponsesIntentClient, envelope_from_call
 from bh_dic.openai.intent_router import MockIntentRouter, OpenAIIntentRouter
+from bh_dic.openai.prompts import INTENT_ROUTER_PROMPT
 from bh_dic.openai.redaction import UnsafePromptError, prepare_provider_input, redact_structure
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope, Sensitivity
 from bh_dic.openai.tools import build_openai_tools
@@ -54,6 +55,17 @@ def test_tool_exposure_hides_write_schemas() -> None:
     assert names == {"list_employees", "unsupported_request"}
     assert all(tool["strict"] is True for tool in tools)
     assert all(tool["parameters"]["additionalProperties"] is False for tool in tools)
+
+
+def test_relative_read_period_contract_is_explicitly_local() -> None:
+    tools = build_openai_tools({"EMP-CONTRACT-001"})
+    contract_tool = next(tool for tool in tools if tool["name"] == "get_contracts")
+    properties = contract_tool["parameters"]["properties"]
+
+    assert "periodo relativo" in INTENT_ROUTER_PROMPT
+    assert "date_from e date_to a null" in INTENT_ROUTER_PROMPT
+    assert "periodo relativo di lettura" in properties["date_from"]["description"]
+    assert "risolto localmente" in properties["date_to"]["description"]
 
 
 def test_model_hidden_operator_ids_are_filtered_even_if_a_caller_passes_them() -> None:

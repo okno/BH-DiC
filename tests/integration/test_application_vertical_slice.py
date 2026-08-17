@@ -31,6 +31,7 @@ from bh_dic.dic.models import (
     SortDirection,
 )
 from bh_dic.discord.checks import DiscordActor
+from bh_dic.discord.interactions import ResponseSensitivity
 from bh_dic.model_usage import (
     ModelUsageEvent,
     ModelUsageKey,
@@ -38,7 +39,11 @@ from bh_dic.model_usage import (
     ModelUsageStatus,
     ModelUsageTotals,
 )
-from bh_dic.openai.client import RoutedIntent
+from bh_dic.openai.client import (
+    IntentProviderError,
+    ProviderFailureKind,
+    RoutedIntent,
+)
 from bh_dic.openai.schemas import (
     ActionClass,
     IntentEnvelope,
@@ -77,6 +82,20 @@ class FixedRouter:
                 usage=self.usage,
             ),
         )
+
+
+class FailingRouter:
+    def __init__(self, error: IntentProviderError) -> None:
+        self.error = error
+        self.calls = 0
+        self.exposed: frozenset[str] | None = None
+        self.request: str | None = None
+
+    async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent:
+        self.calls += 1
+        self.request = request
+        self.exposed = allowed_function_ids
+        raise self.error
 
 
 class AmbiguousMockAdapter(MockDicAdapter):
@@ -134,6 +153,7 @@ async def coordinator_for(
     adapter_override: MockDicAdapter | None = None,
     model_usage: ModelUsageService | None = None,
     today_provider: object | None = None,
+    model_provider: str = "groq",
 ) -> tuple[BHApplicationCoordinator, MockDicAdapter, InMemoryApprovalRepository]:
     baseline = dict(DEFAULT_FEATURE_FLAGS)
     baseline["ENABLE_WRITE_ACTIONS"] = writes
@@ -170,7 +190,7 @@ async def coordinator_for(
         approval_repository=repository,
         payload_cipher=PayloadCipher(b"E" * 32),
         model_usage=model_usage,
-        model_provider="groq",
+        model_provider=model_provider,
         model_name="openai/gpt-oss-120b",
         **kwargs,  # type: ignore[arg-type]
     )
@@ -446,6 +466,221 @@ async def test_next_month_contract_analysis_uses_one_paginated_employee_read() -
     assert "2026-09-10" in result.fields[0].value
     adapter.list_employees.assert_awaited_once()
     adapter.get_contracts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_exact_groq_tool_failure_falls_back_to_local_contract_analysis_once() -> None:
+    router = FailingRouter(
+        IntentProviderError(
+            "groq intent routing failed",
+            provider="groq",
+            model="openai/gpt-oss-120b",
+            response_received=True,
+            failure_kind=ProviderFailureKind.TOOL_USE_FAILED,
+        )
+    )
+    adapter = MockDicAdapter()
+    await adapter.ensure_authenticated()
+    adapter.list_employees = AsyncMock(  # type: ignore[method-assign]
+        return_value=EmployeeListResult(
+            items=(
+                EmployeeListItem(
+                    employee_id="101",
+                    display_name=SecretStr("Alice Example"),
+                    display_name_redacted="A. E.",
+                    current_contract_valid_from=date(2026, 1, 1),
+                    current_contract_valid_to=date(2026, 9, 10),
+                    contract_label="Full time",
+                ),
+            ),
+            page=1,
+            page_size=20,
+            total=1,
+            has_next=False,
+        )
+    )
+    adapter.get_contracts = AsyncMock()  # type: ignore[method-assign]
+    now = datetime.now(UTC)
+    unavailable = ModelUsageTotals(
+        total_calls=1,
+        started_calls=0,
+        reported_calls=0,
+        unavailable_calls=1,
+        unknown_calls=0,
+        usage=ProviderTokenUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+        first_recorded_at=now,
+        last_completed_at=now,
+    )
+    usage_service = AsyncMock(spec=ModelUsageService)
+    usage_service.totals.side_effect = [unavailable, unavailable]
+    coordinator, _adapter, _ = await coordinator_for(
+        cast(FixedRouter, router),
+        adapter_override=adapter,
+        model_usage=cast(ModelUsageService, usage_service),
+        today_provider=lambda: date(2026, 8, 17),
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+        )
+    finally:
+        await adapter.close()
+
+    assert router.calls == 1
+    assert router.exposed == frozenset({"EMP-CONTRACT-001"})
+    assert router.request == (
+        "request employee_records employment_contract contract_deadline next_period calendar_month"
+    )
+    usage_service.start.assert_awaited_once()
+    usage_service.complete.assert_awaited_once()
+    assert usage_service.complete.await_args.kwargs == {
+        "response_received": True,
+        "usage": None,
+    }
+    assert "2026-09-01 → 2026-09-30" in result.description
+    assert "senza contatori disponibili" in result.description
+    assert result.fields[0].name == "Alice Example · ID 101"
+    assert result.sensitivity is ResponseSensitivity.SENSITIVE
+    assert result.ephemeral is True
+    adapter.list_employees.assert_awaited_once()
+    adapter.get_contracts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_contract_provider_success_takes_precedence_over_local_fallback() -> None:
+    router = FixedRouter(
+        IntentEnvelope(
+            intent="unsupported",
+            function_id="UNSUPPORTED",
+            action_class=ActionClass.UNSUPPORTED,
+            employee_id=None,
+            query=None,
+            parameters={},
+            date_from=None,
+            date_to=None,
+            requires_clarification=False,
+            clarification_question=None,
+            sensitivity=Sensitivity.LOW,
+            confidence=1.0,
+        )
+    )
+    adapter = MockDicAdapter()
+    await adapter.ensure_authenticated()
+    adapter.list_employees = AsyncMock()  # type: ignore[method-assign]
+    coordinator, _adapter, _ = await coordinator_for(
+        router,
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 17),
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+        )
+    finally:
+        await adapter.close()
+
+    assert result.title == "Funzione non disponibile"
+    assert router.exposed == frozenset({"EMP-CONTRACT-001"})
+    adapter.list_employees.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "request_text",
+        "roles",
+        "failure_kind",
+        "response_received",
+        "error_provider",
+        "configured_provider",
+    ),
+    [
+        (
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+            (LogicalRole.HR_READ,),
+            ProviderFailureKind.UNCLASSIFIED,
+            True,
+            "groq",
+            "groq",
+        ),
+        (
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+            (LogicalRole.HR_READ,),
+            ProviderFailureKind.TOOL_USE_FAILED,
+            False,
+            "groq",
+            "groq",
+        ),
+        (
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+            (LogicalRole.READ_ONLY,),
+            ProviderFailureKind.TOOL_USE_FAILED,
+            True,
+            "groq",
+            "groq",
+        ),
+        (
+            "Modifica i contratti in scadenza nel prossimo mese",
+            (LogicalRole.HR_READ,),
+            ProviderFailureKind.TOOL_USE_FAILED,
+            True,
+            "groq",
+            "groq",
+        ),
+        (
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+            (LogicalRole.HR_READ,),
+            ProviderFailureKind.TOOL_USE_FAILED,
+            True,
+            "openai",
+            "groq",
+        ),
+        (
+            "Dimmi i dipendenti con contratto a scadenza nel prossimo mese",
+            (LogicalRole.HR_READ,),
+            ProviderFailureKind.TOOL_USE_FAILED,
+            True,
+            "groq",
+            "openai",
+        ),
+    ],
+)
+async def test_contract_fallback_rejects_other_errors_roles_and_ambiguous_requests(
+    request_text: str,
+    roles: tuple[LogicalRole, ...],
+    failure_kind: ProviderFailureKind,
+    response_received: bool,
+    error_provider: str,
+    configured_provider: str,
+) -> None:
+    router = FailingRouter(
+        IntentProviderError(
+            "provider routing failed",
+            provider=error_provider,
+            model="openai/gpt-oss-120b",
+            response_received=response_received,
+            failure_kind=failure_kind,
+        )
+    )
+    adapter = MockDicAdapter()
+    await adapter.ensure_authenticated()
+    adapter.list_employees = AsyncMock()  # type: ignore[method-assign]
+    coordinator, _adapter, _ = await coordinator_for(
+        cast(FixedRouter, router),
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 17),
+        model_provider=configured_provider,
+    )
+    try:
+        with pytest.raises(IntentProviderError):
+            await coordinator.ask(actor(*roles), request_text)
+    finally:
+        await adapter.close()
+
+    assert router.calls == 1
+    adapter.list_employees.assert_not_awaited()
 
 
 @pytest.mark.asyncio
