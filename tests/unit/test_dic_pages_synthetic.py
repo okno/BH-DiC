@@ -15,6 +15,7 @@ from pydantic import JsonValue
 from bh_dic.dic.employee_list_capture import (
     EMPLOYEE_LIST_ENDPOINT_ORIGIN,
     EMPLOYEE_LIST_ENDPOINT_PATH,
+    EMPLOYEE_LIST_PAGINATOR_PATH,
 )
 from bh_dic.dic.errors import DicNotFoundError, DicUiChangedError, DicValidationError
 from bh_dic.dic.models import (
@@ -485,30 +486,30 @@ class EmployeeApiSyntheticPage(SyntheticPage):
         last_page = max(1, (self.api_total + 19) // 20)
         start = (self.page_number - 1) * 20 + 1 if data else None
         end = start + len(data) - 1 if start is not None else None
-        endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+        paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
         return {
             "current_page": self.page_number,
             "data": data,
-            "first_page_url": f"{endpoint}?page=1",
+            "first_page_url": f"{paginator}?page=1",
             "from": start,
             "last_page": last_page,
-            "last_page_url": f"{endpoint}?page={last_page}",
+            "last_page_url": f"{paginator}?page={last_page}",
             "links": [
                 {"url": None, "label": "Previous", "active": False},
                 {
-                    "url": f"{endpoint}?page={self.page_number}",
+                    "url": f"{paginator}?page={self.page_number}",
                     "label": str(self.page_number),
                     "active": True,
                 },
                 {"url": None, "label": "Next", "active": False},
             ],
             "next_page_url": (
-                f"{endpoint}?page={self.page_number + 1}" if self.page_number < last_page else None
+                f"{paginator}?page={self.page_number + 1}" if self.page_number < last_page else None
             ),
-            "path": endpoint,
+            "path": paginator,
             "per_page": 20,
             "prev_page_url": (
-                f"{endpoint}?page={self.page_number - 1}" if self.page_number > 1 else None
+                f"{paginator}?page={self.page_number - 1}" if self.page_number > 1 else None
             ),
             "to": end,
             "total": self.api_total,

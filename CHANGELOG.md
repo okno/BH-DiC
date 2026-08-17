@@ -27,16 +27,24 @@ stable public API is declared.
 ### Changed
 
 - L'elenco dipendenti Playwright osserva passivamente soltanto la risposta `GET` emessa dalla UI
-  sull'origine DIC e sul path esatti `/backend_apiV2/employees`. Metodo, stato, media type, query,
-  limite del corpo, paginazione e schema chiuso vengono validati prima di produrre una proiezione
-  tipizzata. Il display name è protetto come `SecretStr` e viene aperto soltanto per risultati
-  `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e matricola restano mascherati. BH-DiC non
-  trasforma il path osservato in un'API chiamata direttamente.
+  sull'origine DIC e sul path esatti `/backend_apiV2/employees`. I metadati URL del paginator nel
+  corpo usano invece lo stesso origin e il path esatto `/employees`. Metodo, stato, media type,
+  query, limite del corpo, paginazione e schema chiuso vengono validati prima di produrre una
+  proiezione tipizzata. Il display name è protetto come `SecretStr` e viene aperto soltanto per
+  risultati `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e matricola restano mascherati.
+  BH-DiC non trasforma nessuno dei path osservati in un'API chiamata direttamente.
 - Gli aggregati non sensibili possono essere pubblicati nel canale Discord allowlistato dopo un
   acknowledgement privato. Elenchi, identità, contratti, scadenze individuali, stato operativo e
   altri risultati HR restano ephemeral per il solo richiedente autorizzato.
 - Una sessione browser tenant-attestata viene ripersistita in modo serializzato dopo verifiche e
   letture riuscite, così le rotazioni valide di cookie e `sessionStorage` sopravvivono al riavvio.
+
+### Fixed
+
+- Separata la validazione fail-closed dell'URL della risposta da quella degli URL di paginazione,
+  dopo che una diagnostica live autorizzata e minimizzata ha confermato i due path distinti. I due
+  path non sono intercambiabili: origin, porta, userinfo, fragment, path e query continuano a
+  essere verificati secondo il rispettivo contratto esatto.
 
 ### Security
 
@@ -55,7 +63,7 @@ stable public API is declared.
 
 ### Verification
 
-- Gate locali completi: 734 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
+- Gate locali completi: 774 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
   Bandit, dependency audit, YAML, script shell, documentazione e link locali verdi. Deployment
   Debian della 0.3.0, migrazione sul target e smoke Discord/DIC restano `PENDING`. Non promuovere
   le nuove letture a `LIVE_READ_VERIFIED` prima delle evidenze separate.

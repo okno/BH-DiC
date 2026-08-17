@@ -48,9 +48,11 @@
 
 ## Read e dati
 
-- La 0.3.0 osserva soltanto la risposta UI esatta `/backend_apiV2/employees`; non esiste un adapter
-  API pubblico supportato né un fallback a chiamate HTTP dirette. Drift di query, schema o
-  paginazione fallisce chiuso. Deployment e smoke end-to-end della candidata restano `PENDING`.
+- La 0.3.0 osserva soltanto la risposta UI esatta `/backend_apiV2/employees`; i metadati URL del
+  paginator osservati usano il path distinto `/employees`. Non esiste un adapter API pubblico
+  supportato né un fallback a chiamate HTTP dirette. I due path non sono intercambiabili e drift
+  di origin, path, query, schema o paginazione fallisce chiuso. Deployment e smoke end-to-end della
+  candidata restano `PENDING`.
 - Il totale non qualificato significa l'intero organico; “attivi” o “disattivati” devono essere
   espliciti. Questo elimina l'ambiguità del modello ma non risolve eventuali categorie DIC future
   fuori dal campo `active` osservato.

@@ -33,6 +33,7 @@ from bh_dic.dic.models import (
 
 EMPLOYEE_LIST_ENDPOINT_ORIGIN = "https://secure.dipendentincloud.it"
 EMPLOYEE_LIST_ENDPOINT_PATH = "/backend_apiV2/employees"
+EMPLOYEE_LIST_PAGINATOR_PATH = "/employees"
 EMPLOYEE_LIST_PAGE_SIZE = 20
 MAX_EMPLOYEE_LIST_RESPONSE_BYTES = 256 * 1024
 MAX_CAPTURED_EMPLOYEE_RESPONSES = 32
@@ -125,6 +126,7 @@ _QUERY_KEYS = frozenset(
 _SORT_FIELDS: Mapping[str, str] = {"name": "full_name", "contract": "current_contract"}
 _EMPLOYEE_SEARCH_FIELDS = "full_name,job_title,number,teams,email,tax_code"
 _PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_UNSAFE_URL_CHARACTER = re.compile(r"[\x00-\x20\x7f]")
 
 
 class RequestLike(Protocol):
@@ -245,8 +247,20 @@ def _strict_date(value: object) -> date | None:
     return parsed
 
 
-def _endpoint_parts(url: object, *, allow_query: bool) -> tuple[object, dict[str, str]]:
-    if not isinstance(url, str) or len(url) > 8_192 or _PERCENT_ESCAPE.search(url):
+def _strict_url_parts(
+    url: object,
+    *,
+    expected_path: str,
+    allow_query: bool,
+) -> tuple[object, dict[str, str]]:
+    if (
+        not isinstance(url, str)
+        or len(url) > 8_192
+        or _PERCENT_ESCAPE.search(url)
+        or _UNSAFE_URL_CHARACTER.search(url)
+        or "#" in url
+        or (not allow_query and "?" in url)
+    ):
         raise _failure("invalid endpoint metadata")
     parsed = None
     port: int | None = None
@@ -265,7 +279,7 @@ def _endpoint_parts(url: object, *, allow_query: bool) -> tuple[object, dict[str
         or parsed.username is not None
         or parsed.password is not None
         or port is not None
-        or parsed.path != EMPLOYEE_LIST_ENDPOINT_PATH
+        or parsed.path != expected_path
         or parsed.fragment
         or (not allow_query and parsed.query)
     ):
@@ -291,6 +305,22 @@ def _endpoint_parts(url: object, *, allow_query: bool) -> tuple[object, dict[str
             raise _failure("duplicate query metadata")
         query[key] = value
     return parsed, query
+
+
+def _response_endpoint_parts(url: object) -> tuple[object, dict[str, str]]:
+    return _strict_url_parts(
+        url,
+        expected_path=EMPLOYEE_LIST_ENDPOINT_PATH,
+        allow_query=True,
+    )
+
+
+def _paginator_parts(url: object, *, allow_query: bool) -> tuple[object, dict[str, str]]:
+    return _strict_url_parts(
+        url,
+        expected_path=EMPLOYEE_LIST_PAGINATOR_PATH,
+        allow_query=allow_query,
+    )
 
 
 def _expected_sort(query: EmployeeListQuery) -> str:
@@ -353,7 +383,7 @@ async def validate_employee_response_metadata(
         url_failed = True
     if url_failed or response_url is None:
         raise _failure("response metadata unavailable")
-    _, query = _endpoint_parts(response_url, allow_query=True)
+    _, query = _response_endpoint_parts(response_url)
     _validate_query(query, expected)
     metadata_failed = False
     method: object | None = None
@@ -389,13 +419,20 @@ async def validate_employee_response_metadata(
 
 
 def _validate_url_field(value: object, *, query_allowed: bool) -> None:
-    _endpoint_parts(value, allow_query=query_allowed)
+    _paginator_parts(value, allow_query=query_allowed)
 
 
 def _page_from_url(value: object, *, expected_page: int) -> None:
-    _, query = _endpoint_parts(value, allow_query=True)
-    if query.get("page") != str(expected_page):
+    _, query = _paginator_parts(value, allow_query=True)
+    if query != {"page": str(expected_page)}:
         raise _failure("invalid pagination metadata")
+
+
+def _page_number_from_url(value: object) -> int:
+    _, query = _paginator_parts(value, allow_query=True)
+    if set(query) != {"page"} or re.fullmatch(r"[1-9][0-9]{0,18}", query["page"]) is None:
+        raise _failure("invalid pagination metadata")
+    return int(query["page"], 10)
 
 
 def _validate_links(value: object, *, current_page: int) -> None:
@@ -409,7 +446,7 @@ def _validate_links(value: object, *, current_page: int) -> None:
         label = _bounded_text(item["label"], maximum=128)
         url = item["url"]
         if url is not None:
-            _validate_url_field(url, query_allowed=True)
+            _page_number_from_url(url)
         if active:
             active_links += 1
             if label != str(current_page) or url is None:
@@ -745,6 +782,7 @@ __all__ = [
     "EMPLOYEE_LIST_ENDPOINT_ORIGIN",
     "EMPLOYEE_LIST_ENDPOINT_PATH",
     "EMPLOYEE_LIST_PAGE_SIZE",
+    "EMPLOYEE_LIST_PAGINATOR_PATH",
     "MAX_EMPLOYEE_LIST_RESPONSE_BYTES",
     "EmployeeListResponseCapture",
     "employee_list_result_from_response",

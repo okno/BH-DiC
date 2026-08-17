@@ -10,6 +10,7 @@ import pytest
 from bh_dic.dic.employee_list_capture import (
     EMPLOYEE_LIST_ENDPOINT_ORIGIN,
     EMPLOYEE_LIST_ENDPOINT_PATH,
+    EMPLOYEE_LIST_PAGINATOR_PATH,
     MAX_EMPLOYEE_LIST_RESPONSE_BYTES,
     EmployeeListResponseCapture,
     employee_list_result_from_response,
@@ -147,21 +148,21 @@ def _document(
 ) -> dict[str, Any]:
     data = [_employee()] if employees is None else employees
     total = len(data)
-    endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+    paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
     return {
         "current_page": query.page,
         "data": data,
-        "first_page_url": f"{endpoint}?page=1",
+        "first_page_url": f"{paginator}?page=1",
         "from": 1 if data else None,
         "last_page": 1,
-        "last_page_url": f"{endpoint}?page=1",
+        "last_page_url": f"{paginator}?page=1",
         "links": [
             {"url": None, "label": "Previous", "active": False},
-            {"url": f"{endpoint}?page=1", "label": "1", "active": True},
+            {"url": f"{paginator}?page=1", "label": "1", "active": True},
             {"url": None, "label": "Next", "active": False},
         ],
         "next_page_url": None,
-        "path": endpoint,
+        "path": paginator,
         "per_page": 20,
         "prev_page_url": None,
         "to": len(data) if data else None,
@@ -226,6 +227,14 @@ async def test_malformed_employee_json_is_detached_from_private_exception_contex
             "application/json",
             "GET",
         ),
+        (
+            lambda url: url.replace(
+                "secure.dipendentincloud.it", "secure.dipendentincloud.it.evil.invalid"
+            ),
+            None,
+            "application/json",
+            "GET",
+        ),
         (lambda url: url.replace("https://", "https://user@"), None, "application/json", "GET"),
         (
             lambda url: url.replace("secure.dipendentincloud.it", "secure.dipendentincloud.it:443"),
@@ -233,6 +242,19 @@ async def test_malformed_employee_json_is_detached_from_private_exception_contex
             "application/json",
             "GET",
         ),
+        (
+            lambda url: url.replace(EMPLOYEE_LIST_ENDPOINT_PATH, "/employees/extra"),
+            None,
+            "application/json",
+            "GET",
+        ),
+        (
+            lambda url: url.removeprefix(EMPLOYEE_LIST_ENDPOINT_ORIGIN),
+            None,
+            "application/json",
+            "GET",
+        ),
+        (lambda url: url + "#", None, "application/json", "GET"),
         (lambda url: url + "#fragment", None, "application/json", "GET"),
         (lambda url: url + "&unexpected=1", None, "application/json", "GET"),
         (lambda url: url + "&page=1", None, "application/json", "GET"),
@@ -262,6 +284,140 @@ async def test_response_boundary_rejects_endpoint_query_json_and_media_mismatche
     assert "Alice" not in message
     assert "example.invalid" not in message
     assert EMPLOYEE_LIST_ENDPOINT_PATH not in message
+
+
+@pytest.mark.asyncio
+async def test_response_and_paginator_paths_are_not_interchangeable() -> None:
+    query = _query()
+    response_at_paginator_path = _url(query).replace(
+        EMPLOYEE_LIST_ENDPOINT_PATH, EMPLOYEE_LIST_PAGINATOR_PATH
+    )
+    with pytest.raises(DicUiChangedError, match="unexpected endpoint metadata"):
+        await employee_list_result_from_response(
+            _Response(url=response_at_paginator_path, document=_document(query)), query
+        )
+
+    document = _document(query)
+    document["path"] = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+    with pytest.raises(DicUiChangedError, match="unexpected endpoint metadata"):
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["path", "first_page_url", "last_page_url", "next_page_url", "prev_page_url", "links"],
+)
+async def test_every_paginator_url_field_rejects_the_response_endpoint_path(field: str) -> None:
+    query = _query()
+    document = _document(query)
+    endpoint = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_ENDPOINT_PATH}"
+    if field == "path":
+        document[field] = endpoint
+    elif field == "links":
+        document[field][1]["url"] = f"{endpoint}?page=1"
+    else:
+        page = {"first_page_url": 1, "last_page_url": 1, "next_page_url": 2, "prev_page_url": 0}[
+            field
+        ]
+        document[field] = f"{endpoint}?page={page}"
+
+    with pytest.raises(DicUiChangedError, match="unexpected endpoint metadata"):
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_path",
+    [
+        "/employees",
+        "http://secure.dipendentincloud.it/employees",
+        "https://user@secure.dipendentincloud.it/employees",
+        "https://secure.dipendentincloud.it:443/employees",
+        "https://secure.dipendentincloud.it.evil.invalid/employees",
+        "https://secure.dipendentincloud.it/employees/extra",
+        "https://secure.dipendentincloud.it/employees-lookalike",
+        "https://secure.dipendentincloud.it/employees#",
+        "https://secure.dipendentincloud.it/employees#fragment",
+        "https://secure.dipendentincloud.it/employees?",
+        "https://secure.dipendentincloud.it/employees?page=1",
+    ],
+)
+async def test_paginator_path_rejects_non_exact_origin_path_and_forbidden_components(
+    invalid_path: str,
+) -> None:
+    query = _query()
+    document = _document(query)
+    document["path"] = invalid_path
+
+    with pytest.raises(DicUiChangedError, match="endpoint metadata"):
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["first_page_url", "last_page_url", "next_page_url", "prev_page_url", "links"],
+)
+async def test_every_non_null_paginator_url_rejects_extra_query_metadata(field: str) -> None:
+    query = _query()
+    document = _document(query)
+    paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
+    if field == "links":
+        document["links"][0]["url"] = f"{paginator}?page=1&unexpected=accepted"
+    else:
+        page = {"first_page_url": 1, "last_page_url": 1, "next_page_url": 2, "prev_page_url": 1}[
+            field
+        ]
+        document[field] = f"{paginator}?page={page}&unexpected=accepted"
+
+    with pytest.raises(DicUiChangedError, match="pagination metadata"):
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsafe", [" ", "\x00", "\n", "\r", "\t", "\x7f"])
+@pytest.mark.parametrize("target", ["response", "paginator"])
+async def test_employee_urls_reject_lexically_unsafe_characters(
+    unsafe: str,
+    target: str,
+) -> None:
+    query = _query()
+    response_url = _url(query)
+    document = _document(query)
+    if target == "response":
+        response_url = f"{unsafe}{response_url}"
+    else:
+        document["path"] = f"{unsafe}{document['path']}"
+
+    with pytest.raises(DicUiChangedError, match="endpoint metadata"):
+        await employee_list_result_from_response(
+            _Response(url=response_url, document=document), query
+        )
+
+
+@pytest.mark.asyncio
+async def test_paginator_page_number_is_bounded_and_has_no_private_exception_chain() -> None:
+    query = _query()
+    document = _document(query)
+    paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
+    document["links"][0]["url"] = f"{paginator}?page={'9' * 5_000}"
+
+    with pytest.raises(DicUiChangedError, match="pagination metadata") as captured:
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
 
 @pytest.mark.asyncio

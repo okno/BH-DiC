@@ -56,8 +56,9 @@ dell'adapter.
 - kill switch globale `ENABLE_WRITE_ACTIONS=false` e flag specifici tutti `false`;
 - preview, conferma monouso hashata, TTL, idempotenza, A1/A2 distinti e riconciliazione;
 - adapter mock deterministico e adapter Playwright con tenant guard first-party, osservazione
-  passiva della risposta UI `GET /backend_apiV2/employees` sotto schema chiuso e bounded, vault
-  cifrato cookie/localStorage/`sessionStorage` ripersistito dopo letture verificate e avvio Discord
+  passiva della risposta UI `GET /backend_apiV2/employees` e dei metadati paginator sul path
+  distinto `/employees`, sotto contratti esatti, schema chiuso e bounded; vault cifrato
+  cookie/localStorage/`sessionStorage` ripersistito dopo letture verificate e avvio Discord
   degradabile senza submit implicito di credenziali;
 - nome visualizzato disponibile in chiaro soltanto come `SecretStr` transitorio per elenchi e
   scadenze `HR_READ` sensibili/ephemeral; aggregati pubblici, provider, log, audit, telemetria e
