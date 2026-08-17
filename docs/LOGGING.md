@@ -17,6 +17,11 @@ correlazione. Il logger applicativo scrive in `LOG_DIR` (default `./var/log`).
 I file sono creati `0600` dal runtime. Il processo deve essere eseguito da un utente dedicato;
 non allargare i permessi per facilitare la consultazione.
 
+Dalla release 0.2.6 la configurazione Alembic preserva i logger `bh_dic.*` già inizializzati. Le
+release precedenti potevano lasciare vuoti i JSONL e il journal dopo la migrazione iniziale, pur
+continuando a rispondere su Discord. Dopo l'aggiornamento è necessario riavviare il servizio per
+ricreare gli handler nel processo del gateway.
+
 ## Lettura
 
 ```bash

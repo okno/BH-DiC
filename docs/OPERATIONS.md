@@ -15,7 +15,7 @@
   dispatch, senza eseguire Function ID DIC;
 - kill switch globale e tutte le flag write specifiche disabilitati.
 
-I gate sintetici della release 0.2.5 sono verdi: 574 test, branch coverage 86%, Ruff, mypy, Bandit,
+I gate sintetici della release 0.2.6 sono verdi: 579 test, branch coverage 86%, Ruff, mypy, Bandit,
 audit dipendenze e secret scan senza finding. Il dettaglio è nell'implementation report. Sul target
 sono stati eseguiti solo i controlli operativi riportati sopra; nessun test live ha eseguito una
 Function ID DIC.

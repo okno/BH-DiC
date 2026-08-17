@@ -25,7 +25,8 @@ attestazione tenant o vault headless sul server.
 | bot non parte | PID/lock, config, DB, log | rimuovere stale file solo se nessun processo BH-DiC esiste |
 | bot già attivo | `status.sh`, `ps` | non avviare una seconda istanza |
 | slash command assenti | guild/application ID e scope | `register-commands.sh` nel solo guild |
-| access denied Discord | guild/channel/ruolo/thread | correggere mapping autorizzato, non allargare RBAC |
+| access denied Discord | `discord_access_denied` e `details.reason` in `discord.jsonl`; guild/channel/ruolo/thread | distribuire almeno la 0.2.6 se i log restano vuoti, poi correggere il mapping autorizzato senza allargare RBAC |
+| JSONL e journal vuoti mentre il bot risponde | versione precedente alla 0.2.6; logger disabilitati dalla configurazione Alembic | aggiornare, riavviare il servizio e verificare `discord_ready`; non cambiare `LOG_LEVEL` per compensare |
 | timeout/quota provider | log router, account provider, `model-check` offline/live autorizzato | verificare `MODEL_PROVIDER`, modello e chiave; retry limitato, mai bypassare intent validation |
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |

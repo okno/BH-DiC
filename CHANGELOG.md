@@ -5,6 +5,16 @@ stable public API is declared.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-17
+
+### Fixed
+
+- Le migrazioni Alembic preservano i logger applicativi già configurati. In precedenza il
+  caricamento di `alembic.ini` disabilitava `bh_dic.*`, lasciando vuoti i log JSONL e il journal
+  dopo l'avvio del gateway anche quando Discord rifiutava correttamente una richiesta.
+- Un test di regressione esegue una migrazione reale e verifica che un deny Discord venga scritto
+  sia in `app.jsonl` sia in `discord.jsonl`.
+
 ## [0.2.5] - 2026-08-17
 
 ### Fixed
@@ -144,7 +154,8 @@ stable public API is declared.
 - Groq `gsk_` credentials and labeled API keys are redacted before provider and logging boundaries.
 - Runtime startup rejects missing secrets, guild/channel identifiers, and unsafe write settings.
 
-[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/okno/BH-DiC/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/okno/BH-DiC/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/okno/BH-DiC/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/okno/BH-DiC/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/okno/BH-DiC/compare/v0.2.2...v0.2.3

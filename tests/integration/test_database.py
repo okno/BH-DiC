@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -107,6 +110,55 @@ async def test_initial_alembic_migration_is_runnable(tmp_path: Path) -> None:
         assert schema_differences == []
     finally:
         await database.dispose()
+
+
+@pytest.mark.integration
+def test_alembic_migration_preserves_structured_application_logging(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    url = sqlite_url(tmp_path / "logging-migration.sqlite3")
+    program = """
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+from bh_dic.database.migrations import run_migrations_async
+from bh_dic.logging import configure_logging
+
+application_logger = configure_logging(log_dir=Path(sys.argv[1]), stream=False)
+try:
+    asyncio.run(run_migrations_async(sys.argv[2]))
+    logging.getLogger("bh_dic.discord.commands").warning(
+        "discord_access_denied",
+        extra={"reason": "ROLE_NOT_ALLOWED"},
+    )
+finally:
+    handlers = tuple(application_logger.handlers)
+    application_logger.handlers.clear()
+    for handler in handlers:
+        handler.flush()
+        handler.close()
+"""
+
+    completed = subprocess.run(  # noqa: S603 - the current trusted interpreter is required
+        [sys.executable, "-c", program, str(log_dir), url],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    for name in ("app", "discord"):
+        events = [
+            json.loads(line)
+            for line in (log_dir / f"{name}.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert len(events) == 1
+        assert events[0]["logger"] == "bh_dic.discord.commands"
+        assert events[0]["message"] == "discord_access_denied"
+        assert events[0]["details"]["reason"] == "ROLE_NOT_ALLOWED"
 
 
 @pytest.mark.integration

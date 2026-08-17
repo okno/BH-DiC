@@ -98,19 +98,19 @@ Stato funzionale:
 
 Dettaglio: [Feature matrix](FEATURE_MATRIX.md).
 
-## Test e gate — release 0.2.5
+## Test e gate — release 0.2.6
 
-I gate completi del worktree candidato 0.2.5 sono stati eseguiti il 17 agosto 2026. Le verifiche live
+I gate completi del worktree candidato 0.2.6 sono stati eseguiti il 17 agosto 2026. Le verifiche live
 DIC, provider e Discord sono evidenze separate e non sostituiscono questi gate né promuovono le
 Function ID HR a verificate.
 
 | Comando | Risultato |
 |---|---|
-| `ruff format --check .` | PASS, 185 file |
+| `ruff format --check .` | PASS, 186 file |
 | `ruff check .` | PASS |
 | `mypy src` | PASS, 108 file sorgente |
-| `pytest` | PASS, 574 test; un warning deprecazione `audioop` di terza parte |
-| `coverage run --branch -m pytest` | PASS, 574 test con branch coverage |
+| `pytest` | PASS, 579 test; un warning deprecazione `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 579 test con branch coverage |
 | `coverage report --show-missing --fail-under=80` | PASS, totale 86% |
 | `bandit -q -r src` | PASS, zero finding |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note; lock pinned non hashato segnalato come warning |
