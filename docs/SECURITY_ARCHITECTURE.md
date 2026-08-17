@@ -210,13 +210,20 @@ Writes are denied on any of the following:
 Deployment must validate the project wrappers before relying on them:
 
 ```bash
-./scripts/doctor.sh
-./scripts/security-check.sh
-./scripts/audit-verify.sh
-./scripts/files.sh list
-./scripts/files.sh purge-expired
-./scripts/status.sh
+sudo systemctl show bh-dic.service -p ActiveState -p SubState -p NRestarts
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/doctor.sh
+  ./scripts/security-check.sh
+  ./scripts/audit-verify.sh
+  ./scripts/files.sh list
+  ./scripts/files.sh purge-expired
+'
 ```
+
+`status.sh` è riservato al gestore PID alternativo; sul target systemd la fonte lifecycle è
+`systemctl`. Non eseguire i wrapper applicativi come root.
 
 These interfaces must not print secrets, file content or complete protected paths. Their mere
 presence is not evidence of success; retain command exit status and redacted results in the final

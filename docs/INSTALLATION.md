@@ -283,7 +283,8 @@ Con servizio fermo e tutte le write disabilitate, il controllo offline è utile 
 esiste già un vault cifrato da validare:
 
 ```bash
-sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin \
+  /opt/bh-dic/.venv/bin/python -m bh_dic dic-auth-check
 ```
 
 Su una prima installazione o dopo un'invalidazione intenzionale, l'assenza
@@ -296,11 +297,8 @@ solo upgrade, ma dopo una rotazione di password/account/tenant l'invalidazione �
 caso di una futura rotazione, con servizio fermo e autorizzazione esplicita alla rete DIC, eseguire
 una sola invalidazione seguita da una sola verifica. Sul target documentato la 0.3.0 ha già
 superato il gate live: non ripetere questa sequenza senza una nuova rotazione o compromissione.
-
-```bash
-sudo -u bh-dic -H .venv/bin/python -m bh_dic invalidate-session
-sudo -u bh-dic -H .venv/bin/python -m bh_dic dic-auth-check --live
-```
+Usare esclusivamente la [procedura canonica guarded](DIC_AUTHENTICATION.md#invalidazione-e-rotazione),
+che impone stop systemd verificato, identità `bh-dic` e nessun restart automatico.
 
 Il check live prova prima una sessione restaurata mediante la route fissa della lista dipendenti,
 osserva passivamente l'attestazione tenant first-party e segue, solo se necessario, l'allowlist
@@ -420,9 +418,13 @@ foreground in [Start/stop](START_STOP.md).
 Prima dell'avvio rieseguire e registrare il gate:
 
 ```bash
-grep -E '^ENABLE_' .env
-./scripts/doctor.sh
-./scripts/audit-verify.sh
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  grep -E "^ENABLE_" .env
+  ./scripts/doctor.sh
+  ./scripts/audit-verify.sh
+'
 ```
 
 L'output atteso contiene soltanto `ENABLE_READ_ACTIONS=true`; kill switch, live test e ogni flag
@@ -468,32 +470,48 @@ Vedere [Operations](OPERATIONS.md), [Logging](LOGGING.md), [Audit](AUDIT.md) e
 
 ## 12. Backup, aggiornamento e restore
 
-L'implementazione applicativa corrente gestisce backup/restore soltanto per SQLite. Prima di un
-upgrade fermare il servizio con il gestore scelto, quindi:
+L'implementazione applicativa corrente gestisce backup/restore soltanto per SQLite. Con systemd,
+root ferma e avvia soltanto l'unit; repository, virtualenv, backup, migrazioni e gate restano sempre
+in carico all'utente `bh-dic`:
 
 ```bash
-cd /opt/bh-dic
-./scripts/audit-verify.sh
-./scripts/backup.sh
-sha256sum var/backups/<BACKUP>.tar.gz
-./scripts/update.sh
-./scripts/doctor.sh
-./scripts/audit-verify.sh
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/audit-verify.sh
+  ./scripts/update.sh
+  ./scripts/doctor.sh
+  ./scripts/audit-verify.sh
+' &&
+sudo systemctl start bh-dic.service &&
+sudo systemctl is-active bh-dic.service
 ```
 
 `update.sh` richiede working tree pulito e upstream, crea a sua volta un backup, esegue fetch con
-timeout, accetta solo fast-forward, reinstalla dipendenze, migra e testa. A servizio fermo non
-riavvia automaticamente. In modalità systemd non usare `update.sh --restart`; fare stop/update/gate
-e start separati. In modalità PID, `--restart` è consentito soltanto se un change approvato
-richiede esplicitamente il riavvio controllato.
+timeout, accetta solo fast-forward, reinstalla dipendenze, migra e testa. Rifiuta root, ownership o
+leggibilità incoerenti e ogni stato systemd diverso da unit assente oppure `loaded/inactive`;
+ricontrolla lo stato prima del primo backup. In modalità systemd non usare `update.sh --restart`:
+fare stop/update/gate/start separati. In modalità PID, `--restart` è consentito soltanto se un
+change approvato richiede esplicitamente il riavvio controllato. Un errore successivo allo stop
+lascia il processo fermo e richiede analisi operatore; lo script non applica `chown`, rollback o
+restart automatici.
 
 Restore SQLite, sempre con servizio fermo e approvazione:
 
 ```bash
-./scripts/backup.sh
-./scripts/restore.sh var/backups/<BACKUP>.tar.gz --confirm RESTORE
-./scripts/audit-verify.sh
-./scripts/doctor.sh
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  backup_file="var/backups/<BACKUP>.tar.gz"
+  ./scripts/backup.sh
+  ./scripts/restore.sh "$backup_file" --confirm RESTORE
+  ./scripts/audit-verify.sh
+  ./scripts/doctor.sh
+'
 ```
 
 Il risultato atteso resta `stopped`. `.env`, sessioni, upload e log non sono ripristinati. Provare

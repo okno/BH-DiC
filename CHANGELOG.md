@@ -41,6 +41,11 @@ stable public API is declared.
 
 ### Fixed
 
+- Reso fail-closed l'aggiornamento operativo: `update.sh` rifiuta root, verifica ownership e
+  leggibilità del progetto, accetta soltanto systemd assente oppure `loaded/inactive`, esegue i
+  preflight Git e ambiente prima di fermare un processo PID e ricontrolla dipendenze/import dopo
+  l'installazione. In modalità systemd stop e start restano operazioni esterne esplicite, evitando
+  aggiornamenti live e artefatti root-owned nel repository o nel virtualenv.
 - Separata la validazione fail-closed dell'URL della risposta da quella degli URL di paginazione,
   dopo che una diagnostica live autorizzata e minimizzata ha confermato i due path distinti. I due
   path non sono intercambiabili. Ogni URL pagina deve preservare tutti i nove parametri della query

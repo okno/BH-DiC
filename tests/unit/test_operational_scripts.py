@@ -87,6 +87,31 @@ def test_lifecycle_scripts_guard_process_identity_and_force_kill() -> None:
     assert stop.index('[[ "${force}" != "true" ]]') < stop.index('kill -KILL "${pid}"')
 
 
+def test_update_is_non_root_fail_closed_and_keeps_systemd_and_pid_separate() -> None:
+    library = _read("lib.sh")
+    update = _read("update.sh")
+    assert 'readonly SYSTEMD_SERVICE_UNIT="bh-dic.service"' in library
+    assert "printf '%s\\n' \"${EUID}\"" in library
+    assert "require_non_root_update_user" in update
+    assert "systemctl show --no-pager" in library
+    assert "--property=LoadState --property=ActiveState" in library
+    assert "not-found:inactive" in library
+    assert "loaded:inactive" in library
+    assert update.count("require_systemd_safe_for_update") == 2
+    first_systemd = update.index("require_systemd_safe_for_update")
+    second_systemd = update.index("require_systemd_safe_for_update", first_systemd + 1)
+    first_mutation = update.index('"${SCRIPT_DIR}/backup.sh"')
+    assert first_systemd < update.index("project_tree_is_owned_and_readable")
+    assert update.index("git status") < update.index('"${SCRIPT_DIR}/stop.sh"')
+    assert update.index("git rev-list") < update.index('"${SCRIPT_DIR}/stop.sh"')
+    assert update.index("git fetch") < update.index('"${SCRIPT_DIR}/stop.sh"')
+    assert update.index('"${SCRIPT_DIR}/stop.sh"') < second_systemd < first_mutation
+    assert "umask 022" not in update
+    assert "chmod -R" not in update
+    assert "systemctl stop" not in update
+    assert "systemctl start" not in update
+
+
 def test_cli_wrappers_match_the_implemented_cli() -> None:
     assert "run_cli health\n" in _read("healthcheck.sh")
     assert "health --json" not in _read("healthcheck.sh")

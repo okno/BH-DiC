@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_LIB_DIR}/.." && pwd -P)"
 readonly SCRIPT_LIB_DIR PROJECT_ROOT
 readonly ENV_FILE="${PROJECT_ROOT}/.env"
 readonly ENV_EXAMPLE_FILE="${PROJECT_ROOT}/.env.example"
+readonly SYSTEMD_SERVICE_UNIT="bh-dic.service"
 
 cd -- "${PROJECT_ROOT}"
 
@@ -219,6 +220,82 @@ bot_is_running() {
   local pid
   pid="$(read_pid 2>/dev/null)" || return 1
   process_is_running "${pid}" && process_is_bh_dic "${pid}"
+}
+
+effective_user_id() {
+  printf '%s\n' "${EUID}"
+}
+
+require_non_root_update_user() {
+  local effective_uid="${1:?effective user ID is required}"
+  [[ "${effective_uid}" =~ ^[0-9]+$ ]] || die "unable to verify the update user"
+  ((effective_uid != 0)) \
+    || die "update must not run as root; stop systemd externally and run it as the service/repository owner (normally bh-dic)"
+}
+
+systemctl_is_available() {
+  command -v systemctl >/dev/null 2>&1
+}
+
+systemd_runtime_is_present() {
+  [[ -d /run/systemd/system ]]
+}
+
+systemd_service_update_state() {
+  if ! systemctl_is_available; then
+    ! systemd_runtime_is_present || return 2
+    printf 'not-found\n'
+    return 0
+  fi
+
+  local properties key value
+  local load_state=""
+  local active_state=""
+  local load_seen=false
+  local active_seen=false
+  local property_count=0
+  properties="$(LC_ALL=C systemctl show --no-pager \
+    --property=LoadState --property=ActiveState \
+    "${SYSTEMD_SERVICE_UNIT}" 2>/dev/null)" || return 2
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      LoadState)
+        [[ "${load_seen}" == "false" ]] || return 2
+        load_seen=true
+        load_state="${value}"
+        ;;
+      ActiveState)
+        [[ "${active_seen}" == "false" ]] || return 2
+        active_seen=true
+        active_state="${value}"
+        ;;
+      *) return 2 ;;
+    esac
+    ((property_count += 1))
+  done <<<"${properties}"
+
+  [[ "${property_count}" == "2" ]] || return 2
+  case "${load_state}:${active_state}" in
+    not-found:inactive) printf 'not-found\n' ;;
+    loaded:inactive) printf 'inactive\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+require_systemd_safe_for_update() {
+  if ! systemd_service_update_state >/dev/null; then
+    die "cannot prove ${SYSTEMD_SERVICE_UNIT} is absent or loaded and inactive; stop it externally and verify systemd before updating"
+  fi
+}
+
+project_tree_is_owned_and_readable() {
+  local expected_uid="${1:?expected owner ID is required}"
+  local violation
+  [[ "${expected_uid}" =~ ^[0-9]+$ ]] || return 1
+  violation="$(find "${PROJECT_ROOT}" -xdev \
+    \( ! -uid "${expected_uid}" -o ! -readable \) -print -quit 2>/dev/null)" || return 1
+  [[ -z "${violation}" ]]
 }
 
 require_bot_stopped() {

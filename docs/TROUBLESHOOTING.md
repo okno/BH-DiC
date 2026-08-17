@@ -90,12 +90,9 @@ La 0.2.8 mantiene il confronto esatto e aggiunge soltanto la root `/` come scher
 e-mail TeamSystem corrente e `/connect/authorize`/`/connect/authorize/callback` come transizioni
 pending bounded. Un SSO che salta email/password non esegue alcuna azione credenziale ed è
 considerato riuscito solo dopo route applicativa, marker DIC e attestazione tenant. Dopo una
-rotazione di password/account/tenant, con servizio fermo:
-
-```bash
-.venv/bin/python -m bh_dic invalidate-session
-.venv/bin/python -m bh_dic dic-auth-check --live
-```
+rotazione di password/account/tenant, usare esclusivamente la [procedura canonica guarded](DIC_AUTHENTICATION.md#invalidazione-e-rotazione):
+stop systemd verificato, identità `bh-dic`, una invalidazione e un solo check live, senza restart
+automatico.
 
 Eseguire ciascun comando una volta. Se il check restituisce `CREDENTIAL_SUBMIT`/exit 78, non
 ritentare e non invalidare nuovamente per forzare un altro login.

@@ -1,8 +1,10 @@
 # Implementation report
 
-Snapshot documentale: **17 agosto 2026**. L'artefatto verificato sul server è la versione `0.3.0`,
-SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`. Gli stati successivi restano
-separati: non sostituire `PENDING` o `UNVERIFIED` con inferenze.
+Snapshot documentale: **17 agosto 2026**. L'artefatto applicativo verificato sul server è la
+versione `0.3.0`, SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`. Commit successivi di
+soli script operativi o documentazione richiedono gate/deployment propri e non ereditano
+automaticamente l'evidenza DIC. Gli stati successivi restano separati: non sostituire `PENDING` o
+`UNVERIFIED` con inferenze.
 
 ## Repository
 
@@ -192,18 +194,21 @@ e trasporto Discord restano distinte: il PASS applicativo non promuove lo smoke 
 Configurazione  ./scripts/init-config.sh && ./scripts/doctor.sh
 Provider offline .venv/bin/python -m bh_dic model-check
 Provider live   .venv/bin/python -m bh_dic model-check --live  # solo se autorizzato
-Avvio           ./scripts/start.sh
-Foreground debug ./scripts/run-foreground.sh
-Status          ./scripts/status.sh
+Systemd start   sudo systemctl start bh-dic.service
+Systemd status  sudo systemctl show bh-dic.service -p ActiveState -p SubState -p NRestarts
+Systemd stop    sudo systemctl stop bh-dic.service
+PID alternativo ./scripts/start.sh | ./scripts/status.sh | ./scripts/stop.sh
+Foreground PID  ./scripts/run-foreground.sh
 Log             ./scripts/logs.sh all --follow
 File            ./scripts/files.sh list
 Audit           ./scripts/audit-verify.sh
-Stop            ./scripts/stop.sh
-Restart         ./scripts/restart.sh
 Backup          ./scripts/backup.sh
 Restore         ./scripts/restore.sh var/backups/<BACKUP>.tar.gz --confirm RESTORE
-Update          ./scripts/update.sh
+Update non-root sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /opt/bh-dic/scripts/update.sh
 ```
+
+Gli script applicativi della tabella vengono eseguiti dall'owner `bh-dic`; root gestisce soltanto
+il lifecycle systemd. La modalità PID è alternativa all'unit, mai concorrente.
 
 Installazione, doctor, audit e smoke mock sono stati eseguiti sul server. Il restore drill non è
 stato eseguito. Backup/restore corrente supporta SQLite locale, non PostgreSQL.

@@ -129,11 +129,14 @@ login. Mantenere le write disabilitate, verificare localmente il vault e avviare
 per lo smoke Discord ancora pending:
 
 ```bash
-cd /opt/bh-dic
-./scripts/doctor.sh
-.venv/bin/python -m bh_dic dic-auth-check
-systemctl start bh-dic.service
-systemctl is-active bh-dic.service
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/doctor.sh
+  .venv/bin/python -m bh_dic dic-auth-check
+' &&
+sudo systemctl start bh-dic.service &&
+sudo systemctl is-active bh-dic.service
 ```
 
 La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le

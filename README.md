@@ -6,7 +6,7 @@ Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello sele
 deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
 l'adapter browser.
 
-> Stato al 17 agosto 2026: la versione `0.3.0`, SHA esatto
+> Stato al 17 agosto 2026: il commit applicativo della versione `0.3.0`, SHA esatto
 > `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target Debian un unico gate live
 > autorizzato in sola lettura. Il gate ha attestato autenticazione/tenant, conteggio aggregato
 > `PUBLIC` non-ephemeral, scadenze bounded del prossimo mese di calendario `SENSITIVE`/ephemeral,
@@ -17,7 +17,9 @@ l'adapter browser.
 
 Le evidenze storiche `VERIFIED_BY_ADAPTER`, `TEAMSYSTEM_EMAIL`, restore `sessionStorage`, gateway
 `DEGRADED` e primo deny RBAC restano nel report come tappe separate; non sostituiscono né
-contraddicono il gate 0.3.0 corrente.
+contraddicono il gate 0.3.0 corrente. I commit successivi limitati a documentazione o hardening
+operativo richiedono gate e deployment propri e non ereditano implicitamente l'evidenza DIC dello
+SHA applicativo.
 
 ## Uso autorizzato
 
@@ -102,8 +104,9 @@ Per il server seguire [Installazione](docs/INSTALLATION.md) e
 riportato nello stato live; applicare sempre la migrazione `0002_model_usage` su altre
 installazioni. Invalidare il vault esclusivamente dopo rotazione o compromissione documentata; un
 semplice upgrade non richiede un nuovo login. Il gateway può essere avviato `DEGRADED` se la
-sessione verificata non è disponibile. Nello snapshot corrente il servizio target è fermo: il
-prossimo passo autorizzato è lo smoke del trasporto Discord, non l'abilitazione delle write.
+sessione verificata non è disponibile. Il servizio può essere fermato durante una finestra di
+manutenzione controllata; lo stato operativo osservato è quello dichiarato in apertura. Il prossimo
+passo funzionale autorizzato è lo smoke del trasporto Discord, non l'abilitazione delle write.
 
 ## Configurazione e operatività
 
@@ -119,7 +122,7 @@ Non impostare mai `MODEL_STORE=true`. Per una scrittura non basta il flag specif
 essere veri anche il kill switch globale e ogni precondizione di policy; le funzioni critiche
 richiedono due approvatori distinti. In questo rilascio le scritture live non sono autorizzate.
 
-Le interfacce operative richieste sono:
+Su un host PID-only le interfacce operative sono:
 
 ```bash
 ./scripts/start.sh
@@ -129,8 +132,9 @@ Le interfacce operative richieste sono:
 ```
 
 Consultare [Start/stop](docs/START_STOP.md) per disponibilità verificata e semantica dei
-comandi. Non avviare il bot finché `doctor.sh` non termina con successo e le credenziali non
-sono state fornite per canale sicuro.
+comandi. Sul server systemd usare invece `systemctl`/`journalctl` e invocare gli script applicativi
+come `bh-dic`; i due gestori non vanno mescolati. Non avviare il bot finché `doctor.sh` non termina
+con successo e le credenziali non sono state fornite per canale sicuro.
 
 Con `DISCORD_READONLY_ROLE_IDS=<DISCORD_GUILD_ID>`, ogni membro del solo canale allowlistato può
 chiedere un aggregato non sensibile, per esempio `/bh ask richiesta:Dimmi il totale dei

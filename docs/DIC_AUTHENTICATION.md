@@ -299,7 +299,8 @@ Il controllo predefinito è strettamente locale e non avvia Chromium né effettu
 richieste di rete:
 
 ```bash
-.venv/bin/python -m bh_dic dic-auth-check
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin \
+  /opt/bh-dic/.venv/bin/python -m bh_dic dic-auth-check
 ```
 
 Valida la configurazione completa, la presenza del tenant atteso, il path non
@@ -313,8 +314,17 @@ presenti e non scaduti non provano che la sessione sia ancora accettata dal sito
 Solo un operatore autorizzato può richiedere esplicitamente il controllo live:
 
 ```bash
-.venv/bin/python -m bh_dic dic-auth-check --live
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  .venv/bin/python -m bh_dic dic-auth-check --live
+'
 ```
+
+La sequenza non riavvia il servizio. Su un host PID-only fermare e verificare prima il processo con
+`stop.sh` come owner del progetto; non mescolare quel backend con systemd.
 
 `--live` costruisce il runtime browser, prova prima il ripristino mediante la
 route read-only fissa, esegue il login allowlisted solo se necessario, verifica
@@ -336,21 +346,33 @@ obbligatoria la stessa procedura singola.
 
 ## Invalidazione e rotazione
 
-Per invalidare una sessione, fermare prima il processo BH-DiC e usare il comando
-operativo dedicato:
+Per una rotazione di password/account/tenant, fermare prima il processo BH-DiC, invalidare una
+sola volta e fare una sola verifica live come stesso utente di servizio:
 
 ```bash
-.venv/bin/python -m bh_dic invalidate-session
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  .venv/bin/python -m bh_dic invalidate-session
+  .venv/bin/python -m bh_dic dic-auth-check --live
+'
 ```
 
 Il comando risolve il path configurato tramite `FernetSessionVault` ed elimina
 soltanto quel file. Non usare glob, cancellazioni ricorsive o comandi manuali che
 possano colpire altre sessioni.
 
-La rotazione di `DIC_SESSION_ENCRYPTION_KEY` rende il vault precedente
-indecifrabile. La sequenza sicura è: fermare il servizio, invalidare il vault,
-ruotare la chiave nel secret manager, riavviare e autenticare nuovamente. Non
-conservare copie in chiaro della chiave precedente.
+In caso di sospetta compromissione senza credenziale sostitutiva, eseguire soltanto
+`invalidate-session` nello stesso confine systemd/utente e lasciare il servizio fermo. Nessuna
+procedura in questa sezione avvia automaticamente il bot.
+
+La rotazione di `DIC_SESSION_ENCRYPTION_KEY` rende il vault precedente indecifrabile. La sequenza
+sicura mantiene systemd fermo per tutto il cambio: invalidare il vault con la configurazione
+corrente, aggiornare la chiave nel secret manager/`.env` come `bh-dic`, rieseguire doctor e un solo
+check live guarded, quindi avviare separatamente il servizio soltanto dopo il successo e
+l'autorizzazione operatore. Non conservare copie in chiaro della chiave precedente.
 
 Una rotazione di password, account o tenant richiede sempre l'invalidazione deliberata del vault,
 con servizio fermo. Dopo la rotazione eseguire `invalidate-session` esattamente una volta e poi un

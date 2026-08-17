@@ -19,11 +19,17 @@ autorizzazione esplicita, cifratura e chiave conservata separatamente.
 
 ## Backup
 
+Sul target systemd, root verifica/ferma l'unit quando richiesto; il backup applicativo viene creato
+come `bh-dic`:
+
 ```bash
-cd /opt/bh-dic
-./scripts/status.sh
-./scripts/audit-verify.sh
-./scripts/backup.sh
+sudo systemctl show bh-dic.service -p ActiveState -p SubState
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/audit-verify.sh
+  ./scripts/backup.sh
+'
 ```
 
 Prima di update o restore fermare il bot. Lo script deve usare un metodo consistente (SQLite
@@ -42,9 +48,14 @@ l'evidenza. Tale archivio non è ripristinabile finché l'incidente non è risol
 Verifiche minime:
 
 ```bash
-ls -ld var/backups
-sha256sum var/backups/<BACKUP_FILE>
-./scripts/audit-verify.sh
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  backup_file="var/backups/<BACKUP_FILE>"
+  ls -ld var/backups
+  sha256sum "$backup_file"
+  ./scripts/audit-verify.sh
+'
 ```
 
 Non incollare il listing se i nomi contengono informazioni sensibili. Copiare off-host soltanto
@@ -56,14 +67,18 @@ Il restore è distruttivo per lo stato corrente: richiede approvazione, bot ferm
 preventivo separato.
 
 ```bash
-cd /opt/bh-dic
-./scripts/stop.sh
-./scripts/backup.sh
-./scripts/restore.sh var/backups/<BACKUP_FILE>.tar.gz --confirm RESTORE
-./scripts/audit-verify.sh
-.venv/bin/python -m alembic -c migrations/alembic.ini upgrade head
-./scripts/doctor.sh
-./scripts/status.sh
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  backup_file="var/backups/<BACKUP_FILE>.tar.gz"
+  ./scripts/backup.sh
+  ./scripts/restore.sh "$backup_file" --confirm RESTORE
+  ./scripts/audit-verify.sh
+  .venv/bin/python -m alembic -c migrations/alembic.ini upgrade head
+  ./scripts/doctor.sh
+'
 ```
 
 Lo script rifiuta path fuori `var/backups/`, link/special member, traversal, file inattesi,

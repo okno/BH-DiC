@@ -7,13 +7,16 @@ installato senza sostituire il Python di sistema, virtualenv e dipendenze, migra
 directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
 doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-La versione `0.3.0`, SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, è stata distribuita
-e ha superato un unico gate applicativo live autorizzato in sola lettura: autenticazione e tenant,
+Il commit applicativo della versione `0.3.0`, SHA esatto
+`c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, è stato distribuito e ha superato un unico gate live
+autorizzato in sola lettura: autenticazione e tenant,
 conteggio aggregato `PUBLIC`/non-ephemeral, scadenze bounded del prossimo mese di calendario
 `SENSITIVE`/ephemeral, telemetria token e status API/token. Il servizio è `active/running`, con
 zero riavvii osservati e gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING`.
 Non confondere il PASS applicativo o il gateway pronto con un
 round-trip slash riuscito.
+Gli hotfix successivi di soli script operativi o documentazione hanno gate/deployment separati e
+non cambiano retroattivamente l'evidenza DIC associata a quello SHA.
 `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
 restano `false`.
 
@@ -36,21 +39,33 @@ modificare `sshd_config` o firewall.
 
 ## Aggiornamento dalla release precedente
 
-Eseguire soltanto dopo la pubblicazione della release correttiva e con il bot confermato fermo:
+Eseguire soltanto dopo la pubblicazione della release correttiva. Root orchestra esclusivamente
+systemd; ogni operazione sul repository, sul virtualenv e sui dati runtime viene eseguita come
+utente di servizio:
 
 ```bash
-cd /opt/bh-dic
-./scripts/status.sh
-./scripts/backup.sh
-./scripts/update.sh
-./scripts/doctor.sh
-.venv/bin/python -m bh_dic validate-config
-.venv/bin/python -m bh_dic model-check
-.venv/bin/python -m alembic -c migrations/alembic.ini current
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/update.sh
+  ./scripts/doctor.sh
+  ./scripts/audit-verify.sh
+  .venv/bin/python -m bh_dic validate-config
+  .venv/bin/python -m bh_dic model-check
+  .venv/bin/python -m alembic -c migrations/alembic.ini current
+' &&
+sudo systemctl start bh-dic.service &&
+sudo systemctl is-active bh-dic.service
 ```
 
-`update.sh` richiede un worktree pulito e aggiorna solo fast-forward. Non usare `--restart` in
-questa fase. Non mostrare `.env`; conservarlo con owner del servizio e modalità `0600`.
+`update.sh` rifiuta EUID `0`, verifica due volte che l'unit sia assente oppure `loaded/inactive`,
+richiede che l'intero progetto appartenga all'utente corrente e aggiorna solo fast-forward. Esegue
+controlli di dipendenze e import sia prima sia dopo l'installazione. Non usare `--restart` con
+systemd: l'opzione resta riservata al gestore PID. Se un passaggio fallisce dopo lo stop, il
+servizio resta fermo per l'analisi; non tentare un avvio o un `chown -R` automatico. Non mostrare
+`.env`; conservarlo con owner del servizio e modalità `0600`.
 Verificare che `.venv/bin/python -m bh_dic version` riporti `0.3.0` e che Alembic sia alla revisione
 `0002_model_usage` prima del gate DIC. La migrazione non salva prompt o dati HR: crea la sola
 telemetria locale di provider/modello, stato e contatori dichiarati.
@@ -72,17 +87,21 @@ deliberatamente una sola volta, con servizio fermo. Non passare la password nell
 nei log o in ticket. Il login manuale fresco prova soltanto che la credenziale è stata accettata:
 non attesta l'adapter headless, il tenant configurato o il vault server.
 
-Con le write ancora disabilitate:
+Con le write ancora disabilitate, i check provider possono essere eseguiti come utente di
+servizio:
 
 ```bash
-./scripts/doctor.sh --online
-.venv/bin/python -m bh_dic model-check --live
-.venv/bin/python -m bh_dic invalidate-session
-.venv/bin/python -m bh_dic dic-auth-check --live
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/doctor.sh --online
+  .venv/bin/python -m bh_dic model-check --live
+'
 ```
 
-Nello scenario di rotazione eseguire `invalidate-session` e `dic-auth-check --live` ciascuno
-esattamente una volta. Non ripetere l'invalidazione per ottenere altri tentativi.
+Nello scenario di rotazione usare esclusivamente la [procedura canonica guarded](DIC_AUTHENTICATION.md#invalidazione-e-rotazione),
+che verifica lo stop systemd ed esegue `invalidate-session` e `dic-auth-check --live` come
+`bh-dic`, ciascuno esattamente una volta. Non ripetere l'invalidazione per ottenere altri tentativi.
 
 Il check DIC senza `--live` valida soltanto un vault già esistente. Su una prima installazione o
 dopo un'invalidazione intenzionale fallisce correttamente perché non esiste alcuna sessione
@@ -148,9 +167,14 @@ Debian, provider e smoke del trasporto Discord è in
 Prima di ogni aggiornamento:
 
 ```bash
-./scripts/stop.sh
-./scripts/backup.sh
-./scripts/audit-verify.sh
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/backup.sh
+  ./scripts/audit-verify.sh
+'
 ```
 
 In caso di fallimento non forzare l'avvio. Ripristinare soltanto un backup verificato seguendo

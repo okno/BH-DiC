@@ -112,12 +112,21 @@ registrare body/URL completi per diagnosticare il problema.
 
 ### Database locked
 
+Sul target systemd fermare l'unit e proseguire soltanto dopo lo stato `inactive`:
+
 ```bash
-./scripts/status.sh
-./scripts/stop.sh
-ls -l var/db
-.venv/bin/python -m alembic -c migrations/alembic.ini current
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ls -l var/db
+  .venv/bin/python -m alembic -c migrations/alembic.ini current
+'
 ```
+
+Su un host PID-only usare invece `status.sh` e `stop.sh` prima degli stessi controlli; non
+mescolare i due gestori.
 
 Verificare processi concorrenti e filesystem. Non cancellare `-wal`/`-shm`, non copiare a caldo e
 non modificare manualmente tabelle di approval/audit.
@@ -127,7 +136,8 @@ non modificare manualmente tabelle di approval/audit.
 - verificare daemon/socket e permessi con `doctor.sh`;
 - un timeout o scanner assente mantiene il file in quarantena (`SCAN_ERROR`/rejected);
 - non impostare `CLAMAV_REQUIRED=false` per sbloccare un upload;
-- usare `./scripts/files.sh scan <UPLOAD_ID>` dopo il ripristino del servizio.
+- dopo il ripristino usare il comando `scan` esclusivamente tramite il wrapper `bh-dic` della
+  [procedura file canonica](FILE_HANDLING.md#operator-commands).
 
 ### Azione pending
 

@@ -9,7 +9,7 @@
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
 | Discord | trasporto storico verificato su una release precedente; servizio 0.3.0 `active/running`, zero riavvii osservati e gateway `discord_ready`; il gate applicativo ha verificato sensibilità `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, non il round-trip slash | Smoke trasporto 0.3.0 RBAC/read-only/HR-read ancora `PENDING` |
 | DIC | `LIVE_AUTHENTICATED` e tenant attestato sullo SHA 0.3.0 verificato; conteggio aggregato e scadenze bounded del prossimo mese di calendario `LIVE_READ_VERIFIED` | Altre modalità read `NEEDS_VALIDATION`; nessuna write live |
-| Debian deployment | versione `0.3.0`, SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, gate applicativo live PASS; servizio `active/running`, zero riavvii osservati, gateway `discord_ready` | Smoke trasporto Discord e restore drill `PENDING` |
+| Debian deployment | commit applicativo `0.3.0` allo SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, gate live PASS; servizio `active/running`, zero riavvii osservati, gateway `discord_ready`; hotfix operativi successivi con gate/deployment separati | Smoke trasporto Discord e restore drill `PENDING` |
 
 Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. Il gate DIC
 applicativo promuove soltanto i due subset read bounded indicati; non attesta il trasporto Discord.

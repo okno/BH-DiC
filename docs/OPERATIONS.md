@@ -7,8 +7,10 @@
   runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- versione `0.3.0`, SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, distribuita e
-  verificata con un unico gate applicativo live autorizzato in sola lettura;
+- commit applicativo della versione `0.3.0`, SHA esatto
+  `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, distribuito e verificato con un unico gate live
+  autorizzato in sola lettura; gli hotfix operativi/documentali successivi restano evidenza
+  separata;
 - autenticazione/tenant, conteggio aggregato `PUBLIC`/non-ephemeral, scadenze bounded del prossimo
   mese di calendario `SENSITIVE`/ephemeral, telemetria token e status API/token verificati;
 - servizio `active/running`, zero riavvii osservati e gateway `discord_ready`; smoke del trasporto
@@ -28,20 +30,37 @@ non il risultato dello smoke Discord ancora da eseguire.
 
 ## Runbook giornaliero
 
+Sul target Debian il gestore scelto è systemd: lifecycle privilegiato con `systemctl`, operazioni
+applicative come utente `bh-dic`. I comandi `start.sh`, `stop.sh` e `restart.sh` descritti sotto
+sono un'alternativa esclusiva per host PID-only e non vanno mescolati con l'unit installata.
+
 ### Configurazione
 
 ```bash
-cd /opt/bh-dic
-./scripts/init-config.sh
-chmod 600 .env
-nano .env
-./scripts/doctor.sh
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/init-config.sh
+  chmod 600 .env
+'
+sudo -u bh-dic -H "${EDITOR:-nano}" /opt/bh-dic/.env
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin \
+  /opt/bh-dic/scripts/doctor.sh
 ```
 
 `init-config.sh` rifiuta di sovrascrivere `.env`. Per cambiare una variabile: fermare, fare backup,
 modificare localmente, rieseguire doctor e riavviare solo se autorizzato.
 
 ### Avvio e foreground
+
+Sul target systemd:
+
+```bash
+sudo systemctl start bh-dic.service
+sudo systemctl is-active bh-dic.service
+```
+
+Soltanto su un host PID-only, come owner del progetto:
 
 ```bash
 ./scripts/start.sh
@@ -52,15 +71,28 @@ Sono modalità alternative. Dettagli in [Start/stop](START_STOP.md).
 
 ### Status e health
 
+Sul target systemd:
+
+```bash
+sudo systemctl show bh-dic.service -p ActiveState -p SubState -p NRestarts
+sudo journalctl -u bh-dic.service -n 100 --no-pager -o cat
+```
+
+Lo stato applicativo del processo già attivo si verifica con `/bh status` da un attore
+autorizzato; non avviare una seconda istanza CLI/browser accanto al servizio solo per fare health.
+
+Soltanto per il gestore PID alternativo:
+
 ```bash
 ./scripts/status.sh
 ./scripts/healthcheck.sh --process-only
 ./scripts/healthcheck.sh
 ```
 
-Il primo healthcheck controlla soltanto identità/processo. Quello completo richiede configurazione
-e DB; se l'interfaccia CLI/script non coincide, trattarlo come `BLOCKED` e non sostituirlo con una
-chiamata live improvvisata.
+`systemctl show` è la fonte del lifecycle systemd. `status.sh` e `healthcheck.sh` richiedono invece
+il PID file del backend alternativo. Il healthcheck PID completo richiede configurazione e DB; se
+l'interfaccia CLI/script non coincide, trattarlo come `BLOCKED` e non sostituirlo con una chiamata
+live improvvisata.
 
 `/bh status` della 0.3.0 riporta separatamente bot Discord, provider/modello, stato API osservato,
 browser, autenticazione tenant, kill switch e token cumulativi locali. “Risposta osservata” indica
@@ -72,15 +104,20 @@ una prova di quota disponibile. I contatori mancanti/incerti sono dichiarati e m
 Il gate predefinito è offline:
 
 ```bash
-.venv/bin/python -m bh_dic model-check
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin \
+  /opt/bh-dic/.venv/bin/python -m bh_dic model-check
 ```
 
 Mostra provider, modello e scope senza rete. Dopo doctor e soltanto con autorizzazione esplicita a
 rete/costo, prima dell'avvio:
 
 ```bash
-./scripts/doctor.sh --online
-.venv/bin/python -m bh_dic model-check --live
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/doctor.sh --online
+  .venv/bin/python -m bh_dic model-check --live
+'
 ```
 
 Il doctor online prova DNS/HTTP senza autenticazione. Il model-check live esegue una singola
@@ -93,7 +130,8 @@ Discord.
 Il check offline non contatta la rete e valida soltanto un vault già presente:
 
 ```bash
-.venv/bin/python -m bh_dic dic-auth-check
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin \
+  /opt/bh-dic/.venv/bin/python -m bh_dic dic-auth-check
 ```
 
 Se il vault non esiste (prima installazione, rotazione o invalidazione), il fallimento è atteso e
@@ -102,12 +140,9 @@ descritto sotto.
 
 La rotazione storica della password e il relativo gate 0.3.0 sono già conclusi. Non invalidare il
 vault corrente. Soltanto dopo una futura rotazione o compromissione, fermare il servizio,
-mantenere le write disabilitate e usare una volta la sequenza seguente:
-
-```bash
-.venv/bin/python -m bh_dic invalidate-session
-.venv/bin/python -m bh_dic dic-auth-check --live
-```
+mantenere le write disabilitate e usare una volta la sola [procedura canonica guarded per
+invalidazione e rotazione](DIC_AUTHENTICATION.md#invalidazione-e-rotazione). Non duplicare i
+comandi fuori da quel confine systemd/utente.
 
 Non invalidare un vault leggibile per un semplice upgrade o per ripetere il gate già riuscito.
 Invalidare resta un'azione distinta e deliberata
@@ -163,10 +198,15 @@ La lettura applica un secondo strato di redazione. Vedere [Logging](LOGGING.md).
 ### File
 
 ```bash
-./scripts/files.sh list
-./scripts/files.sh metadata <UPLOAD_UUID>
-./scripts/files.sh scan <UPLOAD_UUID>
-./scripts/files.sh purge-expired
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  upload_uuid="<UPLOAD_UUID>"
+  ./scripts/files.sh list
+  ./scripts/files.sh metadata "$upload_uuid"
+  ./scripts/files.sh scan "$upload_uuid"
+  ./scripts/files.sh purge-expired
+'
 ```
 
 I comandi mostrano metadati, mai contenuto o nome originale. La scansione non promuove da sola un
@@ -183,12 +223,22 @@ catena. Vedere [Audit](AUDIT.md).
 
 ### Stop e restart
 
+Sul target systemd:
+
+```bash
+sudo systemctl stop bh-dic.service
+sudo systemctl restart bh-dic.service
+```
+
+Soltanto per il gestore PID alternativo:
+
 ```bash
 ./scripts/stop.sh
 ./scripts/restart.sh
 ```
 
-`--force` è una scelta esplicita successiva a diagnosi, non il default.
+`--force` è una scelta esplicita successiva a diagnosi, non il default, ed esiste soltanto nel
+gestore PID.
 
 In modalità systemd l'unit installata mantiene `RestartPreventExitStatus=78` come difesa
 aggiuntiva. Dalla 0.2.7 il normale `run` non invia credenziali DIC: il codice 78 è soprattutto il
@@ -204,8 +254,9 @@ e configurazione valida. Dopo un update dell'unit, ricopiarla, usare `systemd-an
 Interfacce disponibili per il solo deployment SQLite:
 
 ```bash
-./scripts/backup.sh
-./scripts/restore.sh var/backups/<BACKUP_FILE>.tar.gz --confirm RESTORE
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin \
+  /opt/bh-dic/scripts/backup.sh
+# Per restore usare esclusivamente la procedura guarded in BACKUP_RESTORE.md.
 ```
 
 I sorgenti e i test di contratto sono presenti, ma nessun backup/restore server è stato eseguito.
@@ -214,19 +265,27 @@ I sorgenti e i test di contratto sono presenti, ma nessun backup/restore server 
 
 ### Update
 
-Dopo un restore drill riuscito sul target:
+Dopo un restore drill riuscito sul target, per un deployment systemd:
 
 ```bash
-./scripts/stop.sh
-./scripts/backup.sh
-./scripts/update.sh
-./scripts/doctor.sh
-./scripts/status.sh
+sudo systemctl stop bh-dic.service &&
+test "$(sudo systemctl show -p ActiveState --value bh-dic.service)" = inactive &&
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  ./scripts/update.sh
+  ./scripts/doctor.sh
+  ./scripts/audit-verify.sh
+' &&
+sudo systemctl start bh-dic.service &&
+sudo systemctl is-active bh-dic.service
 ```
 
 `update.sh` richiede working tree pulito e upstream, usa fetch con timeout e solo fast-forward,
-reinstalla lockfile/editable, migra e testa. L'opzione `--restart` riavvia solo se il bot era già
-attivo; non usarla durante preparazione/deployment fermo.
+reinstalla lockfile/editable, migra e testa. Deve essere invocato dall'owner non-root del progetto,
+normalmente `bh-dic`; verifica ownership/leggibilità, dipendenze/import e lo stato systemd esatto
+prima delle mutazioni. L'opzione `--restart` gestisce soltanto un processo PID già attivo e non va
+mai usata per l'unit systemd. Un errore dopo lo stop lascia deliberatamente il bot fermo.
 
 Dopo l'update 0.3.0 verificare che `bh_dic version` mostri `0.3.0` e che Alembic sia alla revisione
 `0002_model_usage`. Il gate applicativo dei due percorsi è già riuscito; resta da eseguirne lo
@@ -237,13 +296,9 @@ Se uno dei due confini non è rispettato, fermare il rollout.
 
 ## Sessione DIC e rotazione token
 
-Invalidare una sessione cifrata dopo rotazione credenziali o sospetto compromesso:
-
-```bash
-./scripts/stop.sh
-.venv/bin/python -m bh_dic invalidate-session
-./scripts/doctor.sh
-```
+Invalidare una sessione cifrata dopo rotazione credenziali o sospetto compromesso soltanto con la
+[procedura canonica guarded](DIC_AUTHENTICATION.md#invalidazione-e-rotazione). Il confine impone
+stop systemd verificato, identità `bh-dic` e nessun restart automatico.
 
 Per Discord/provider di modello/DIC: revocare lato provider, aggiornare `.env` con `0600`,
 invalidare la sessione DIC quando pertinente, verificare audit/doctor e avviare soltanto dopo

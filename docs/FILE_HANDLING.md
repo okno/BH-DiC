@@ -118,10 +118,15 @@ record the exception without extending all files.
 The project requires the following safe wrapper interface:
 
 ```bash
-./scripts/files.sh list
-./scripts/files.sh metadata <UPLOAD_ID>
-./scripts/files.sh scan <UPLOAD_ID>
-./scripts/files.sh purge-expired
+sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
+  set -Eeuo pipefail
+  cd /opt/bh-dic
+  upload_id="<UPLOAD_ID>"
+  ./scripts/files.sh list
+  ./scripts/files.sh metadata "$upload_id"
+  ./scripts/files.sh scan "$upload_id"
+  ./scripts/files.sh purge-expired
+'
 ```
 
 The wrappers are operational interfaces to be validated during deployment. They must use absolute
