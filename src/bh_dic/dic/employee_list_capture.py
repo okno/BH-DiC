@@ -108,6 +108,17 @@ _REQUIRED_EMPLOYEE_KEYS = frozenset(
 _CONTRACT_KEYS = frozenset(
     {"hours_type", "id", "part_time_percentage", "permanent", "valid_from", "valid_to"}
 )
+_CONTRACT_TECHNICAL_KEYS = frozenset(
+    {
+        "flexible_workinghours",
+        "hours_alert",
+        "note",
+        "ongoing",
+        "workinghours",
+        "workinghours_list",
+    }
+)
+_EXTENDED_CONTRACT_KEYS = _CONTRACT_KEYS | _CONTRACT_TECHNICAL_KEYS
 _WORKPLACE_KEYS = frozenset(
     {"active", "description", "id", "name", "position", "tolerance", "type"}
 )
@@ -551,8 +562,25 @@ def _workplace_name(value: object) -> str | None:
 def _contract_projection(value: object) -> tuple[str | None, bool | None, date | None, date | None]:
     if value is None:
         return None, None, None, None
-    if not isinstance(value, dict) or set(value) != _CONTRACT_KEYS:
+    if not isinstance(value, dict):
         raise _failure("invalid current contract schema")
+    contract_keys = value.keys()
+    is_extended = contract_keys == _EXTENDED_CONTRACT_KEYS
+    if contract_keys != _CONTRACT_KEYS and not is_extended:
+        raise _failure("invalid current contract schema")
+    if is_extended:
+        # These discard-only fields have one exact live-observed shape.  They never leave this
+        # validation boundary; booleans are strict (integers are rejected), nullable fields are
+        # literal null only, and any future non-null/partial/unknown variant remains fail-closed.
+        _strict_bool(value["flexible_workinghours"])
+        _strict_bool(value["hours_alert"])
+        _strict_bool(value["ongoing"])
+        if (
+            value["note"] is not None
+            or value["workinghours"] is not None
+            or value["workinghours_list"] is not None
+        ):
+            raise _failure("invalid current contract schema")
     _strict_int(value["id"], minimum=1)
     hours_type = _bounded_text(value["hours_type"], maximum=128)
     raw_percentage = value["part_time_percentage"]

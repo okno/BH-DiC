@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from itertools import chain, combinations
 from typing import Any
 from urllib.parse import urlencode
 
@@ -18,6 +19,17 @@ from bh_dic.dic.employee_list_capture import (
 )
 from bh_dic.dic.errors import DicAuthorizationError, DicUiChangedError
 from bh_dic.dic.models import EmployeeFilter, EmployeeListQuery, SortDirection
+
+_CONTRACT_TECHNICAL_KEYS = frozenset(
+    {
+        "flexible_workinghours",
+        "hours_alert",
+        "note",
+        "ongoing",
+        "workinghours",
+        "workinghours_list",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,17 @@ def _employee(employee_id: int = 101) -> dict[str, Any]:
     }
 
 
+def _technical_contract_values() -> dict[str, object]:
+    return {
+        "flexible_workinghours": False,
+        "hours_alert": True,
+        "note": None,
+        "ongoing": False,
+        "workinghours": None,
+        "workinghours_list": None,
+    }
+
+
 def _document(
     query: EmployeeListQuery, *, employees: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
@@ -269,6 +292,126 @@ async def test_current_contract_accepts_nullable_percentage_and_integer_boundari
     assert result.total == 1
     assert result.items[0].current_contract_valid_from == date(2026, 1, 1)
     assert result.items[0].current_contract_valid_to == date(2026, 9, 30)
+
+
+@pytest.mark.asyncio
+async def test_current_contract_accepts_complete_technical_variant_without_projection() -> None:
+    query = _query()
+    document = _document(query)
+    document["data"][0]["current_contract"].update(_technical_contract_values())
+
+    result = await employee_list_result_from_response(
+        _Response(url=_url(query), document=document), query
+    )
+
+    assert result.total == 1
+    assert result.items[0].current_contract_valid_from == date(2026, 1, 1)
+    assert result.items[0].current_contract_valid_to == date(2026, 9, 30)
+    serialized = result.model_dump_json()
+    for technical_key in _CONTRACT_TECHNICAL_KEYS:
+        assert technical_key not in serialized
+
+
+@pytest.mark.asyncio
+async def test_current_contract_validates_base_and_extended_shapes_per_employee_record() -> None:
+    query = _query()
+    base_employee = _employee(101)
+    extended_employee = _employee(102)
+    extended_employee["current_contract"].update(_technical_contract_values())
+    document = _document(query, employees=[base_employee, extended_employee])
+
+    result = await employee_list_result_from_response(
+        _Response(url=_url(query), document=document), query
+    )
+
+    assert tuple(item.employee_id for item in result.items) == ("101", "102")
+    serialized = result.model_dump_json()
+    for technical_key in _CONTRACT_TECHNICAL_KEYS:
+        assert technical_key not in serialized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("flexible_workinghours", 1),
+        ("flexible_workinghours", "PRIVATE_TECHNICAL_VALUE_MARKER"),
+        ("hours_alert", 0),
+        ("hours_alert", None),
+        ("ongoing", 1.0),
+        ("ongoing", "false"),
+        ("note", "PRIVATE_TECHNICAL_VALUE_MARKER"),
+        ("workinghours", False),
+        ("workinghours_list", []),
+    ],
+)
+async def test_current_contract_rejects_non_exact_technical_value_shapes(
+    field: str,
+    invalid_value: object,
+) -> None:
+    query = _query()
+    document = _document(query)
+    document["data"][0]["current_contract"].update(_technical_contract_values())
+    document["data"][0]["current_contract"][field] = invalid_value
+
+    with pytest.raises(
+        DicUiChangedError,
+        match=r"invalid (?:response|current contract) schema",
+    ) as captured:
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert "PRIVATE_TECHNICAL_VALUE_MARKER" not in repr(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_current_contract_rejects_every_nonempty_partial_technical_key_variant() -> None:
+    query = _query()
+    proper_subsets = chain.from_iterable(
+        combinations(sorted(_CONTRACT_TECHNICAL_KEYS), size)
+        for size in range(1, len(_CONTRACT_TECHNICAL_KEYS))
+    )
+
+    for subset in proper_subsets:
+        document = _document(query)
+        private_marker = "PRIVATE_PARTIAL_VARIANT_MARKER"
+        document["data"][0]["current_contract"].update({key: private_marker for key in subset})
+        with pytest.raises(
+            DicUiChangedError,
+            match="invalid current contract schema",
+        ) as captured:
+            await employee_list_result_from_response(
+                _Response(url=_url(query), document=document), query
+            )
+        assert captured.value.__cause__ is None
+        assert captured.value.__context__ is None
+        assert private_marker not in repr(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_current_contract_rejects_unknown_extended_key_without_private_leakage() -> None:
+    query = _query()
+    document = _document(query)
+    private_marker = "PRIVATE_UNKNOWN_CONTRACT_MARKER"
+    document["data"][0]["current_contract"].update(
+        {key: private_marker for key in _CONTRACT_TECHNICAL_KEYS}
+    )
+    document["data"][0]["current_contract"]["unknown_private_field"] = private_marker
+
+    with pytest.raises(
+        DicUiChangedError,
+        match="invalid current contract schema",
+    ) as captured:
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert private_marker not in repr(captured.value)
 
 
 @pytest.mark.asyncio
