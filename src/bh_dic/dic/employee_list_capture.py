@@ -5,6 +5,10 @@ The module never issues an HTTP request.  A caller must install
 captured Playwright response here.  Only the bounded projection required by
 ``EmployeeListResult`` leaves this boundary; clear display names are wrapped in ``SecretStr``
 and are consumed only by authorized, ephemeral HR rendering.
+
+The emitted response and its paginator metadata intentionally use different exact paths.
+Every non-null paginator URL must preserve the complete validated UI query, with only its
+canonical page number changed; display labels are never trusted as page identifiers.
 """
 
 from __future__ import annotations
@@ -418,40 +422,97 @@ async def validate_employee_response_metadata(
             raise _failure("response exceeds the read limit")
 
 
-def _validate_url_field(value: object, *, query_allowed: bool) -> None:
-    _paginator_parts(value, allow_query=query_allowed)
+def _validate_paginator_path(value: object) -> None:
+    _paginator_parts(value, allow_query=False)
 
 
-def _page_from_url(value: object, *, expected_page: int) -> None:
-    _, query = _paginator_parts(value, allow_query=True)
-    if query != {"page": str(expected_page)}:
+def _query_at_page(expected: EmployeeListQuery, page: int) -> EmployeeListQuery:
+    if page < 1 or page > 10_000:
         raise _failure("invalid pagination metadata")
-
-
-def _page_number_from_url(value: object) -> int:
-    _, query = _paginator_parts(value, allow_query=True)
-    if set(query) != {"page"} or re.fullmatch(r"[1-9][0-9]{0,18}", query["page"]) is None:
+    query: EmployeeListQuery | None = None
+    query_failed = False
+    try:
+        query = EmployeeListQuery(
+            query=expected.query,
+            employee_filter=expected.employee_filter,
+            sort_by=expected.sort_by,
+            sort_direction=expected.sort_direction,
+            page=page,
+            page_size=expected.page_size,
+        )
+    except ValidationError:
+        query_failed = True
+    if query_failed or query is None:
         raise _failure("invalid pagination metadata")
-    return int(query["page"], 10)
+    return query
 
 
-def _validate_links(value: object, *, current_page: int) -> None:
-    if not isinstance(value, list) or len(value) > 64:
+def _page_from_url(
+    value: object,
+    expected: EmployeeListQuery,
+    *,
+    expected_page: int | None = None,
+    last_page: int | None = None,
+) -> int:
+    _, query = _paginator_parts(value, allow_query=True)
+    raw_page = query.get("page")
+    if raw_page is None or re.fullmatch(r"[1-9][0-9]{0,4}", raw_page) is None:
+        raise _failure("invalid pagination metadata")
+    page = int(raw_page, 10)
+    if (expected_page is not None and page != expected_page) or (
+        last_page is not None and page > last_page
+    ):
+        raise _failure("invalid pagination metadata")
+    _validate_query(query, _query_at_page(expected, page))
+    return page
+
+
+def _validate_links(
+    value: object,
+    expected: EmployeeListQuery,
+    *,
+    current_page: int,
+    last_page: int,
+) -> None:
+    if not isinstance(value, list) or not 3 <= len(value) <= 64:
         raise _failure("invalid pagination schema")
     active_links = 0
-    for item in value:
+    final_index = len(value) - 1
+    for index, item in enumerate(value):
         if not isinstance(item, dict) or set(item) != {"active", "label", "url"}:
             raise _failure("invalid pagination schema")
         active = _strict_bool(item["active"])
-        label = _bounded_text(item["label"], maximum=128)
+        _bounded_text(item["label"], maximum=128)
         url = item["url"]
+        if index == 0:
+            if active or (url is None) != (current_page == 1):
+                raise _failure("invalid pagination metadata")
+            if url is not None:
+                _page_from_url(
+                    url,
+                    expected,
+                    expected_page=current_page - 1,
+                    last_page=last_page,
+                )
+            continue
+        if index == final_index:
+            if active or (url is None) != (current_page == last_page):
+                raise _failure("invalid pagination metadata")
+            if url is not None:
+                _page_from_url(
+                    url,
+                    expected,
+                    expected_page=current_page + 1,
+                    last_page=last_page,
+                )
+            continue
+        linked_page: int | None = None
         if url is not None:
-            _page_number_from_url(url)
+            linked_page = _page_from_url(url, expected, last_page=last_page)
         if active:
             active_links += 1
-            if label != str(current_page) or url is None:
+            if linked_page != current_page:
                 raise _failure("invalid pagination metadata")
-            _page_from_url(url, expected_page=current_page)
     if active_links != 1:
         raise _failure("invalid pagination metadata")
 
@@ -672,21 +733,26 @@ async def employee_list_result_from_response(
         raise _failure("invalid response schema")
 
     current_page, per_page, has_next = _pagination(document, expected)
-    _validate_url_field(document["path"], query_allowed=False)
-    _page_from_url(document["first_page_url"], expected_page=1)
+    _validate_paginator_path(document["path"])
+    _page_from_url(document["first_page_url"], expected, expected_page=1)
     last_page = _strict_int(document["last_page"], minimum=1)
-    _page_from_url(document["last_page_url"], expected_page=last_page)
+    _page_from_url(document["last_page_url"], expected, expected_page=last_page)
     next_page_url = document["next_page_url"]
     prev_page_url = document["prev_page_url"]
     if next_page_url is not None:
-        _page_from_url(next_page_url, expected_page=current_page + 1)
+        _page_from_url(next_page_url, expected, expected_page=current_page + 1)
     if prev_page_url is not None:
-        _page_from_url(prev_page_url, expected_page=current_page - 1)
+        _page_from_url(prev_page_url, expected, expected_page=current_page - 1)
     if (document["next_page_url"] is None) != (not has_next):
         raise _failure("invalid next-page metadata")
     if (document["prev_page_url"] is None) != (current_page == 1):
         raise _failure("invalid previous-page metadata")
-    _validate_links(document["links"], current_page=current_page)
+    _validate_links(
+        document["links"],
+        expected,
+        current_page=current_page,
+        last_page=last_page,
+    )
 
     data = document["data"]
     if not isinstance(data, list):

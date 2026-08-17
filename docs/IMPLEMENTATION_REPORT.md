@@ -112,10 +112,12 @@ Completati nel codice e testati con risorse sintetiche:
 - candidata 0.3.0: cattura passiva della sola risposta UI `GET /backend_apiV2/employees`, con URL
   della risposta distinto dagli URL del paginator sul path esatto `/employees`; una diagnostica
   live autorizzata e minimizzata ha confermato questa separazione, ora validata fail-closed senza
-  rendere i due path intercambiabili. Origine/path/query/metodo/MIME/body/paginazione/schema
-  restano chiusi e la proiezione è tipizzata; il display name completo è un `SecretStr` transitorio
-  aperto soltanto dal renderer `SENSITIVE`/ephemeral per `HR_READ`, mentre e-mail, codice fiscale e
-  matricola restano mascherati e nessun endpoint viene chiamato direttamente;
+  rendere i due path intercambiabili. Gli URL pagina devono preservare la query UI completa di nove
+  parametri, cambiando soltanto `page`, e i link boundary/attivo sono correlati senza fidarsi delle
+  label. Origine/path/query/metodo/MIME/body/paginazione/schema restano chiusi e la proiezione è
+  tipizzata; il display name completo è un `SecretStr` transitorio aperto soltanto dal renderer
+  `SENSITIVE`/ephemeral per `HR_READ`, mentre e-mail, codice fiscale e matricola restano mascherati
+  e nessun endpoint viene chiamato direttamente;
 - ripersistenza serializzata del vault soltanto dopo sessione autenticata e tenant attestato o
   lettura riuscita, mai dopo errori o stati ignoti;
 - trasporto Discord con acknowledgement privato e follow-up pubblico soltanto per
@@ -154,9 +156,9 @@ Function ID HR a verificate.
 | `ruff format --check .` | PASS, 196 file |
 | `ruff check .` | PASS |
 | `mypy src` | PASS, 114 file sorgente |
-| `pytest` | PASS, 774 test; un warning `audioop` di terza parte |
-| `coverage run --branch -m pytest` | PASS, 774 test |
-| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.261 statement; 3.208 branch) |
+| `pytest` | PASS, 777 test; un warning `audioop` di terza parte |
+| `coverage run --branch -m pytest` | PASS, 777 test |
+| `coverage report --show-missing --fail-under=80` | PASS, 85% (10.287 statement; 3.224 branch) |
 | `bandit -q -r src` | PASS, 18.931 linee di codice; zero issue |
 | `python -m pip check` | PASS, nessuna dipendenza rotta |
 | `python -m pip_audit --strict --requirement requirements.lock --no-deps --progress-spinner off` | PASS, zero vulnerabilità note |

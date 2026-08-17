@@ -190,11 +190,14 @@ soltanto la risposta che la pagina emette su origine esatta
 Il contratto URL della risposta e quello del paginator sono distinti. Una diagnostica live
 autorizzata e minimizzata ha osservato che `path`, gli URL di prima/ultima/pagina
 precedente/successiva e gli URL non nulli di `links` usano la stessa origine HTTPS esatta ma il
-path `/employees`; la query è ammessa soltanto nei campi di pagina previsti. Il parser rifiuta
-userinfo, porta esplicita, fragment, origin o path lookalike e anche la sostituzione reciproca dei
-due path. Ogni difformità produce un errore generico fail-closed senza includere URL, query, body o
-PII. Questa osservazione definisce soltanto il contratto tecnico: deployment e smoke end-to-end
-della 0.3.0 restano `PENDING`.
+path `/employees`. Il campo `path` resta privo di query; ogni URL pagina non nullo preserva invece
+l'intera query UI validata di nove parametri e può cambiare soltanto il valore canonico di `page`.
+I boundary precedente/successivo e il link attivo vengono correlati alla pagina corrente e
+all'ultima pagina senza fidarsi delle label visuali. Il parser rifiuta userinfo, porta esplicita,
+fragment, origin o path lookalike e anche la sostituzione reciproca dei due path. Ogni difformità
+produce un errore generico fail-closed senza includere URL, query, body o PII. Questa osservazione
+definisce soltanto il contratto tecnico: deployment e smoke end-to-end della 0.3.0 restano
+`PENDING`.
 
 La query catturata deve corrispondere all'azione UI appena eseguita: pagina, page size fisso,
 ricerca, campi di ricerca, ordinamento e filtro `active` sono confrontati con un insieme chiuso.

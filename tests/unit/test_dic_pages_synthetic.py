@@ -481,35 +481,51 @@ class EmployeeApiSyntheticPage(SyntheticPage):
             )
         return pairs
 
+    def _paginator_url(self, page: int) -> str:
+        pairs = [(key, str(page) if key == "page" else value) for key, value in self._query_pairs()]
+        return f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}?{urlencode(pairs)}"
+
     def _response_document(self) -> dict[str, Any]:
         data = self.api_pages.get(self.page_number, [])
         last_page = max(1, (self.api_total + 19) // 20)
         start = (self.page_number - 1) * 20 + 1 if data else None
         end = start + len(data) - 1 if start is not None else None
-        paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
+        paginator_path = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
         return {
             "current_page": self.page_number,
             "data": data,
-            "first_page_url": f"{paginator}?page=1",
+            "first_page_url": self._paginator_url(1),
             "from": start,
             "last_page": last_page,
-            "last_page_url": f"{paginator}?page={last_page}",
+            "last_page_url": self._paginator_url(last_page),
             "links": [
-                {"url": None, "label": "Previous", "active": False},
                 {
-                    "url": f"{paginator}?page={self.page_number}",
+                    "url": self._paginator_url(self.page_number - 1)
+                    if self.page_number > 1
+                    else None,
+                    "label": "Previous",
+                    "active": False,
+                },
+                {
+                    "url": self._paginator_url(self.page_number),
                     "label": str(self.page_number),
                     "active": True,
                 },
-                {"url": None, "label": "Next", "active": False},
+                {
+                    "url": self._paginator_url(self.page_number + 1)
+                    if self.page_number < last_page
+                    else None,
+                    "label": "Next",
+                    "active": False,
+                },
             ],
             "next_page_url": (
-                f"{paginator}?page={self.page_number + 1}" if self.page_number < last_page else None
+                self._paginator_url(self.page_number + 1) if self.page_number < last_page else None
             ),
-            "path": paginator,
+            "path": paginator_path,
             "per_page": 20,
             "prev_page_url": (
-                f"{paginator}?page={self.page_number - 1}" if self.page_number > 1 else None
+                self._paginator_url(self.page_number - 1) if self.page_number > 1 else None
             ),
             "to": end,
             "total": self.api_total,

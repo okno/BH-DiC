@@ -58,12 +58,14 @@ Dalla candidata 0.3.0 la UI può essere usata per osservare passivamente la risp
 paginazione e tenant vengono validati prima di creare una proiezione tipizzata. Una diagnostica
 live autorizzata e minimizzata ha inoltre confermato che i metadati URL del paginator usano la
 stessa origine esatta e il path distinto `/employees`; la validazione fail-closed non rende i due
-path intercambiabili. Il display name in chiaro è protetto come `SecretStr` e può essere aperto
-soltanto per risultati `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e matricola restano
-mascherati. Queste osservazioni determinano il contratto tecnico, ma deployment della release,
-totale organico, analisi scadenze, pubblicazione Discord e telemetria token non sono ancora
-promossi come smoke live riusciti. Il provider resta intent-only e riceve categorie semantiche
-canoniche, mai nomi, Employee ID o risultati DIC.
+path intercambiabili. Ogni URL pagina preserva i nove parametri della query UI validata e modifica
+soltanto `page`; precedente/successivo e pagina attiva sono correlati senza usare le label come
+fonte autorevole. Il display name in chiaro è protetto come `SecretStr` e può essere aperto soltanto
+per risultati `HR_READ` sensibili/ephemeral; e-mail, codice fiscale e matricola restano mascherati.
+Queste osservazioni determinano il contratto tecnico, ma deployment della release, totale organico,
+analisi scadenze, pubblicazione Discord e telemetria token non sono ancora promossi come smoke live
+riusciti. Il provider resta intent-only e riceve categorie semantiche canoniche, mai nomi, Employee
+ID o risultati DIC.
 Dopo la rotazione del secret il vault precedente va invalidato deliberatamente una volta prima di
 un unico check live; un esito `CREDENTIAL_SUBMIT` non va ritentato. Le write restano disabilitate.
 Nessuna Function ID DIC è quindi classificata `LIVE_READ_VERIFIED`. Tutte le write rimangono

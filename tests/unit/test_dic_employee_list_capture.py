@@ -89,14 +89,20 @@ def _query(
     )
 
 
-def _url(query: EmployeeListQuery, *, origin: str = EMPLOYEE_LIST_ENDPOINT_ORIGIN) -> str:
+def _url(
+    query: EmployeeListQuery,
+    *,
+    origin: str = EMPLOYEE_LIST_ENDPOINT_ORIGIN,
+    path: str = EMPLOYEE_LIST_ENDPOINT_PATH,
+    page: int | None = None,
+) -> str:
     sort_field = {"name": "full_name", "contract": "current_contract"}[query.sort_by]
     if query.sort_direction is SortDirection.DESC:
         sort_field = f"-{sort_field}"
     pairs = [
         ("search", query.query or ""),
         ("filter_type", "and"),
-        ("page", str(query.page)),
+        ("page", str(query.page if page is None else page)),
         ("per_page", "20"),
         ("sort", sort_field),
         ("search_fields", "full_name,job_title,number,teams,email,tax_code"),
@@ -112,7 +118,11 @@ def _url(query: EmployeeListQuery, *, origin: str = EMPLOYEE_LIST_ENDPOINT_ORIGI
                 ),
             )
         )
-    return f"{origin}{EMPLOYEE_LIST_ENDPOINT_PATH}?{urlencode(pairs)}"
+    return f"{origin}{path}?{urlencode(pairs)}"
+
+
+def _paginator_url(query: EmployeeListQuery, *, page: int) -> str:
+    return _url(query, path=EMPLOYEE_LIST_PAGINATOR_PATH, page=page)
 
 
 def _employee(employee_id: int = 101) -> dict[str, Any]:
@@ -148,26 +158,67 @@ def _document(
 ) -> dict[str, Any]:
     data = [_employee()] if employees is None else employees
     total = len(data)
-    paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
+    paginator_path = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
     return {
         "current_page": query.page,
         "data": data,
-        "first_page_url": f"{paginator}?page=1",
+        "first_page_url": _paginator_url(query, page=1),
         "from": 1 if data else None,
         "last_page": 1,
-        "last_page_url": f"{paginator}?page=1",
+        "last_page_url": _paginator_url(query, page=1),
         "links": [
             {"url": None, "label": "Previous", "active": False},
-            {"url": f"{paginator}?page=1", "label": "1", "active": True},
+            {"url": _paginator_url(query, page=1), "label": "1", "active": True},
             {"url": None, "label": "Next", "active": False},
         ],
         "next_page_url": None,
-        "path": paginator,
+        "path": paginator_path,
         "per_page": 20,
         "prev_page_url": None,
         "to": len(data) if data else None,
         "total": total,
     }
+
+
+def _second_page_document(query: EmployeeListQuery) -> dict[str, Any]:
+    assert query.page == 2
+    document = _document(query)
+    document.update(
+        {
+            "from": 21,
+            "last_page": 2,
+            "last_page_url": _paginator_url(query, page=2),
+            "links": [
+                {"url": _paginator_url(query, page=1), "label": "Previous", "active": False},
+                {"url": _paginator_url(query, page=2), "label": "2", "active": True},
+                {"url": None, "label": "Next", "active": False},
+            ],
+            "prev_page_url": _paginator_url(query, page=1),
+            "to": 21,
+            "total": 21,
+        }
+    )
+    return document
+
+
+def _first_of_two_pages_document(query: EmployeeListQuery) -> dict[str, Any]:
+    assert query.page == 1
+    document = _document(query, employees=[_employee(employee_id) for employee_id in range(1, 21)])
+    document.update(
+        {
+            "last_page": 2,
+            "last_page_url": _paginator_url(query, page=2),
+            "links": [
+                {"url": None, "label": "Previous", "active": False},
+                {"url": _paginator_url(query, page=1), "label": "1", "active": True},
+                {"url": _paginator_url(query, page=2), "label": "Next", "active": False},
+            ],
+            "next_page_url": _paginator_url(query, page=2),
+            "to": 20,
+            "total": 21,
+        }
+    )
+    return document
 
 
 @pytest.mark.asyncio
@@ -366,21 +417,99 @@ async def test_paginator_path_rejects_non_exact_origin_path_and_forbidden_compon
     ["first_page_url", "last_page_url", "next_page_url", "prev_page_url", "links"],
 )
 async def test_every_non_null_paginator_url_rejects_extra_query_metadata(field: str) -> None:
-    query = _query()
-    document = _document(query)
-    paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
+    query = _query(page=2) if field == "prev_page_url" else _query()
+    document = _second_page_document(query) if query.page == 2 else _document(query)
     if field == "links":
-        document["links"][0]["url"] = f"{paginator}?page=1&unexpected=accepted"
+        document["links"][1]["url"] = f"{_paginator_url(query, page=1)}&unexpected=accepted"
     else:
         page = {"first_page_url": 1, "last_page_url": 1, "next_page_url": 2, "prev_page_url": 1}[
             field
         ]
-        document[field] = f"{paginator}?page={page}&unexpected=accepted"
+        document[field] = f"{_paginator_url(query, page=page)}&unexpected=accepted"
 
-    with pytest.raises(DicUiChangedError, match="pagination metadata"):
+    with pytest.raises(DicUiChangedError, match="query metadata"):
         await employee_list_result_from_response(
             _Response(url=_url(query), document=document), query
         )
+
+
+@pytest.mark.asyncio
+async def test_paginator_urls_preserve_full_ui_query_and_do_not_trust_labels() -> None:
+    query = _query(
+        employee_filter=EmployeeFilter.INACTIVE,
+        search="synthetic",
+        sort_by="contract",
+        direction=SortDirection.DESC,
+    )
+    document = _document(query)
+    document["links"][1]["label"] = "untrusted display text"
+
+    result = await employee_list_result_from_response(
+        _Response(url=_url(query), document=document), query
+    )
+
+    assert result.total == 1
+
+
+@pytest.mark.asyncio
+async def test_paginator_url_rejects_a_changed_preserved_ui_query_value() -> None:
+    query = _query(search="synthetic")
+    document = _document(query)
+    document["links"][1]["url"] = str(document["links"][1]["url"]).replace(
+        "search=synthetic", "search=other"
+    )
+
+    with pytest.raises(DicUiChangedError, match="search does not match"):
+        await employee_list_result_from_response(
+            _Response(url=_url(query), document=document), query
+        )
+
+
+@pytest.mark.asyncio
+async def test_link_boundaries_reject_swaps_wrong_pages_and_null_contradictions() -> None:
+    first_query = _query()
+    second_query = _query(page=2)
+    invalid_documents: list[tuple[EmployeeListQuery, dict[str, Any]]] = []
+
+    swapped_first = _first_of_two_pages_document(first_query)
+    swapped_first["links"][0]["url"] = _paginator_url(first_query, page=2)
+    swapped_first["links"][-1]["url"] = None
+    invalid_documents.append((first_query, swapped_first))
+
+    wrong_next = _first_of_two_pages_document(first_query)
+    wrong_next["links"][-1]["url"] = _paginator_url(first_query, page=1)
+    invalid_documents.append((first_query, wrong_next))
+
+    missing_next = _first_of_two_pages_document(first_query)
+    missing_next["links"][-1]["url"] = None
+    invalid_documents.append((first_query, missing_next))
+
+    swapped_second = _second_page_document(second_query)
+    swapped_second["links"][0]["url"] = None
+    swapped_second["links"][-1]["url"] = _paginator_url(second_query, page=1)
+    invalid_documents.append((second_query, swapped_second))
+
+    wrong_previous = _second_page_document(second_query)
+    wrong_previous["links"][0]["url"] = _paginator_url(second_query, page=2)
+    invalid_documents.append((second_query, wrong_previous))
+
+    missing_previous = _second_page_document(second_query)
+    missing_previous["links"][0]["url"] = None
+    invalid_documents.append((second_query, missing_previous))
+
+    active_boundary = _first_of_two_pages_document(first_query)
+    active_boundary["links"][-1]["active"] = True
+    invalid_documents.append((first_query, active_boundary))
+
+    too_short = _document(first_query)
+    too_short["links"] = too_short["links"][1:]
+    invalid_documents.append((first_query, too_short))
+
+    for query, document in invalid_documents:
+        with pytest.raises(DicUiChangedError, match="pagination"):
+            await employee_list_result_from_response(
+                _Response(url=_url(query), document=document), query
+            )
 
 
 @pytest.mark.asyncio
@@ -408,8 +537,9 @@ async def test_employee_urls_reject_lexically_unsafe_characters(
 async def test_paginator_page_number_is_bounded_and_has_no_private_exception_chain() -> None:
     query = _query()
     document = _document(query)
-    paginator = f"{EMPLOYEE_LIST_ENDPOINT_ORIGIN}{EMPLOYEE_LIST_PAGINATOR_PATH}"
-    document["links"][0]["url"] = f"{paginator}?page={'9' * 5_000}"
+    document["links"][1]["url"] = _paginator_url(query, page=1).replace(
+        "page=1", f"page={'9' * 5_000}"
+    )
 
     with pytest.raises(DicUiChangedError, match="pagination metadata") as captured:
         await employee_list_result_from_response(

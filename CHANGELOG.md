@@ -43,7 +43,9 @@ stable public API is declared.
 
 - Separata la validazione fail-closed dell'URL della risposta da quella degli URL di paginazione,
   dopo che una diagnostica live autorizzata e minimizzata ha confermato i due path distinti. I due
-  path non sono intercambiabili: origin, porta, userinfo, fragment, path e query continuano a
+  path non sono intercambiabili. Ogni URL pagina deve preservare tutti i nove parametri della query
+  UI validata, cambiando soltanto `page`; link precedente/successivo, pagina attiva e limiti sono
+  correlati deterministicamente. Origin, porta, userinfo, fragment, path e query continuano a
   essere verificati secondo il rispettivo contratto esatto.
 
 ### Security
@@ -63,7 +65,7 @@ stable public API is declared.
 
 ### Verification
 
-- Gate locali completi: 774 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
+- Gate locali completi: 777 test passati, branch coverage 85%, Ruff, mypy su 114 file sorgente,
   Bandit, dependency audit, YAML, script shell, documentazione e link locali verdi. Deployment
   Debian della 0.3.0, migrazione sul target e smoke Discord/DIC restano `PENDING`. Non promuovere
   le nuove letture a `LIVE_READ_VERIFIED` prima delle evidenze separate.
