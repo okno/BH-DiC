@@ -343,6 +343,12 @@ _SPECS = (
         target=True,
     ),
     _read("EMP-PAY-001", "Metadati buste paga", HR_READ, sensitivity=Sensitivity.HIGH, target=True),
+    _read(
+        "EMP-PAY-002",
+        "Ricerca dipendenti con busta paga per mese",
+        HR_READ,
+        sensitivity=Sensitivity.HIGH,
+    ),
     _read("EMP-DOC-001", "Metadati documenti", DOCS, sensitivity=Sensitivity.HIGH, target=True),
     _write(
         "EMP-UPDATE-001",

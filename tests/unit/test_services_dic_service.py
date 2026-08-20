@@ -9,6 +9,7 @@ import pytest
 from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.dic.errors import DicApprovalError, DicValidationError, DicWriteDisabledError
 from bh_dic.dic.mock import MockDicAdapter
+from bh_dic.dic.models import PayrollMetadata
 from bh_dic.policies.feature_flags import RuntimeFeatureFlags
 from bh_dic.services.dic_service import DicService
 
@@ -160,3 +161,41 @@ async def test_reconciliation_remains_available_after_kill_switch() -> None:
     service = DicService(MockDicAdapter(), RuntimeFeatureFlags())
     result = await service.reconcile(pending, {"job_title": "QA lead"})
     assert result.state.value == "confirmed_not_applied"
+
+
+@pytest.mark.asyncio
+async def test_service_compares_registered_payroll_pages_for_the_complete_employee_list() -> None:
+    adapter = MockDicAdapter()
+    adapter._payrolls["EMP-SYNTH-001"].append(
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-007",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            status="published",
+            published_at="2026-07-31",
+        )
+    )
+    service = DicService(adapter, RuntimeFeatureFlags())
+
+    result = await service.find_employees_with_payroll(year=2026, month=7)
+
+    assert result.scanned == 1
+    assert [item.employee_id for item in result.employees] == ["EMP-SYNTH-001"]
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_inconsistent_payroll_rows_before_rendering_results() -> None:
+    adapter = MockDicAdapter()
+    adapter._payrolls["EMP-SYNTH-001"].append(
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-BAD",
+            employee_id="EMP-SYNTH-999",
+            year=2026,
+            month=7,
+        )
+    )
+    service = DicService(adapter, RuntimeFeatureFlags())
+
+    with pytest.raises(DicValidationError, match="does not match"):
+        await service.find_employees_with_payroll(year=2026, month=7)

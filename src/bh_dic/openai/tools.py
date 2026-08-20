@@ -106,6 +106,13 @@ TOOL_CATALOG: tuple[IntentTool, ...] = (
         "get_payroll_metadata",
     ),
     IntentTool(
+        "find_employees_with_payroll",
+        "Trova i dipendenti con una busta paga disponibile in uno specifico mese e anno.",
+        ("EMP-PAY-002",),
+        ActionClass.READ,
+        "find_employees_with_payroll",
+    ),
+    IntentTool(
         "get_document_metadata",
         "Consulta solo metadati autorizzati dei documenti.",
         ("EMP-DOC-001",),

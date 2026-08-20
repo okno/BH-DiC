@@ -157,9 +157,12 @@ Abilitare il **Message Content Intent** e concedere al bot **View Channel**, **S
 **Embed Links**, **Read Message History** e, per gli export, **Attach Files**.
 
 Esempi locali supportati: `dimmi il numero totale dei dipendenti`, `stampa una tabella ASCII con
-tutti i dipendenti`, `genera un PDF/Word/Excel con tutti i dipendenti`, `riattiva <nome o ID>` e
-`disattiva <nome o ID> motivo: ...`. Attiva/disattiva restano write con preview, conferma e A1/A2;
-non vengono abilitate automaticamente. Il netto mensile non è disponibile nella proiezione DiC
+tutti i dipendenti`, `quali dipendenti hanno una busta paga a luglio?`, `genera un PDF/Word/Excel
+con tutti i dipendenti`, `riattiva <nome o ID>` e `disattiva <nome o ID> motivo: ...`. La ricerca
+collettiva delle buste percorre in modo bounded e read-only l'elenco Dipendenti e le sole pagine
+Buste paga dichiarate, senza passare la domanda o i dati al provider AI. Attiva/disattiva restano
+write con preview, conferma e A1/A2; non vengono abilitate automaticamente. Il netto mensile non è
+disponibile nella proiezione DiC
 corrente e viene indicato `N/D`, mai inventato.
 
 Quando `/bh status` segnala una sessione DIC non disponibile, un utente del canale con ruolo

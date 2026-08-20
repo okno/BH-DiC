@@ -73,6 +73,9 @@
   comprensione completa del workflow di configurazione.
 - Il campione payroll della baseline era vuoto: upload, eliminazione,
   pubblicazione e contenuto busta paga non sono implementati né dichiarati.
+- La ricerca collettiva delle buste paga confronta soltanto anno, mese e presenza del metadato
+  sulle pagine payroll registrate; non scarica né interpreta il contenuto della busta ed è bounded
+  a 500 dipendenti per esecuzione. La verifica live della tabella payroll resta necessaria.
 - La risposta elenco DiC corrente non espone il netto mensile. Tabelle ed export indicano `N/D`:
   il bot non ricava né stima il valore da metadati di busta paga.
 - Ricerca, filtri, ordinamento e paginazione sono deterministici nel mock; effetti

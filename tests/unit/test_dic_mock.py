@@ -176,6 +176,7 @@ async def test_every_catalog_read_function_has_a_mock_execution_path() -> None:
         FunctionId.EMP_MAT_001: lambda: adapter.get_maturations(employee_id),
         FunctionId.EMP_BAL_001: lambda: adapter.get_balance(employee_id, 2026),
         FunctionId.EMP_PAY_001: lambda: adapter.get_payroll_metadata(employee_id, 2026),
+        FunctionId.EMP_PAY_002: lambda: adapter.list_employees(EmployeeListQuery()),
         FunctionId.EMP_DOC_001: lambda: adapter.get_document_metadata(employee_id, DocumentQuery()),
     }
     assert set(exercised) == set(READ_FUNCTIONS)

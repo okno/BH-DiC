@@ -68,6 +68,21 @@ def test_relative_read_period_contract_is_explicitly_local() -> None:
     assert "risolto localmente" in properties["date_to"]["description"]
 
 
+@pytest.mark.asyncio
+async def test_collective_payroll_tool_is_exposed_without_an_employee_target() -> None:
+    tools = build_openai_tools({"EMP-PAY-002"})
+    names = {tool["name"] for tool in tools}
+
+    routed = await MockIntentRouter().route(
+        "quali dipendenti hanno il cedolino di luglio?",
+        frozenset({"EMP-PAY-002"}),
+    )
+
+    assert names == {"find_employees_with_payroll", "unsupported_request"}
+    assert routed.envelope.function_id == "EMP-PAY-002"
+    assert routed.envelope.employee_id is None
+
+
 def test_model_hidden_operator_ids_are_filtered_even_if_a_caller_passes_them() -> None:
     tools = build_openai_tools(
         {

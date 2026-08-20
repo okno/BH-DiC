@@ -1298,6 +1298,55 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 ),
                 correlation_id=correlation_id,
             )
+        if function_id == "EMP-PAY-002":
+            month_raw = intent.parameters.get("month")
+            year_raw = intent.parameters.get("year")
+            if (
+                isinstance(month_raw, bool)
+                or not isinstance(month_raw, int)
+                or not 1 <= month_raw <= 12
+                or isinstance(year_raw, bool)
+                or not isinstance(year_raw, int)
+                or not 2000 <= year_raw <= 2200
+            ):
+                raise ApplicationError("payroll search requires a valid month and year")
+            payrolls = await self.dic.find_employees_with_payroll(
+                year=year_raw,
+                month=month_raw,
+            )
+            lines = ["Dipendente | Employee ID"]
+            lines.extend(
+                f"{self._employee_display_name(item)} | {item.employee_id}"
+                for item in payrolls.employees
+            )
+            attachment_content = ("\n".join(lines) + "\n").encode("utf-8")
+            if len(attachment_content) > self._response_attachment_max_bytes:
+                raise ApplicationError("payroll result exceeds the configured attachment limit")
+            shown = payrolls.employees[:25]
+            month_label = f"{payrolls.month:02d}/{payrolls.year}"
+            return InteractionResult(
+                title=f"Buste paga disponibili — {month_label}",
+                description=(
+                    f"Ho consultato l'elenco Dipendenti e, per ciascuno, la sezione Buste paga "
+                    f"del mese {month_label}: trovati {len(payrolls.employees)} dipendenti su "
+                    f"{payrolls.scanned} analizzati."
+                ),
+                fields=tuple(
+                    ResultField(
+                        f"{self._employee_display_name(item)} · ID {item.employee_id}",
+                        f"Busta paga {month_label}: disponibile",
+                    )
+                    for item in shown
+                ),
+                attachments=(
+                    ResponseAttachment(
+                        filename=f"buste_paga_disponibili_{payrolls.year}_{payrolls.month:02d}.txt",
+                        content_type="text/plain; charset=utf-8",
+                        content=attachment_content,
+                    ),
+                ),
+                correlation_id=correlation_id,
+            )
         if function_id == "EMP-DOC-001":
             employee_id = self._require_employee(intent)
             document_status = str(intent.parameters.get("status", "all"))

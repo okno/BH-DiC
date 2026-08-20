@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ from bh_dic.dic.models import (
     DicCredentials,
     DocumentMetadata,
     DocumentQuery,
+    EmployeeFilter,
     EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
@@ -56,6 +58,17 @@ _DOCUMENT_EXECUTION_ONLY_PARAMETERS = frozenset(
     {"safe_local_path", "safe_local_sha256", "safe_local_size", "detected_mime"}
 )
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_PAYROLL_PRESENCE_MAX_EMPLOYEES = 500
+
+
+@dataclass(frozen=True, slots=True)
+class PayrollPresenceResult:
+    """Result of a bounded, read-only payroll presence comparison."""
+
+    year: int
+    month: int
+    scanned: int
+    employees: tuple[EmployeeListItem, ...]
 
 
 class DicService:
@@ -383,6 +396,44 @@ class DicService:
         self, employee_id: str, year: int | None = None
     ) -> tuple[PayrollMetadata, ...]:
         return await self.adapter.get_payroll_metadata(employee_id, year)
+
+    async def find_employees_with_payroll(
+        self,
+        *,
+        year: int,
+        month: int,
+    ) -> PayrollPresenceResult:
+        """Compare the declared payroll view for every employee without parallel browser use.
+
+        The adapter owns one Playwright page, so this traverses registered employee-list and
+        payroll routes serially. It never accepts a model-provided URL or selector and fails
+        closed when the bounded listing or a payroll row is inconsistent.
+        """
+
+        if not 2000 <= year <= 2200:
+            raise DicValidationError("payroll year must be between 2000 and 2200")
+        if not 1 <= month <= 12:
+            raise DicValidationError("payroll month must be between 1 and 12")
+        employees = await self.list_all_employees(
+            EmployeeListQuery(employee_filter=EmployeeFilter.ALL),
+            max_records=_PAYROLL_PRESENCE_MAX_EMPLOYEES,
+        )
+        matches: list[EmployeeListItem] = []
+        for employee in employees.items:
+            records = await self.adapter.get_payroll_metadata(employee.employee_id, year)
+            for record in records:
+                if record.employee_id != employee.employee_id or record.year != year:
+                    raise DicValidationError(
+                        "payroll metadata does not match the requested employee"
+                    )
+            if any(record.month == month for record in records):
+                matches.append(employee)
+        return PayrollPresenceResult(
+            year=year,
+            month=month,
+            scanned=employees.total,
+            employees=tuple(matches),
+        )
 
     async def get_document_metadata(
         self, employee_id: str, query: DocumentQuery

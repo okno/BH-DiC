@@ -59,6 +59,31 @@ _EXPORT_FORMAT = re.compile(
     r"\b(?P<format>xlsx|excel|foglio\s+di\s+calcolo|pdf|docx|doc|word|documento)\b",
     re.IGNORECASE,
 )
+_PAYROLL_TERM = re.compile(r"\b(?:bust[ae]\s+paga|cedolin[oi]|payroll\w*)\b", re.IGNORECASE)
+_PAYROLL_COLLECTIVE = re.compile(
+    r"\b(?:quali|chi|elenc\w*|lista|tutti\s+i\s+dipendenti|dipendenti)\b",
+    re.IGNORECASE,
+)
+_PAYROLL_MONTH = re.compile(
+    r"\b(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|"
+    r"ottobre|novembre|dicembre)\b",
+    re.IGNORECASE,
+)
+_PAYROLL_YEAR = re.compile(r"\b(20\d{2})\b")
+_MONTH_NUMBER_BY_NAME = {
+    "gennaio": 1,
+    "febbraio": 2,
+    "marzo": 3,
+    "aprile": 4,
+    "maggio": 5,
+    "giugno": 6,
+    "luglio": 7,
+    "agosto": 8,
+    "settembre": 9,
+    "ottobre": 10,
+    "novembre": 11,
+    "dicembre": 12,
+}
 _EXPORT_ACTION = re.compile(
     r"\b(?:genera\w*|crea\w*|prepara\w*|esporta\w*|scarica\w*|fammi|produci)\b",
     re.IGNORECASE,
@@ -235,6 +260,8 @@ def is_operational_hr_request(request: str) -> bool:
 
     if is_capabilities_request(request):
         return True
+    if is_payroll_presence_request(request):
+        return True
     if (
         _ACTIVATE_ACTION.search(request) is not None
         or _DEACTIVATE_ACTION.search(request) is not None
@@ -274,6 +301,26 @@ def _export_format(request: str) -> Literal["pdf", "docx", "xlsx"] | None:
     if raw == "pdf":
         return "pdf"
     return "docx"
+
+
+def local_payroll_presence_period(request: str, *, today: date) -> tuple[int, int] | None:
+    """Resolve only a named payroll month locally; a provider never infers the period."""
+
+    month_match = _PAYROLL_MONTH.search(request)
+    if month_match is None:
+        return None
+    year_match = _PAYROLL_YEAR.search(request)
+    year = int(year_match.group(1)) if year_match is not None else today.year
+    return year, _MONTH_NUMBER_BY_NAME[month_match.group(1).casefold()]
+
+
+def is_payroll_presence_request(request: str) -> bool:
+    """Recognize an aggregate, read-only question about a monthly payroll presence."""
+
+    return (
+        _PAYROLL_TERM.search(request) is not None
+        and _PAYROLL_COLLECTIVE.search(request) is not None
+    )
 
 
 def _status_target(request: str) -> tuple[str | None, str | None]:
@@ -362,6 +409,18 @@ def parse_local_operational_intent(
                     **({"date_from": date_from.isoformat()} if date_from else {}),
                     **({"date_to": date_to.isoformat()} if date_to else {}),
                 },
+            )
+        )
+
+    payroll_period = local_payroll_presence_period(text, today=today)
+    if is_payroll_presence_request(text) and payroll_period is not None:
+        year, month = payroll_period
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-PAY-002",
+                action_class=ActionClass.READ,
+                sensitivity=Sensitivity.HIGH,
+                parameters={"year": year, "month": month},
             )
         )
 
@@ -551,6 +610,12 @@ def normalize_hr_intent(intent: IntentEnvelope, request: str, *, today: date) ->
         if interval is not None:
             updates["date_from"], updates["date_to"] = interval
 
+    if intent.function_id == "EMP-PAY-002":
+        period = local_payroll_presence_period(request, today=today)
+        if period is not None:
+            year, month = period
+            updates["parameters"] = {"year": year, "month": month}
+
     return intent.model_copy(update=updates) if updates else intent
 
 
@@ -704,8 +769,10 @@ __all__ = [
     "HrRequestInputError",
     "SeniorHrPresenter",
     "is_employee_aggregate_request",
+    "is_payroll_presence_request",
     "local_contract_expiry_fallback_interval",
     "local_employee_search_query",
+    "local_payroll_presence_period",
     "minimize_hr_router_request",
     "normalize_hr_intent",
 ]

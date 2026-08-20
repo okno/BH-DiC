@@ -40,6 +40,8 @@ TODAY = date(2026, 8, 20)
         ("genera un word dei dipendenti", "EMP-EXPORT-001"),
         ("crea un documento con l'elenco dipendenti", "EMP-EXPORT-001"),
         ("genera excel contratti in scadenza il prossimo mese", "EMP-EXPORT-001"),
+        ("quali dipendenti hanno una busta paga a luglio?", "EMP-PAY-002"),
+        ("fammi la lista di chi ha il cedolino di dicembre 2025", "EMP-PAY-002"),
         ("attiva un dipendente Mario Rossi", "EMP-STATUS-002"),
         ("riattiva dipendente id EMP-SYNTH-001", "EMP-STATUS-002"),
         ("riativa il dipende Mario Rossi", "EMP-STATUS-002"),
@@ -98,6 +100,17 @@ def test_full_ascii_list_and_export_are_closed_local_intents() -> None:
         "date_from": "2026-09-01",
         "date_to": "2026-09-30",
     }
+
+
+def test_collective_payroll_presence_resolves_month_and_year_locally() -> None:
+    parsed = parse_local_operational_intent(
+        "quali dipendenti hanno una busta paga a luglio?",
+        today=TODAY,
+    )
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-PAY-002"
+    assert parsed.envelope.parameters == {"year": 2026, "month": 7}
 
 
 def test_doc_is_an_alias_for_a_real_docx_export() -> None:

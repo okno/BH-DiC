@@ -75,8 +75,23 @@ class MockIntentRouter:
         employee_match = _EMPLOYEE_ID.search(text)
         employee_id = employee_match.group(1) if employee_match else None
         date_from, date_to = _september_range(text, date.today())
+        payroll_collective = any(
+            marker in lowered for marker in ("quali", "chi", "elenco", "lista")
+        ) and any(marker in lowered for marker in ("busta", "cedolino", "payroll"))
 
         candidates: list[tuple[str, str, ActionClass, Sensitivity]] = [
+            (
+                "bust",
+                "EMP-PAY-002" if payroll_collective else "EMP-PAY-001",
+                ActionClass.READ,
+                Sensitivity.HIGH,
+            ),
+            (
+                "cedolin",
+                "EMP-PAY-002" if payroll_collective else "EMP-PAY-001",
+                ActionClass.READ,
+                Sensitivity.HIGH,
+            ),
             (
                 "employee_headcount",
                 "EMP-READ-001",
@@ -110,7 +125,6 @@ class MockIntentRouter:
             ("bilanc", "EMP-BAL-001", ActionClass.READ, Sensitivity.HIGH),
             ("matur", "EMP-MAT-001", ActionClass.READ, Sensitivity.MEDIUM),
             ("ruol", "EMP-RBAC-001", ActionClass.READ, Sensitivity.HIGH),
-            ("bust", "EMP-PAY-001", ActionClass.READ, Sensitivity.HIGH),
             ("contratt", "EMP-CONTRACT-001", ActionClass.READ, Sensitivity.MEDIUM),
             ("cerc", "EMP-SEARCH-001", ActionClass.SEARCH, Sensitivity.MEDIUM),
             ("quanti", "EMP-READ-001", ActionClass.READ, Sensitivity.LOW),

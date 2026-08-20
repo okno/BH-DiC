@@ -26,6 +26,7 @@ from bh_dic.dic.models import (
     EmployeeListQuery,
     EmployeeListResult,
     EmployeeState,
+    PayrollMetadata,
     PreparedAction,
     ReconciliationResult,
     ReconciliationState,
@@ -1141,6 +1142,40 @@ async def test_payroll_read_renders_only_useful_minimized_metadata() -> None:
         "Anno: 2026 · mese: 1 · stato: published · pubblicata: 2026-02-01"
     )
     assert "PAY-SYNTH-001" not in result.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_collective_payroll_question_uses_local_plan_without_provider() -> None:
+    router = FailingRouter(IntentProviderError("synthetic provider unavailable"))
+    adapter = MockDicAdapter()
+    adapter._payrolls["EMP-SYNTH-001"].append(
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-007",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            status="published",
+            published_at="2026-07-31",
+        )
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 21),
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "quali dipendenti hanno una busta paga a luglio?",
+        )
+    finally:
+        await adapter.close()
+
+    assert router.calls == 0
+    assert result.title == "Buste paga disponibili — 07/2026"
+    assert "1 dipendenti su 1 analizzati" in result.description
+    assert result.fields[0].value == "Busta paga 07/2026: disponibile"
+    assert result.attachments[0].filename == "buste_paga_disponibili_2026_07.txt"
 
 
 @pytest.mark.asyncio

@@ -35,8 +35,8 @@ def test_live_matrix_contains_exactly_the_authoritative_catalog() -> None:
     rows = _matrix_rows()
 
     assert set(rows) == ALL_FUNCTION_IDS
-    assert len(ALL_FUNCTION_IDS) == 32
-    assert len(READ_FUNCTION_IDS) == 13
+    assert len(ALL_FUNCTION_IDS) == 33
+    assert len(READ_FUNCTION_IDS) == 14
     assert len(WRITE_FUNCTION_IDS) == 19
     assert len(PARTIALLY_COMPLETED_FUNCTIONS) == 5
     assert len(LIVE_NOT_AVAILABLE_FUNCTIONS) == 4
