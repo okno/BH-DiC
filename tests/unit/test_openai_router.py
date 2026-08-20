@@ -280,3 +280,7 @@ async def test_responses_client_always_uses_store_false_and_one_tool_call() -> N
     assert responses.request["parallel_tool_calls"] is False
     names = {tool["name"] for tool in responses.request["tools"]}  # type: ignore[index]
     assert names == {"list_employees", "unsupported_request"}
+    await router.close()
+    await router.close()
+    with pytest.raises(IntentProviderError, match="closed"):
+        await router.route("domanda successiva", frozenset())

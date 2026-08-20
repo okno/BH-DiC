@@ -10,6 +10,7 @@ from openai import BadRequestError
 from pydantic import ValidationError
 
 from bh_dic.openai.client import (
+    GroqChatCompletionsIntentClient,
     GroqResponsesIntentClient,
     IntentProviderError,
     LlamaChatCompletionsIntentClient,
@@ -640,8 +641,11 @@ class _ChatCompletionsStub:
         return response
 
 
-def _chat_choice(*calls: object) -> SimpleNamespace:
-    return SimpleNamespace(message=SimpleNamespace(tool_calls=list(calls)))
+def _chat_choice(*calls: object, finish_reason: str = "tool_calls") -> SimpleNamespace:
+    return SimpleNamespace(
+        message=SimpleNamespace(tool_calls=list(calls)),
+        finish_reason=finish_reason,
+    )
 
 
 def _chat_call(
@@ -660,6 +664,105 @@ def _llama_client(completions: _ChatCompletionsStub) -> LlamaChatCompletionsInte
         developer_prompt="Prompt llama sintetico.",
         provider=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
     )
+
+
+def _groq_chat_client(completions: _ChatCompletionsStub) -> GroqChatCompletionsIntentClient:
+    return GroqChatCompletionsIntentClient(
+        api_key="synthetic-groq-key",
+        model="openai/gpt-oss-120b",
+        developer_prompt="Prompt Groq Chat sintetico.",
+        provider=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_groq_chat_intent_uses_local_tools_and_provider_specific_payload() -> None:
+    completions = _ChatCompletionsStub(
+        choices=[_chat_choice(_chat_call())],
+        request_id="req-groq-chat-synthetic",
+        usage=SimpleNamespace(prompt_tokens=31, completion_tokens=9, total_tokens=40),
+    )
+
+    result = await _groq_chat_client(completions).route(
+        "richiesta sintetica", frozenset({"EMP-READ-001"})
+    )
+
+    assert result.envelope.function_id == "EMP-READ-001"
+    assert result.metadata.provider == "groq"
+    assert result.metadata.request_id == "req-groq-chat-synthetic"
+    assert result.metadata.usage == ProviderTokenUsage(
+        input_tokens=31,
+        output_tokens=9,
+        total_tokens=40,
+    )
+    assert completions.request is not None
+    assert completions.request["messages"][0] == {
+        "role": "system",
+        "content": "Prompt Groq Chat sintetico.",
+    }
+    assert completions.request["tool_choice"] == "required"
+    assert "strict" not in completions.request["tools"][0]["function"]
+    assert completions.request["parallel_tool_calls"] is False
+    assert completions.request["max_completion_tokens"] == 1_200
+    assert completions.request["reasoning_effort"] == "low"
+    assert "max_tokens" not in completions.request
+    assert "store" not in completions.request
+
+
+@pytest.mark.asyncio
+async def test_groq_chat_intent_preserves_closed_tool_failure_classification() -> None:
+    private_marker = "PRIVATE_GROQ_CHAT_TOOL_FAILURE"
+    client = _groq_chat_client(
+        _ChatCompletionsStub(error=_bad_request("tool_use_failed", private_marker))
+    )
+
+    with pytest.raises(IntentProviderError, match="routing failed") as caught:
+        await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
+
+    assert caught.value.failure_kind is ProviderFailureKind.TOOL_USE_FAILED
+    assert caught.value.response_received is True
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_groq_chat_sdk_boundary_is_pinned_to_official_origin_without_network() -> None:
+    client = GroqChatCompletionsIntentClient(
+        api_key="synthetic-groq-key",
+        model="openai/gpt-oss-120b",
+        timeout_seconds=1,
+        max_retries=0,
+    )
+    provider = cast(Any, client._provider)
+    assert str(provider.base_url).rstrip("/") == GROQ_OPENAI_BASE_URL
+    assert provider._client.follow_redirects is False
+    assert provider._client.trust_env is False
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_intent_client_close_drops_private_provider_failure() -> None:
+    private_marker = "PRIVATE_INTENT_CLOSE_MARKER"
+
+    class ClosingProvider:
+        chat = SimpleNamespace(completions=_ChatCompletionsStub())
+
+        async def close(self) -> None:
+            raise RuntimeError(private_marker)
+
+    client = GroqChatCompletionsIntentClient(
+        api_key="synthetic-groq-key",
+        model="openai/gpt-oss-120b",
+        provider=ClosingProvider(),
+    )
+
+    with pytest.raises(IntentProviderError, match="close failed") as caught:
+        await client.close()
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert private_marker not in repr(caught.value)
 
 
 @pytest.mark.asyncio
@@ -746,6 +849,8 @@ async def test_llama_preserves_chat_usage_when_tool_validation_fails() -> None:
         ([_chat_choice()], "exactly one tool call"),
         ([_chat_choice(_chat_call(), _chat_call())], "exactly one tool call"),
         ([_chat_choice(_chat_call(call_type="custom"))], "non-function"),
+        ([_chat_choice(_chat_call(), finish_reason="length")], "complete with a tool call"),
+        ([_chat_choice(_chat_call(), finish_reason="content_filter")], "complete with a tool call"),
     ],
 )
 async def test_llama_chat_client_rejects_ambiguous_or_invalid_calls(
@@ -791,8 +896,9 @@ def test_real_sdk_clients_reject_ambient_openai_overrides(
 ) -> None:
     monkeypatch.setenv(environment_name, "synthetic-ambient-value")
 
-    with pytest.raises(ValueError, match=environment_name):
-        GroqResponsesIntentClient(
-            api_key="synthetic-groq-key",
-            model="openai/gpt-oss-120b",
-        )
+    for client_type in (GroqResponsesIntentClient, GroqChatCompletionsIntentClient):
+        with pytest.raises(ValueError, match=environment_name):
+            client_type(
+                api_key="synthetic-groq-key",
+                model="openai/gpt-oss-120b",
+            )

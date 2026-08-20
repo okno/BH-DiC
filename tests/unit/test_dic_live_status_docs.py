@@ -17,7 +17,6 @@ PARTIALLY_COMPLETED_FUNCTIONS = {
     "EMP-CONTRACT-003",
     "EMP-DOC-003",
     "EMP-DOC-005",
-    "EMP-EXPORT-001",
     "EMP-INVITE-001",
 }
 LIVE_NOT_AVAILABLE_FUNCTIONS = PARTIALLY_COMPLETED_FUNCTIONS - {"EMP-CREATE-001"}
@@ -39,8 +38,8 @@ def test_live_matrix_contains_exactly_the_authoritative_catalog() -> None:
     assert len(ALL_FUNCTION_IDS) == 32
     assert len(READ_FUNCTION_IDS) == 13
     assert len(WRITE_FUNCTION_IDS) == 19
-    assert len(PARTIALLY_COMPLETED_FUNCTIONS) == 6
-    assert len(LIVE_NOT_AVAILABLE_FUNCTIONS) == 5
+    assert len(PARTIALLY_COMPLETED_FUNCTIONS) == 5
+    assert len(LIVE_NOT_AVAILABLE_FUNCTIONS) == 4
 
 
 def test_live_matrix_preserves_truthful_read_and_write_statuses() -> None:

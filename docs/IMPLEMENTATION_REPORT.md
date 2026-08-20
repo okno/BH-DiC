@@ -132,8 +132,9 @@ Completati nel codice e testati con risorse sintetiche:
   falliscono chiuso;
 - ripersistenza serializzata del vault soltanto dopo sessione autenticata e tenant attestato o
   lettura riuscita, mai dopo errori o stati ignoti;
-- trasporto Discord con acknowledgement privato e follow-up pubblico soltanto per
-  `PUBLIC_AGGREGATE`; elenchi, contratti, stato e risultati individuali restano ephemeral;
+- trasporto Discord con acknowledgement privato e follow-up pubblico per `PUBLIC_AGGREGATE`;
+  la modalità canale può pubblicare risultati sensibili soltanto tramite opt-in per canale HR
+  privato, senza bypassare RBAC;
 - quarantena, MIME/ext/hash/deduplica, ClamAV fail-closed e retention;
 - CLI operatore e 22 script Bash con gate statico/contratto locale;
 - unit systemd 0.2.4 compatibile con Debian 12: `ConditionPathExists` più
@@ -146,11 +147,12 @@ Stato funzionale:
 - 13 read: `IMPLEMENTED`, `TESTED_WITH_MOCK`; `EMP-READ-001` è `LIVE_READ_VERIFIED` soltanto per
   il conteggio aggregato bounded e `EMP-CONTRACT-001` soltanto per le scadenze bounded del prossimo
   mese di calendario; tutte le altre modalità restano `NEEDS_VALIDATION`;
-- 13 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
-  `DISABLED_BY_POLICY`; 6 write sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
+- 14 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+  `DISABLED_BY_POLICY`; 5 write sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`: `EMP-CREATE-001` supporta live soltanto il subset
-  con postcondizione verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`,
-  `EMP-DOC-003` ed `EMP-CONTRACT-003` hanno percorso live `NOT_AVAILABLE`; i 19 Function ID write
+  con postcondizione verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` ed
+  `EMP-CONTRACT-003` hanno percorso live `NOT_AVAILABLE`; `EMP-EXPORT-001` genera artifact locali
+  in memoria con dati live ancora `NEEDS_VALIDATION`; i 19 Function ID write
   sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;

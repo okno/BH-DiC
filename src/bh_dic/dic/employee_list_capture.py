@@ -613,6 +613,8 @@ def _employee_item(value: object, *, expected_tenant_id: str | None) -> Employee
     full_name = _bounded_text(value["full_name"], maximum=256)
     if full_name is None:
         raise _failure("invalid employee schema")
+    first_name = _nullable_text(value.get("first_name"), maximum=128)
+    last_name = _nullable_text(value.get("last_name"), maximum=128)
     email = _nullable_text(value["email"], maximum=320)
     tax_code = _nullable_text(value["tax_code"], maximum=32)
     number = _nullable_text(value["number"], maximum=64)
@@ -636,6 +638,8 @@ def _employee_item(value: object, *, expected_tenant_id: str | None) -> Employee
         projection = EmployeeListItem(
             employee_id=str(employee_id),
             display_name=SecretStr(full_name),
+            first_name=SecretStr(first_name) if first_name else None,
+            last_name=SecretStr(last_name) if last_name else None,
             display_name_redacted=_redact_name(full_name) or "[REDACTED]",
             email_redacted=_redact_email(email),
             tax_code_redacted=_redact_tail(tax_code),

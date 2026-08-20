@@ -10,6 +10,7 @@ from typing import Protocol
 DEFAULT_FEATURE_FLAGS: Mapping[str, bool] = MappingProxyType(
     {
         "ENABLE_READ_ACTIONS": True,
+        "ENABLE_DIC_RECONNECT": False,
         "ENABLE_WRITE_ACTIONS": False,
         "ENABLE_LIVE_WRITE_TESTS": False,
         "ENABLE_EMPLOYEE_CREATE": False,

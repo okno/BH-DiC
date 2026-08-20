@@ -15,6 +15,8 @@ from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata, Se
 class IntentRouter(Protocol):
     async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent: ...
 
+    async def close(self) -> None: ...
+
 
 class OpenAIIntentRouter:
     """Provider-neutral router facade; name retained for import compatibility."""
@@ -25,6 +27,9 @@ class OpenAIIntentRouter:
     async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent:
         minimized = prepare_provider_input(request)
         return await self._client.route(minimized, allowed_function_ids)
+
+    async def close(self) -> None:
+        await self._client.close()
 
 
 _EMPLOYEE_ID = re.compile(
@@ -161,3 +166,6 @@ class MockIntentRouter:
             envelope=envelope,
             metadata=RouteMetadata(provider="mock", model="deterministic", tool_name=tool_name),
         )
+
+    async def close(self) -> None:
+        return None

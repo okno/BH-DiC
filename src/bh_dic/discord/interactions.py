@@ -31,6 +31,8 @@ class InteractionResult:
     correlation_id: str | None = None
     sensitivity: ResponseSensitivity = ResponseSensitivity.SENSITIVE
     action_id: str | None = None
+    messages: tuple[str, ...] = ()
+    attachments: tuple[ResponseAttachment, ...] = ()
     success: bool = True
 
     @property
@@ -46,14 +48,25 @@ class AttachmentPayload:
     content: bytes = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ResponseAttachment:
+    filename: str
+    content_type: str
+    content: bytes = field(repr=False)
+
+
 class InteractionCoordinator(Protocol):
     async def ask(self, actor: DiscordActor, request: str) -> InteractionResult: ...
 
     async def help(self, actor: DiscordActor) -> InteractionResult: ...
 
+    async def capabilities(self, actor: DiscordActor) -> InteractionResult: ...
+
     async def status(self, actor: DiscordActor) -> InteractionResult: ...
 
     async def health(self, actor: DiscordActor) -> InteractionResult: ...
+
+    async def reconnect_dic(self, actor: DiscordActor) -> InteractionResult: ...
 
     async def pending(self, actor: DiscordActor) -> InteractionResult: ...
 

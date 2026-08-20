@@ -619,6 +619,26 @@ _SPECS = (
                 max_length=16,
                 choices=frozenset({"employees", "balances", "documents"}),
             ),
+            _text(
+                "format",
+                required=True,
+                max_length=8,
+                choices=frozenset({"pdf", "docx", "xlsx"}),
+            ),
+            _text(
+                "dataset",
+                required=True,
+                max_length=32,
+                choices=frozenset({"employees", "contracts_expiring"}),
+            ),
+            _text(
+                "status",
+                required=True,
+                max_length=16,
+                choices=frozenset({"active", "inactive", "all"}),
+            ),
+            _date("date_from"),
+            _date("date_to"),
             WriteParameterSpec(
                 "year",
                 WriteParameterKind.INTEGER,
@@ -630,7 +650,7 @@ _SPECS = (
         ),
         resource_snapshot=ResourceSnapshotKind.EXPORT_SOURCE,
         always_effectful=True,
-        operator_live_available=False,
+        operator_live_available=True,
     ),
     _write(
         "EMP-DOC-003",

@@ -73,6 +73,8 @@
   comprensione completa del workflow di configurazione.
 - Il campione payroll della baseline era vuoto: upload, eliminazione,
   pubblicazione e contenuto busta paga non sono implementati né dichiarati.
+- La risposta elenco DiC corrente non espone il netto mensile. Tabelle ed export indicano `N/D`:
+  il bot non ricava né stima il valore da metadati di busta paga.
 - Ricerca, filtri, ordinamento e paginazione sono deterministici nel mock; effetti
   e limiti live (debounce, page size, combinazioni di filtri) non sono verificati.
 - Il nome visualizzato completo è intenzionalmente disponibile come `SecretStr` transitorio per
@@ -86,10 +88,11 @@
 - Tutte le write sono `DISABLED_BY_POLICY` e `LIVE_WRITE_UNVERIFIED`.
   `DISABLED_BY_DEFAULT` descrive soltanto l'evidenza di configurazione in `.env.example`, non uno
   stato operativo alternativo. Le write non devono essere abilitate soltanto per completare un test.
-- `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`, `EMP-DOC-003` e
-  `EMP-CONTRACT-003` sono presenti nel catalogo/policy/mock, ma il dispatch Playwright è
-  `NOT_AVAILABLE` e fallisce chiuso. Per export e download manca inoltre un artifact service
-  locale protetto con permessi, cifratura, audit e retention definiti.
+- `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e `EMP-CONTRACT-003` sono presenti nel
+  catalogo/policy/mock, ma il dispatch Playwright è `NOT_AVAILABLE` e fallisce chiuso.
+- `EMP-EXPORT-001` genera PDF, DOCX e XLSX in memoria e non persiste contenuto in chiaro. Il
+  percorso è testato con dati sintetici; la completezza delle colonne provenienti dalla UI DiC è
+  `NEEDS_VALIDATION` live e la consegna Discord segue la retention esterna del canale.
 - `EMP-CREATE-001` è `PARTIALLY_COMPLETED`: il mock copre lo schema completo, mentre il live
   accetta solo il subset riconciliabile. `birth_date`, `iban`, `phone`, `address` e `notes` sono
   rifiutati prima della creazione del pending.

@@ -9,11 +9,12 @@ non deve essere mantenuta come secondo catalogo runtime.
 - **13 read**: `IMPLEMENTED`, `TESTED_WITH_MOCK`; il conteggio aggregato bounded di
   `EMP-READ-001` e le scadenze bounded del prossimo mese di calendario di `EMP-CONTRACT-001` sono
   `LIVE_READ_VERIFIED`. Ogni altra modalità resta `NEEDS_VALIDATION`.
-- **13 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
-  `DISABLED_BY_POLICY`; **6 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
+- **14 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+  `DISABLED_BY_POLICY`; **5 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
-  limitato al subset verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`,
-  `EMP-DOC-003` e `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. I 19 Function ID write
+  limitato al subset verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e
+  `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. `EMP-EXPORT-001` genera artifact locali
+  in memoria; la sorgente dati live resta `NEEDS_VALIDATION`. I 19 Function ID write
   sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
 - La versione 0.3.0, SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target
@@ -74,7 +75,7 @@ richiedente. Il numero `0` non elimina preview, conferma, RBAC, idempotenza o po
 | `EMP-DOC-002` | upload documento | `ENABLE_DOCUMENT_UPLOAD` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-004` | metadati documento | `ENABLE_DOCUMENT_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-005` | elimina documento | `ENABLE_DOCUMENT_DELETE` | A2 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
-| `EMP-EXPORT-001` | export locale protetto | `ENABLE_EXPORT` | 0 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
+| `EMP-EXPORT-001` | export PDF/DOCX/XLSX locale in memoria | `ENABLE_EXPORT` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; dati live NEEDS_VALIDATION |
 | `EMP-DOC-003` | download locale protetto | `ENABLE_DOCUMENT_DOWNLOAD` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 | `EMP-DELETE-001` | elimina dipendente | `ENABLE_EMPLOYEE_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-CONTRACT-003` | elimina contratto | `ENABLE_CONTRACT_DELETE` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
@@ -102,8 +103,9 @@ mostrati come supportati per una write live che non potrebbe essere riconciliata
 - un esito ambiguo diventa `UNKNOWN_REQUIRES_RECONCILIATION`, mai retry automatico;
 - `ENABLE_LIVE_WRITE_TESTS` richiede employee sintetico dedicato e tenant confermato, ma resta
   vietato finché non esiste un'autorizzazione esplicita separata.
-- un aggregato `READ_ONLY` può essere pubblico soltanto nel canale allowlistato; liste, scadenze e
-  ogni risultato `HR_READ` restano ephemeral;
+- un aggregato `READ_ONLY` può essere pubblico nel canale allowlistato; liste, scadenze, export e
+  ogni risultato `HR_READ` sono pubblicabili da messaggio soltanto con opt-in esplicito per un
+  canale HR privato, restando comunque soggetti allo stesso RBAC;
 - il provider classifica esclusivamente categorie semantiche minimizzate: vocaboli grezzi, nomi,
   Employee ID, query di ricerca e risultati DIC restano nel runtime locale;
 - il nome in chiaro è aperto dal `SecretStr` soltanto per elenchi/scadenze `HR_READ` ephemeral;

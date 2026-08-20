@@ -178,6 +178,8 @@ class EmployeeListItem(StrictModel):
     # Clear text is used only for authorized ephemeral HR rendering. SecretStr keeps it out of
     # diagnostic repr/model dumps; the redacted form remains available for safe summaries.
     display_name: SecretStr | None = Field(default=None, max_length=256, repr=False)
+    first_name: SecretStr | None = Field(default=None, max_length=128, repr=False)
+    last_name: SecretStr | None = Field(default=None, max_length=128, repr=False)
     display_name_redacted: str = Field(max_length=128)
     email_redacted: str | None = Field(default=None, max_length=320)
     tax_code_redacted: str | None = Field(default=None, max_length=32)

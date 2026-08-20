@@ -87,7 +87,12 @@ VALID_WRITE_PARAMETERS: dict[str, dict[str, object]] = {
         "document_id": "DOC-1",
         "motivation": "Eliminazione autorizzata",
     },
-    "EMP-EXPORT-001": {"scope": "employees"},
+    "EMP-EXPORT-001": {
+        "scope": "employees",
+        "format": "xlsx",
+        "dataset": "employees",
+        "status": "all",
+    },
     "EMP-DOC-003": {
         "document_id": "DOC-1",
         "motivation": "Download autorizzato",
@@ -213,7 +218,6 @@ def test_live_routes_without_a_provable_postcondition_are_blocked_before_pending
         "EMP-INVITE-001",
         "EMP-DOC-003",
         "EMP-DOC-005",
-        "EMP-EXPORT-001",
         "EMP-CONTRACT-003",
     }
 

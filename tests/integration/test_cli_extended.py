@@ -89,6 +89,7 @@ async def test_model_check_uses_only_the_closed_synthetic_router(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, frozenset[str]]] = []
+    close = AsyncMock()
 
     class FakeClient:
         async def route(
@@ -104,10 +105,14 @@ async def test_model_check_uses_only_the_closed_synthetic_router(
                 ),
             )
 
+        async def close(self) -> None:
+            await close()
+
     settings = _settings().model_copy(update={"mock_mode": False, "model_provider": "groq"})
     monkeypatch.setattr(cli, "build_intent_client", lambda *_args, **_kwargs: FakeClient())
     result = await cli._model_check_live(settings)
 
+    close.assert_awaited_once_with()
     assert calls and calls[0][1] == frozenset()
     assert "dati personali" in calls[0][0]
     assert result == {

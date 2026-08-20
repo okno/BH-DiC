@@ -5,10 +5,11 @@
 > OpenAI, llama e lo smoke del trasporto Discord restano verifiche indipendenti. Il deployment e
 > il gate applicativo bounded della 0.3.0 sono documentati separatamente nello stato live.
 
-Il modello è usato esclusivamente come router di intento. Non controlla browser o file, non riceve
-credenziali e non decide autorizzazioni, approvazioni o risultati. L'applicazione espone solo i
-Function ID già consentiti da scope e RBAC, tratta l'output come non attendibile e lo rivalida
-localmente.
+Negli slash command il modello è usato esclusivamente come router di intento. In modalità Discord
+`channel`, lo stesso provider produce anche una risposta HR generale stateless sul messaggio
+corrente. Nessuno dei due percorsi controlla browser o file, riceve credenziali o decide
+autorizzazioni, approvazioni o risultati DIC. Il responder pubblico non riceve tool né Function ID
+e non ha accesso a DIC o alla cronologia del canale.
 
 Il profilo persona passa al router soltanto opzioni chiuse per lo stile di un eventuale
 chiarimento. `BOT_DISPLAY_NAME`, `BOT_OPENING` e `BOT_CLOSING` sono decorazioni locali e non vengono
@@ -101,13 +102,30 @@ MODEL_STORE=false
 La base URL è fissata nel codice a `https://api.groq.com/openai/v1`: non esiste una variabile per
 sostituirla. Il modello predefinito è esattamente `openai/gpt-oss-120b`. Prima dell'uso operativo
 verificare disponibilità, limiti e trattamento dati nell'account autorizzato. Riferimenti
-ufficiali: [Responses API di Groq](https://console.groq.com/docs/responses-api), [compatibilità
+ufficiali: [tool use locale con Chat
+Completions](https://console.groq.com/docs/tool-use/local-tool-calling), [compatibilità
 OpenAI](https://console.groq.com/docs/openai) e [scheda del modello
 `openai/gpt-oss-120b`](https://console.groq.com/docs/model/openai/gpt-oss-120b).
 
 La compatibilità di protocollo non implica equivalenza comportamentale: schema, numero di tool
 call e argomenti restano soggetti alla stessa validazione locale fail-closed. Quando il reasoning
-effort è `none`, il parametro viene omesso verso Groq.
+effort è `none`, il parametro viene omesso verso Groq. Il router Groq richiede una sola tool call e
+accetta soltanto `finish_reason=tool_calls`; il responder HR usa Chat Completions senza tool.
+
+## Responder HR pubblico
+
+Con `DISCORD_INTERACTION_MODE=channel`, soltanto le domande HR generali usano questo responder.
+Le richieste operative riconosciute (conteggi, elenchi, export, attiva/disattiva) entrano nel
+coordinator DIC e non inviano nomi, ID o risultati al provider. Il messaggio generale viene
+normalizzato e minimizzato prima del provider. E-mail, telefono, codice fiscale, IBAN, segreti,
+riferimenti Discord, URL, importi, identificativi dipendente e casi personali riconoscibili sono
+redatti o rifiutati localmente. Anche l'output viene redatto, neutralizzato nelle mention e
+limitato a 1.500 caratteri prima della pubblicazione.
+
+La richiesta contiene sempre una sola coppia system/user, non usa conversation ID, response ID,
+tool o risultati DIC e mantiene `store=false` dove il protocollo lo supporta. Il prompt impone
+orientamento generale: non può inventare policy aziendali, prendere decisioni HR o trattare un
+caso individuale. Telemetria, rate limit e concorrenza sono separati dal router operativo.
 
 ## llama su endpoint locale compatibile
 

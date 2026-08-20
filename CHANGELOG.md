@@ -5,6 +5,31 @@ stable public API is declared.
 
 ## [Unreleased]
 
+### Added
+
+- Modalità Discord `channel` nel solo canale allowlistato: ignora la chat non HR, usa un responder
+  stateless senza tool per orientamento generale e il coordinator autorizzato per richieste DIC.
+  Input/output del solo responder generale sono minimizzati, redatti e protetti dalle mention.
+- Routing locale per conteggio/elenco completo, attiva/disattiva per ID o nome e richieste export;
+  il canale usa lo stesso coordinator, RBAC, preview e conferma di `/bh`.
+- Generazione e validazione in memoria di PDF, DOCX, XLSX e tabella ASCII completa, con limite
+  dimensione e neutralizzazione delle formule Excel.
+- Comandi `/bh capabilities` e `/bh funzioni` con matrice runtime di disponibilità/policy/RBAC.
+- Comando guild-scoped `/bh dic reconnect` per SECURITY_ADMIN/SYSTEM_ADMIN: un solo submit
+  credenziali, attestazione tenant, persistenza cifrata e stop sugli esiti ambigui.
+
+### Changed
+
+- Il routing Groq usa Chat Completions con una sola tool call obbligatoria e validazione locale,
+  evitando il percorso Responses che in produzione restituiva `tool_use_failed` su richieste reali.
+- Rate limit e concorrenza della chat pubblica sono separati dagli slash command. Deny RBAC,
+  saturazione e indisponibilità provider producono ora una risposta pubblica chiusa invece del
+  silenzio.
+- Gli SDK client del router e del responder vengono chiusi esplicitamente; la telemetria modello
+  distingue `public_hr_response` da `intent_route` e chiude anche le chiamate cancellate.
+- Gli extra dei deny Discord sono appiattiti nei JSON log, coerentemente con
+  `details.reason`, senza inserire prompt o identificativi utente grezzi.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added

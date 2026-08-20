@@ -32,12 +32,16 @@ Discord resta `PENDING`.
 | Discord mostra “L'applicazione non ha risposto” | `systemctl is-active bh-dic.service` e journal | il gateway è offline o non ha deferito entro il timeout; ripristinare prima il servizio, poi verificare permessi e RBAC |
 | bot già attivo | `status.sh`, `ps` | non avviare una seconda istanza |
 | slash command assenti | guild/application ID e scope | `register-commands.sh` nel solo guild |
+| bot connesso ma non vede/non risponde nel canale | `GET channel`/permessi effettivi; errore Discord `50001 Missing Access` | concedere **View Channel** al ruolo bot sul solo canale allowlistato; per `channel` aggiungere Send Messages e Read Message History |
+| gateway chiuso con codice `4014` in modalità `channel`/`mention` | Application Flags e journal Discord | abilitare **Message Content Intent** nel Developer Portal oppure tornare a `slash`; non ampliare altri intent |
 | access denied Discord | `discord_access_denied` e `details.reason` in `discord.jsonl`; guild/channel/ruolo/thread | distribuire almeno la 0.2.6 se i log restano vuoti, poi correggere il mapping autorizzato senza allargare RBAC |
 | JSONL e journal vuoti mentre il bot risponde | versione precedente alla 0.2.6; logger disabilitati dalla configurazione Alembic | aggiornare, riavviare il servizio e verificare `discord_ready`; non cambiare `LOG_LEVEL` per compensare |
 | timeout/quota provider | log router, account provider, `model-check` offline/live autorizzato | verificare `MODEL_PROVIDER`, modello e chiave; retry limitato, mai bypassare intent validation |
+| Groq `tool_use_failed`/`model_provider_unavailable` sui comandi | eventi `model_provider_unavailable`, telemetria `UNAVAILABLE`, probe sintetico | usare il router Groq Chat Completions corretto, poi eseguire un solo `model-check --live`; non inoltrare il body provider nei log e non aggirare la validazione tool |
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
 | login DIC fallisce | JSON `error_type`/`stage`, route DIC/TeamSystem, sessione, MFA/CAPTCHA | usare solo lo stage chiuso; invalidare il vault quando pertinente; mai stampare l'errore interno né usare passwordless o ampliare l'allowlist |
+| sessione DIC scaduta con bot online | `/bh status`; ruolo `SECURITY_ADMIN`/`SYSTEM_ADMIN`; `ENABLE_DIC_RECONNECT` | eseguire una volta `/bh dic reconnect`; se l'esito è incerto non ripetere, verificare sessione web e status |
 | `DicAuthUiChangedError` a `TEAMSYSTEM_EMAIL` | release installata, rotazione credenziale e transizione IdP | il fallimento storico è stato osservato sulla 0.2.7; dalla 0.2.8 sono ammesse la root e-mail TeamSystem esatta, la legacy `/Account/LoginEmail`, la password esatta e soltanto le transizioni bounded `/connect/authorize`/`callback`; dopo una rotazione invalidare deliberatamente il vecchio vault una volta, senza cambio User-Agent o fallback generici |
 | `DicAuthOutcomeUnknownError`, exit 78 | stage `CREDENTIAL_SUBMIT`; invio forse partito ma completamento/tenant/vault non dimostrabili | non ritentare; mantenere DIC degradato e fare escalation, lasciando il gateway privo di credenziali online se necessario |
 | attestazione tenant fallisce | route fissa, risposta first-party, schema/ID configurato | mantenere DIC degradato; nessun fallback su nome o DOM, patchare solo con nuova evidenza redatta |
@@ -81,8 +85,9 @@ Chromium nativo non è risultato la causa e non va sostituito per aggirare contr
 
 Dalla 0.2.7 il gateway non esegue un login implicito: ripristina il vault se disponibile e resta
 online anche quando DIC è `DEGRADED`. `/bh status` e `/bh health` continuano a rispondere, mentre
-le funzioni DIC falliscono chiuso. Un nuovo invio di credenziali è consentito soltanto tramite un
-singolo `dic-auth-check --live` esplicito con servizio fermo. Il vault include lo snapshot
+le funzioni DIC falliscono chiuso. Un nuovo invio di credenziali è consentito tramite un singolo
+`dic-auth-check --live` esplicito con servizio fermo oppure, nelle release che lo includono,
+tramite `/bh dic reconnect` con flag e ruolo amministrativo dedicati. Il vault include lo snapshot
 `sessionStorage` bounded della sola origine DIC; una release precedente perdeva i token federati
 al riavvio pur conservando cookie e `localStorage`.
 

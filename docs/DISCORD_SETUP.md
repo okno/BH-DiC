@@ -1,8 +1,11 @@
 # Configurazione Discord
 
-Questa procedura prepara un'applicazione Discord slash-only limitata al guild e al canale
-allowlistati nella configurazione locale. I relativi ID non sono conservati nella repository e
-devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarli.
+Questa procedura prepara un'applicazione Discord limitata al guild e al canale allowlistati nella
+configurazione locale. La modalità predefinita è slash-only; la modalità opzionale `channel`
+legge i messaggi nel solo canale configurato, ignora quelli non HR e separa richieste operative
+DIC da orientamento HR generale. I
+relativi ID non sono conservati nella repository e devono essere copiati dal client Discord: non
+ricavarli dai nomi e non inventarli.
 
 > Stato al 17 agosto 2026: installazione guild-scoped e registrazione hanno evidenza storica; il
 > gateway resta separato dal login DIC e può rispondere anche con DIC `DEGRADED`. Il primo smoke è
@@ -27,9 +30,11 @@ devono essere copiati dal client Discord: non ricavarli dai nomi e non inventarl
    screenshot o log.
 4. Se l'app deve restare interna, disabilitare **Public Bot**. Lasciare **Requires OAuth2 Code
    Grant** disabilitato: BH-DiC non implementa un authorization-code flow utente.
-5. Lasciare disabilitati **Presence Intent**, **Server Members Intent** e **Message Content
-   Intent**. Il runtime slash usa soltanto l'intent non privilegiato Guilds. Non serve un
-   Interactions Endpoint URL perché le interazioni arrivano tramite gateway.
+5. Lasciare disabilitati **Presence Intent** e **Server Members Intent**. Con
+   `DISCORD_INTERACTION_MODE=slash` lasciare disabilitato anche **Message Content Intent**. Con
+   `channel` o `mention` abilitarlo esplicitamente nella pagina **Bot**: senza questo flag Discord
+   chiude il gateway quando l'app richiede l'intent privilegiato. Non serve un Interactions
+   Endpoint URL perché le interazioni arrivano tramite gateway.
 
 Riferimento ufficiale per intent privilegiati e abilitazione nel portal: [Gateway
 Intents](https://docs.discord.com/developers/events/gateway#privileged-intents).
@@ -88,8 +93,11 @@ Verificare il riepilogo del portal prima di autorizzare. Installare esclusivamen
 ID coincide con `DISCORD_GUILD_ID` nella configurazione locale. Riferimento: [Discord permissions e
 permission bitfields](https://docs.discord.com/developers/topics/permissions).
 
-Non concedere **Administrator**, Manage Guild, Manage Roles o accesso a canali non necessari.
-L'attuale bot slash non richiede Read Message History né Attach Files. Gli operatori umani che
+Per `DISCORD_INTERACTION_MODE=channel` o `mention` aggiungere **Read Message History** (`65536`),
+per un totale `84992`: è necessario per rispondere al messaggio originale. Se il bot deve inviare
+PDF/DOCX/XLSX aggiungere **Attach Files** (`32768`), per un totale `117760`. Non concedere
+**Administrator**, Manage Guild, Manage Roles o accesso a canali non necessari. Il bot slash non
+richiede Read Message History né Attach Files. Gli operatori umani che
 usano `/bh upload` devono invece poter allegare file nel canale; ciò non richiede il permesso
 Attach Files sul ruolo del bot. Nel canale allowlistato, gli utenti autorizzati devono poter usare
 gli application commands.
@@ -160,7 +168,44 @@ Nel client Discord configurare inoltre i due livelli nativi:
    **All Channels** se si vuole nascondere i comandi altrove e mantenere i sottocomandi synced;
 2. in **Edit Channel → Permissions**, concedere agli utenti **View Channel** e
    **Use Application Commands**; concedere **Attach Files** soltanto a chi usa `/bh upload`;
-3. al ruolo del bot concedere soltanto **View Channel**, **Send Messages** ed **Embed Links**.
+3. al ruolo del bot concedere **View Channel**, **Send Messages** ed **Embed Links**; aggiungere
+   **Read Message History** esclusivamente per `channel`/`mention` e **Attach Files** se sono
+   abilitati gli export.
+
+### Conversazione HR pubblica nel canale
+
+Per consentire a tutti i membri che vedono il canale di parlare con il responder generale:
+
+```dotenv
+DISCORD_INTERACTION_MODE=channel
+DISCORD_READONLY_ROLE_IDS=<DISCORD_GUILD_ID>
+```
+
+Il nome del canale non viene usato dal runtime: `DISCORD_CHANNEL_ID` deve essere l'ID esatto del
+canale desiderato. Il responder considera soltanto il messaggio corrente, non conserva cronologia,
+non ha tool e non chiama DIC. Redige riferimenti Discord, identificativi dipendente, contatti,
+segreti, importi e casi personali riconoscibili; una richiesta individuale viene rinviata a
+`/bh ask` soltanto se l'utente è autorizzato, altrimenti a HR. Le risposte sono pubbliche e tutti i
+membri con accesso al canale possono leggerle.
+
+Non mappare `@everyone` a `HR_READ`: gli slash command che mostrano persone, contratti, saldi o
+documenti devono restare limitati a un ruolo umano dedicato. Per pubblicare tali risultati nel
+canale privato configurare esplicitamente anche:
+
+```dotenv
+DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES=true
+DISCORD_HR_READ_ROLE_IDS=<ID_RUOLO_UMANO_HR>
+```
+
+Il ruolo deve essere assegnabile a persone e non deve essere un ruolo Discord `managed` creato
+per il bot o per un'integrazione. Le richieste operative riconosciute usano il medesimo coordinator
+di `/bh`; lista, ricerca, export e attiva/disattiva non bypassano mai RBAC, flag o conferme.
+
+Ad ogni nuovo avvio del processo il bot invia nel solo canale allowlistato la notifica `BOT HR
+Bitcoin Hotel Online!` con stato non sensibile di adapter, browser, tenant DIC, kill switch e
+provider/modello AI. Se DIC non è disponibile, la notifica propone il ripristino controllato da
+parte di un amministratore autorizzato: il gateway non invia automaticamente credenziali né tenta
+un login autonomo.
 
 Una modifica ai ruoli assegnati nel client Discord ha effetto dalla richiesta successiva. Una
 modifica alle mappe nel `.env` richiede il riavvio del servizio, ma non una nuova installazione né
@@ -189,10 +234,16 @@ compaiano, senza eseguire una richiesta DIC live.
 
 La superficie comprende i comandi informativi/read e le route operatore previste dal catalogo.
 La visibilità di un comando non prova l'autorizzazione né l'implementazione live dell'azione.
-`EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`, `EMP-DOC-003` e `EMP-CONTRACT-003` falliscono
-chiuso come `NOT_AVAILABLE` nel percorso live; `EMP-CREATE-001` è live soltanto per il subset
+`EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e `EMP-CONTRACT-003` falliscono chiuso come
+`NOT_AVAILABLE` nel percorso live; l'export PDF/DOCX/XLSX è locale e in memoria ma usa dati live
+ancora `NEEDS_VALIDATION`; `EMP-CREATE-001` è live soltanto per il subset
 verificabile documentato nella [Feature matrix](FEATURE_MATRIX.md). Tutte le write restano
 `DISABLED_BY_POLICY`.
+
+Il sottocomando guild-scoped `/bh dic reconnect` compare dopo una nuova registrazione. È
+utilizzabile soltanto da un ruolo mappato in `DISCORD_SECURITY_ADMIN_ROLE_IDS` o
+`DISCORD_SYSTEM_ADMIN_ROLE_IDS` e con `ENABLE_DIC_RECONNECT=true`; la risposta è sempre ephemeral.
+Non chiede password, OTP o cookie su Discord: usa la configurazione server protetta.
 
 Nel flusso `/bh upload`, il pending conserva solo l'identificatore opaco. Path locale e SHA-256
 non sono mostrati al provider o su Discord e non entrano in eventi o log. Lo SHA-256 è visibile

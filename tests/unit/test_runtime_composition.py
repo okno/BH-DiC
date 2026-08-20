@@ -14,15 +14,16 @@ from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.approvals.storage import ApprovalRepository
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
-from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage, DicSessionManager
 from bh_dic.dic.browser import AsyncChromiumSession
 from bh_dic.dic.errors import DicSessionVaultError
 from bh_dic.dic.mock import MockDicAdapter
-from bh_dic.dic.models import SessionState, SessionStatus
+from bh_dic.dic.models import HealthStatus, SessionState, SessionStatus
 from bh_dic.dic.protocol import DipendentiInCloudAdapter
 from bh_dic.discord.bot import BHDiCBot
 from bh_dic.files.repository import SqlAlchemyUploadRepository
-from bh_dic.openai.intent_router import MockIntentRouter, OpenAIIntentRouter
+from bh_dic.openai.client import MockPublicHrResponder, PublicHrResponder
+from bh_dic.openai.intent_router import IntentRouter, MockIntentRouter, OpenAIIntentRouter
 from bh_dic.runtime import ApplicationRuntime, RepositoryPendingViewSource
 
 
@@ -644,6 +645,8 @@ async def test_application_runtime_close_releases_every_owned_boundary() -> None
     bot = SimpleNamespace(is_closed=lambda: False, close=AsyncMock())
     adapter = SimpleNamespace(close=AsyncMock())
     browser = SimpleNamespace(close=AsyncMock())
+    public_hr_responder = SimpleNamespace(close=AsyncMock())
+    intent_router = SimpleNamespace(close=AsyncMock())
     database = SimpleNamespace(dispose=AsyncMock())
     runtime = ApplicationRuntime(
         settings=_mock_settings(),
@@ -653,19 +656,171 @@ async def test_application_runtime_close_releases_every_owned_boundary() -> None
         bot=cast(BHDiCBot, bot),
         approval_repository=cast(ApprovalRepository, object()),
         upload_repository=cast(SqlAlchemyUploadRepository, object()),
+        intent_router=cast(IntentRouter, intent_router),
         browser_session=cast(AsyncChromiumSession, browser),
+        public_hr_responder=cast(PublicHrResponder, public_hr_responder),
     )
     await runtime.close()
     bot.close.assert_awaited_once_with()
     adapter.close.assert_awaited_once_with()
     browser.close.assert_awaited_once_with()
+    public_hr_responder.close.assert_awaited_once_with()
+    intent_router.close.assert_awaited_once_with()
     database.dispose.assert_awaited_once_with()
 
     closed_bot = SimpleNamespace(is_closed=lambda: True, close=AsyncMock())
     runtime.bot = cast(BHDiCBot, closed_bot)
     runtime.browser_session = None
+    runtime.public_hr_responder = None
     await runtime.close()
     closed_bot.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_channel_mode_uses_only_the_offline_public_responder_in_mock() -> None:
+    settings = _mock_settings().model_copy(update={"discord_interaction_mode": "channel"})
+
+    runtime = await runtime_module.build_runtime(settings)
+
+    assert isinstance(runtime.public_hr_responder, MockPublicHrResponder)
+    assert runtime.bot.public_hr_responder is runtime.public_hr_responder
+    assert runtime.bot.intents.message_content
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_dic_reconnect_submits_once_and_persists_attested_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = SimpleNamespace(
+        health=AsyncMock(
+            return_value=HealthStatus(
+                ready=False,
+                authenticated=False,
+                browser_available=True,
+                detail="synthetic disconnected session",
+            )
+        ),
+        ensure_authenticated=AsyncMock(
+            return_value=SessionStatus(state=SessionState.AUTHENTICATED)
+        ),
+        session_status=AsyncMock(return_value=SessionStatus(state=SessionState.AUTHENTICATED)),
+        close=AsyncMock(),
+    )
+    browser = SimpleNamespace(close=AsyncMock())
+    manager = SimpleNamespace(persist=AsyncMock())
+
+    async def fake_adapter(
+        _settings: AppSettings,
+        *,
+        force_mock_components: bool,
+        state_digest_key: bytes,
+        authenticate_dic: bool,
+    ) -> tuple[DipendentiInCloudAdapter, AsyncChromiumSession, DicSessionManager]:
+        assert not force_mock_components
+        assert not authenticate_dic
+        assert len(state_digest_key) == 32
+        return (
+            cast(DipendentiInCloudAdapter, adapter),
+            cast(AsyncChromiumSession, browser),
+            cast(DicSessionManager, manager),
+        )
+
+    monkeypatch.setattr(runtime_module, "_adapter", fake_adapter)
+    monkeypatch.setattr(
+        runtime_module,
+        "_router",
+        lambda _settings, *, force_mock_components: MockIntentRouter(),
+    )
+    runtime = await runtime_module.build_runtime(
+        _live_settings().model_copy(update={"enable_dic_reconnect": True})
+    )
+    reconnect = runtime.coordinator._dic_reconnect_handler
+    assert reconnect is not None
+
+    status = await reconnect()
+
+    assert status.state is SessionState.AUTHENTICATED
+    adapter.ensure_authenticated.assert_awaited_once()
+    credentials = adapter.ensure_authenticated.await_args.args[0]
+    assert credentials.username == "synthetic-user"
+    assert credentials.password.get_secret_value() == "synthetic-password"
+    manager.persist.assert_awaited_once_with(browser)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_application_runtime_close_attempts_every_boundary_after_failure() -> None:
+    marker = RuntimeError("synthetic close failure")
+    bot = SimpleNamespace(is_closed=lambda: False, close=AsyncMock(side_effect=marker))
+    adapter = SimpleNamespace(close=AsyncMock())
+    browser = SimpleNamespace(close=AsyncMock())
+    public_hr_responder = SimpleNamespace(close=AsyncMock())
+    intent_router = SimpleNamespace(close=AsyncMock())
+    database = SimpleNamespace(dispose=AsyncMock())
+    runtime = ApplicationRuntime(
+        settings=_mock_settings(),
+        database=cast(Database, database),
+        adapter=cast(DipendentiInCloudAdapter, adapter),
+        coordinator=cast(BHApplicationCoordinator, object()),
+        bot=cast(BHDiCBot, bot),
+        approval_repository=cast(ApprovalRepository, object()),
+        upload_repository=cast(SqlAlchemyUploadRepository, object()),
+        intent_router=cast(IntentRouter, intent_router),
+        browser_session=cast(AsyncChromiumSession, browser),
+        public_hr_responder=cast(PublicHrResponder, public_hr_responder),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic close failure"):
+        await runtime.close()
+
+    adapter.close.assert_awaited_once_with()
+    browser.close.assert_awaited_once_with()
+    public_hr_responder.close.assert_awaited_once_with()
+    intent_router.close.assert_awaited_once_with()
+    database.dispose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_failure_releases_adapter_and_intent_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = SimpleNamespace(close=AsyncMock())
+    intent_router = SimpleNamespace(route=AsyncMock(), close=AsyncMock())
+
+    async def fake_adapter(
+        _settings: AppSettings,
+        *,
+        force_mock_components: bool,
+        state_digest_key: bytes,
+        authenticate_dic: bool,
+    ) -> tuple[DipendentiInCloudAdapter, None, None]:
+        assert force_mock_components is False
+        assert authenticate_dic is False
+        assert len(state_digest_key) == 32
+        return cast(DipendentiInCloudAdapter, adapter), None, None
+
+    def fail_public_responder(_settings: AppSettings) -> PublicHrResponder:
+        raise RuntimeError("synthetic responder failure")
+
+    monkeypatch.setattr(runtime_module, "_adapter", fake_adapter)
+    monkeypatch.setattr(
+        runtime_module,
+        "_router",
+        lambda _settings, *, force_mock_components: cast(IntentRouter, intent_router),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "build_public_hr_responder",
+        fail_public_responder,
+    )
+    settings = _live_settings().model_copy(update={"discord_interaction_mode": "channel"})
+
+    with pytest.raises(RuntimeError, match="synthetic responder failure"):
+        await runtime_module.build_runtime(settings)
+
+    adapter.close.assert_awaited_once_with()
+    intent_router.close.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

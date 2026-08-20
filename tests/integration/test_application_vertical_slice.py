@@ -25,13 +25,17 @@ from bh_dic.dic.models import (
     EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
+    EmployeeState,
     PreparedAction,
     ReconciliationResult,
     ReconciliationState,
+    SessionState,
+    SessionStatus,
     SortDirection,
 )
 from bh_dic.discord.checks import DiscordActor
 from bh_dic.discord.interactions import ResponseSensitivity
+from bh_dic.exports import HrExportService
 from bh_dic.model_usage import (
     ModelUsageEvent,
     ModelUsageKey,
@@ -98,6 +102,12 @@ class FailingRouter:
         raise self.error
 
 
+class CancellingRouter:
+    async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent:
+        del request, allowed_function_ids
+        raise asyncio.CancelledError
+
+
 class AmbiguousMockAdapter(MockDicAdapter):
     def __init__(self) -> None:
         super().__init__()
@@ -154,11 +164,14 @@ async def coordinator_for(
     model_usage: ModelUsageService | None = None,
     today_provider: object | None = None,
     model_provider: str = "groq",
+    dic_reconnect_enabled: bool = False,
+    dic_reconnect_handler: object | None = None,
 ) -> tuple[BHApplicationCoordinator, MockDicAdapter, InMemoryApprovalRepository]:
     baseline = dict(DEFAULT_FEATURE_FLAGS)
     baseline["ENABLE_WRITE_ACTIONS"] = writes
     for flag in write_flags:
         baseline[flag] = writes
+    baseline["ENABLE_DIC_RECONNECT"] = dic_reconnect_enabled
     flags = RuntimeFeatureFlags(baseline)
     adapter = adapter_override or MockDicAdapter()
     await adapter.ensure_authenticated()
@@ -173,6 +186,8 @@ async def coordinator_for(
         kwargs["requester_actor_resolver"] = requester_actor_resolver
     if today_provider is not None:
         kwargs["today_provider"] = today_provider
+    if dic_reconnect_handler is not None:
+        kwargs["dic_reconnect_handler"] = dic_reconnect_handler
     coordinator = BHApplicationCoordinator(
         router=router,
         policy=PolicyEngine(),
@@ -189,12 +204,248 @@ async def coordinator_for(
         approvals=approvals,
         approval_repository=repository,
         payload_cipher=PayloadCipher(b"E" * 32),
+        exports=HrExportService(),
         model_usage=model_usage,
         model_provider=model_provider,
         model_name="openai/gpt-oss-120b",
         **kwargs,  # type: ignore[arg-type]
     )
     return coordinator, adapter, repository
+
+
+@pytest.mark.asyncio
+async def test_dic_reconnect_requires_admin_role_and_independent_flag() -> None:
+    reconnect = AsyncMock(return_value=SessionStatus(state=SessionState.AUTHENTICATED))
+    coordinator, adapter, _ = await coordinator_for(
+        _operator_router(),
+        dic_reconnect_enabled=True,
+        dic_reconnect_handler=reconnect,
+    )
+    adapter._authenticated = False
+
+    with pytest.raises(ApplicationPolicyDenied) as denied:
+        await coordinator.reconnect_dic(actor(LogicalRole.HR_READ))
+    assert denied.value.decision.code.value == "ROLE_DENIED"
+    reconnect.assert_not_awaited()
+
+    disabled, disabled_adapter, _ = await coordinator_for(
+        _operator_router(),
+        dic_reconnect_enabled=False,
+        dic_reconnect_handler=reconnect,
+    )
+    disabled_adapter._authenticated = False
+    with pytest.raises(ApplicationPolicyDenied) as feature_disabled:
+        await disabled.reconnect_dic(actor(LogicalRole.SECURITY_ADMIN))
+    assert feature_disabled.value.decision.code.value == "FEATURE_DISABLED"
+    reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dic_reconnect_avoids_submit_for_active_session_and_restores_missing_session() -> (
+    None
+):
+    reconnect = AsyncMock(return_value=SessionStatus(state=SessionState.AUTHENTICATED))
+    coordinator, adapter, _ = await coordinator_for(
+        _operator_router(),
+        dic_reconnect_enabled=True,
+        dic_reconnect_handler=reconnect,
+    )
+    admin = actor(LogicalRole.SECURITY_ADMIN)
+
+    already_active = await coordinator.reconnect_dic(admin)
+
+    assert already_active.success
+    assert already_active.title == "Sessione DIC già attiva"
+    reconnect.assert_not_awaited()
+
+    adapter._authenticated = False
+    restored = await coordinator.reconnect_dic(admin)
+
+    assert restored.success
+    assert restored.title == "Sessione DIC ripristinata"
+    reconnect.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_dic_reconnect_rejects_a_concurrent_second_submit() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def reconnect() -> SessionStatus:
+        entered.set()
+        await release.wait()
+        return SessionStatus(state=SessionState.AUTHENTICATED)
+
+    coordinator, adapter, _ = await coordinator_for(
+        _operator_router(),
+        dic_reconnect_enabled=True,
+        dic_reconnect_handler=reconnect,
+    )
+    adapter._authenticated = False
+    admin = actor(LogicalRole.SYSTEM_ADMIN)
+    first = asyncio.create_task(coordinator.reconnect_dic(admin))
+    await entered.wait()
+
+    second = await coordinator.reconnect_dic(admin)
+    release.set()
+    completed = await first
+
+    assert not second.success
+    assert second.title == "Riconnessione DIC già in corso"
+    assert completed.success
+
+
+@pytest.mark.asyncio
+async def test_natural_excel_export_requires_confirmation_then_returns_real_artifact() -> None:
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(),
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_EXPORT"}),
+    )
+    requester = actor(LogicalRole.HR_READ)
+    try:
+        preview = await coordinator.ask(
+            requester,
+            "genera un excel con tutti i dipendenti",
+        )
+        assert preview.action_id is not None
+        match = re.search(r"Codice monouso: `([^`]+)`", preview.description)
+        assert match is not None
+        pending = await repository.get(preview.action_id)
+        assert pending is not None
+        assert pending.status is ActionStatus.PENDING
+
+        completed = await coordinator.approve(
+            requester,
+            preview.action_id,
+            match.group(1),
+        )
+    finally:
+        await adapter.close()
+
+    assert completed.success
+    assert completed.attachments
+    assert completed.attachments[0].filename.endswith(".xlsx")
+    assert completed.attachments[0].content.startswith(b"PK")
+    stored = await repository.get(preview.action_id)
+    assert stored is not None
+    assert stored.status is ActionStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_large_ascii_list_bounds_channel_preview_but_keeps_every_row_in_attachment() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    seed = adapter._items["EMP-SYNTH-001"]
+    for index in range(2, 302):
+        employee_id = f"EMP-SYNTH-{index:03d}"
+        adapter._items[employee_id] = seed.model_copy(
+            update={
+                "employee_id": employee_id,
+                "display_name": SecretStr(f"Persona Sintetica {index:03d}"),
+                "display_name_redacted": f"P. S. {index:03d}",
+                "first_name": SecretStr("Persona"),
+                "last_name": SecretStr(f"Sintetica {index:03d}"),
+            }
+        )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "stampa una tabella ascii con tutti i dipendenti",
+        )
+    finally:
+        await adapter.close()
+
+    assert len(result.messages) == 10
+    assert "anteprima bounded" in result.description
+    complete = result.attachments[0].content.decode("utf-8")
+    assert "EMP-SYNTH-001" in complete
+    assert "EMP-SYNTH-301" in complete
+
+
+@pytest.mark.asyncio
+async def test_capability_matrix_distinguishes_authorized_disabled_and_unavailable() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    try:
+        result = await coordinator.capabilities(actor(LogicalRole.HR_READ))
+    finally:
+        await adapter.close()
+
+    matrix = result.attachments[0].content.decode("utf-8")
+    assert "EMP-READ-001 | Elenco e conteggio dipendenti | AVAILABLE" in matrix
+    assert "EMP-STATUS-002 | Riattivazione dipendente | DISABLED_BY_POLICY" in matrix
+    assert "EMP-DOC-003 | Download documento in area locale protetta | NOT_AVAILABLE_LIVE" in matrix
+    assert "non una certificazione live" in result.description
+
+
+@pytest.mark.asyncio
+async def test_status_change_resolves_one_local_name_and_only_prepares_a_confirmation() -> None:
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(),
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_STATUS_CHANGE"}),
+    )
+    item = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = item.model_copy(
+        update={
+            "display_name": SecretStr("Alice Example"),
+            "display_name_redacted": "Alice Example",
+            "first_name": SecretStr("Alice"),
+            "last_name": SecretStr("Example"),
+            "employee_state": EmployeeState.INACTIVE,
+        }
+    )
+    adapter._summaries["EMP-SYNTH-001"] = adapter._summaries["EMP-SYNTH-001"].model_copy(
+        update={"state": EmployeeState.INACTIVE}
+    )
+    try:
+        preview = await coordinator.ask(
+            actor(LogicalRole.HR_WRITE),
+            "riattiva Alice Example",
+        )
+        pending = await repository.get(preview.action_id or "")
+    finally:
+        await adapter.close()
+
+    assert preview.action_id is not None
+    assert "nessuna modifica è stata eseguita" in preview.description
+    assert pending is not None and pending.status is ActionStatus.PENDING
+    assert pending.target_employee_id == "EMP-SYNTH-001"
+
+
+@pytest.mark.asyncio
+async def test_status_change_with_ambiguous_name_lists_ids_and_creates_no_pending() -> None:
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(),
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_STATUS_CHANGE"}),
+    )
+    first = adapter._items["EMP-SYNTH-001"].model_copy(
+        update={
+            "display_name": SecretStr("Mario Rossi"),
+            "display_name_redacted": "Mario Rossi",
+        }
+    )
+    adapter._items["EMP-SYNTH-001"] = first
+    adapter._items["EMP-SYNTH-002"] = first.model_copy(update={"employee_id": "EMP-SYNTH-002"})
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_WRITE),
+            "riattiva Mario Rossi",
+        )
+        pending = await repository.list_actions()
+    finally:
+        await adapter.close()
+
+    assert not result.success
+    assert result.title == "Risultato non univoco"
+    assert {field.value.split(" · ")[0] for field in result.fields} == {
+        "ID: EMP-SYNTH-001",
+        "ID: EMP-SYNTH-002",
+    }
+    assert pending == ()
 
 
 @pytest.mark.asyncio
@@ -225,7 +476,7 @@ async def test_read_request_crosses_router_policy_and_mock_adapter() -> None:
         adapter_override=capturing_adapter,
     )
     try:
-        result = await coordinator.ask(actor(LogicalRole.READ_ONLY), "Quanti dipendenti attivi?")
+        result = await coordinator.ask(actor(LogicalRole.READ_ONLY), "Quanti collaboratori attivi?")
     finally:
         await adapter.close()
 
@@ -291,7 +542,7 @@ async def test_ask_records_and_renders_exact_provider_usage_without_request_data
         model_usage=cast(ModelUsageService, usage_service),
     )
     try:
-        result = await coordinator.ask(actor(LogicalRole.READ_ONLY), "Totale dipendenti")
+        result = await coordinator.ask(actor(LogicalRole.READ_ONLY), "Totale collaboratori")
     finally:
         await adapter.close()
 
@@ -340,6 +591,27 @@ async def test_local_prompt_rejection_creates_no_remote_usage_event() -> None:
 
     usage_service.start.assert_not_awaited()
     usage_service.complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_intent_cancellation_is_not_masked_by_usage_completion_failure() -> None:
+    usage_service = AsyncMock(spec=ModelUsageService)
+    usage_service.complete.side_effect = RuntimeError("synthetic telemetry failure")
+    coordinator, adapter, _ = await coordinator_for(
+        cast(FixedRouter, CancellingRouter()),
+        model_usage=cast(ModelUsageService, usage_service),
+    )
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator.ask(
+                actor(LogicalRole.HR_READ),
+                "Cerca il dipendente Example Synthetic",
+            )
+    finally:
+        await adapter.close()
+
+    usage_service.start.assert_awaited_once()
+    usage_service.complete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1708,7 +1980,7 @@ async def test_hidden_operator_ids_never_enter_the_model_allowlist() -> None:
                 LogicalRole.DOCUMENT_OPERATOR,
                 LogicalRole.SYSTEM_ADMIN,
             ),
-            "Quanti dipendenti sono attivi?",
+            "Quanti collaboratori sono attivi?",
         )
     finally:
         await adapter.close()
@@ -1948,7 +2220,12 @@ async def test_document_download_operator_route_stays_not_available_in_live_mode
         (
             "EMP-EXPORT-001",
             None,
-            {"scope": "employees"},
+            {
+                "scope": "employees",
+                "format": "xlsx",
+                "dataset": "employees",
+                "status": "all",
+            },
             "scope",
             "employees",
             "employees",

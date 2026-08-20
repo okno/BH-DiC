@@ -77,6 +77,7 @@ class AppSettings(BaseSettings):
     discord_channel_id: int | None = Field(default=None, gt=0, le=2**64 - 1)
     discord_interaction_mode: InteractionMode = "slash"
     discord_allow_dms: bool = False
+    discord_publish_sensitive_channel_responses: bool = False
     discord_readonly_role_ids: tuple[int, ...] = ()
     discord_hr_read_role_ids: tuple[int, ...] = ()
     discord_balance_role_ids: tuple[int, ...] = ()
@@ -135,6 +136,7 @@ class AppSettings(BaseSettings):
     dic_test_tenant_confirmed: bool = False
 
     enable_read_actions: bool = True
+    enable_dic_reconnect: bool = False
     enable_write_actions: bool = False
     enable_live_write_tests: bool = False
     enable_employee_create: bool = False
@@ -170,6 +172,7 @@ class AppSettings(BaseSettings):
     save_failure_screenshots: bool = False
     playwright_trace_mode: Literal["off", "on", "retain-on-failure"] = "off"
     trace_retention_hours: int = Field(default=4, ge=1, le=24)
+    export_max_mb: int = Field(default=8, ge=1, le=25)
 
     pid_file: Path = Path("./var/run/bh-dic.pid")
     lock_file: Path = Path("./var/run/bh-dic.lock")
@@ -330,6 +333,20 @@ class AppSettings(BaseSettings):
 
         if self.mock_mode and self.app_env not in {"test", "development", "mock"}:
             raise ValueError("MOCK_MODE may only be used with APP_ENV=test, development, or mock")
+
+        if (
+            self.discord_publish_sensitive_channel_responses
+            and self.discord_interaction_mode != "channel"
+        ):
+            raise ValueError(
+                "DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES requires "
+                "DISCORD_INTERACTION_MODE=channel"
+            )
+        if self.discord_publish_sensitive_channel_responses and not self.discord_hr_read_role_ids:
+            raise ValueError(
+                "DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES requires at least one explicit "
+                "DISCORD_HR_READ_ROLE_IDS value"
+            )
 
         if not self.mock_mode and (
             self.playwright_trace_mode != "off" or self.save_failure_screenshots

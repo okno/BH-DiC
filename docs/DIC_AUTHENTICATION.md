@@ -272,9 +272,10 @@ destinazione va verificata con `stat` prima di considerarla operativa.
 `DicSessionManager` applica una durata predefinita di otto ore e può caricare, salvare o
 invalidare lo stato. Il bootstrap non-mock collega settings, vault e browser context: carica
 cookie/localStorage e ripristina una volta lo snapshot `sessionStorage` cifrato prima degli script
-applicativi. Soltanto il comando operatore esplicito `dic-auth-check --live` può inviare
-credenziali e creare una nuova sessione, e lo fa solo dopo autenticazione e attestazione tenant
-verificate. Il normale gateway Discord non invia mai credenziali. La 0.3.0 può però ripersistire,
+applicativi. Soltanto i percorsi operatore espliciti `dic-auth-check --live` e, quando abilitato,
+`/bh dic reconnect` possono inviare credenziali e creare una nuova sessione. Entrambi lo fanno una
+sola volta e accettano il risultato solo dopo autenticazione, attestazione tenant e persistenza
+cifrata. Il normale avvio del gateway Discord non invia mai credenziali. La 0.3.0 può però ripersistire,
 con lock serializzato, lo stato già autenticato dopo una verifica tenant-attestata o una lettura
 DIC riuscita: questo conserva le normali rotazioni di cookie e `sessionStorage` senza effettuare
 un nuovo login. Stati non autenticati, tenant non attestati, errori e letture fallite non
@@ -292,6 +293,13 @@ contratto di route esatte descritto sopra. Il gate live bounded della 0.3.0 ha s
 verificato autenticazione, tenant e letture riuscite sullo SHA documentato, senza abilitare write.
 Un errore di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
+
+`/bh dic reconnect` è ephemeral, è limitato al guild/canale configurato e richiede
+`ENABLE_DIC_RECONNECT=true` più `SECURITY_ADMIN` o `SYSTEM_ADMIN`. Se la sessione è già valida non
+invia credenziali. Un tentativo concorrente viene rifiutato; dopo un esito ambiguo il processo
+blocca ulteriori submit finché una verifica di stato non dimostra che la sessione è attiva o il
+solo servizio bot viene riavviato dopo verifica amministrativa. MFA, CAPTCHA e rinnovo password
+restano passaggi umani e non vengono aggirati.
 
 ## Comando di verifica autenticazione
 

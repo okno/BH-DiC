@@ -22,6 +22,7 @@ from bh_dic.approvals.service import ApprovalService
 from bh_dic.approvals.storage import ApprovalRepository
 from bh_dic.audit.models import AuditEventInput, AuditOutcome
 from bh_dic.audit.service import AuditService
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
     DicNotFoundError,
@@ -35,6 +36,8 @@ from bh_dic.dic.models import (
     EmployeeListQuery,
     FunctionId,
     ReconciliationState,
+    SessionState,
+    SessionStatus,
     SortDirection,
 )
 from bh_dic.dic.values import canonical_decimal_text
@@ -43,18 +46,25 @@ from bh_dic.discord.interactions import (
     AttachmentPayload,
     InteractionCoordinator,
     InteractionResult,
+    ResponseAttachment,
     ResponseSensitivity,
     ResultField,
 )
+from bh_dic.errors import ApplicationError as ApplicationError
+from bh_dic.errors import ApplicationPolicyDenied as ApplicationPolicyDenied
+from bh_dic.exports import EmployeeExportRow, ExportFormat, GeneratedExport, HrExportService
+from bh_dic.exports.service import ascii_table, split_ascii_for_discord
 from bh_dic.files.models import UploadStatus
 from bh_dic.files.service import FileService, UploadResolutionError
 from bh_dic.hr_assistant import (
     SeniorHrPresenter,
+    is_capabilities_request,
     is_employee_aggregate_request,
     local_contract_expiry_fallback_interval,
     local_employee_search_query,
     minimize_hr_router_request,
     normalize_hr_intent,
+    parse_local_operational_intent,
 )
 from bh_dic.language import BotLanguageProfile
 from bh_dic.logging import get_logger
@@ -81,7 +91,7 @@ from bh_dic.policies.catalog import (
     get_function_spec,
     validate_write_parameters,
 )
-from bh_dic.policies.decisions import PolicyDecision
+from bh_dic.policies.decisions import DecisionCode, PolicyDecision
 from bh_dic.policies.engine import PolicyContext, PolicyEngine, PolicyPhase
 from bh_dic.policies.feature_flags import FeatureFlags
 from bh_dic.policies.roles import LogicalRole, normalize_roles
@@ -91,16 +101,6 @@ from bh_dic.security.sanitization import InputValidationError, normalize_text
 from bh_dic.services.dic_service import DicService
 
 logger = get_logger("application")
-
-
-class ApplicationError(RuntimeError):
-    pass
-
-
-class ApplicationPolicyDenied(ApplicationError):
-    def __init__(self, decision: PolicyDecision) -> None:
-        super().__init__(decision.reason)
-        self.decision = decision
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +115,9 @@ class ApplicationScope:
 
 RequesterActorResolver = Callable[[PendingAction], Awaitable[DiscordActor]]
 TodayProvider = Callable[[], date]
+DicReconnectHandler = Callable[[], Awaitable[SessionStatus]]
+_MAX_INLINE_ASCII_CHUNKS = 10
+_DIC_RECONNECT_FUNCTION_ID = "DIC-RECONNECT"
 
 
 class BHApplicationCoordinator(InteractionCoordinator):
@@ -134,15 +137,20 @@ class BHApplicationCoordinator(InteractionCoordinator):
         approval_repository: ApprovalRepository | None = None,
         payload_cipher: PayloadCipher | None = None,
         files: FileService | None = None,
+        exports: HrExportService | None = None,
+        response_attachment_max_bytes: int = 8 * 1024 * 1024,
         requester_actor_resolver: RequesterActorResolver | None = None,
         language_profile: BotLanguageProfile | None = None,
         today_provider: TodayProvider | None = None,
         model_usage: ModelUsageService | None = None,
         model_provider: str = "unconfigured",
         model_name: str = "unconfigured",
+        dic_reconnect_handler: DicReconnectHandler | None = None,
     ) -> None:
         if len(pseudonym_key) < 32:
             raise ValueError("pseudonym key must contain at least 32 bytes")
+        if response_attachment_max_bytes < 1:
+            raise ValueError("response attachment limit must be positive")
         self.router = router
         self.policy = policy
         self.flags = flags
@@ -153,18 +161,27 @@ class BHApplicationCoordinator(InteractionCoordinator):
         self.approval_repository = approval_repository
         self.payload_cipher = payload_cipher
         self.files = files
+        self.exports = exports
+        self._response_attachment_max_bytes = response_attachment_max_bytes
         self.requester_actor_resolver = requester_actor_resolver
         self._presenter = SeniorHrPresenter(language_profile)
         self._today = today_provider or date.today
         self._model_usage = model_usage
         self._model_provider = model_provider
         self._model_name = model_name
+        self._dic_reconnect_handler = dic_reconnect_handler
         self._pseudonym_key = bytes(pseudonym_key)
+        self._dic_reconnect_lock = asyncio.Lock()
+        self._dic_reconnect_outcome_unknown = False
         self._global_write_lock = asyncio.Lock()
         self._target_write_locks: dict[str, asyncio.Lock] = {}
 
     async def ask(self, actor: DiscordActor, request: str) -> InteractionResult:
         correlation_id = str(uuid.uuid4())
+        request_today = self._today()
+        normalized_request = normalize_text(request, max_length=2_000, allow_newlines=True)
+        if is_capabilities_request(normalized_request):
+            return await self.capabilities(actor)
         exposure_context = self._context(
             actor,
             "EMP-READ-001",
@@ -172,101 +189,118 @@ class BHApplicationCoordinator(InteractionCoordinator):
             operation_scope="aggregate",
         )
         visible = self.policy.visible_function_ids(exposure_context)
-        prepared_request = prepare_provider_input(request)
-        provider_request, explicit_employee_id = minimize_hr_router_request(prepared_request)
-        local_search_query = local_employee_search_query(prepared_request)
-        request_today = self._today()
-        contract_expiry_fallback_interval = None
-        provider_visible = visible
-        if "EMP-CONTRACT-001" in visible:
-            contract_expiry_fallback_interval = local_contract_expiry_fallback_interval(
-                prepared_request,
-                provider_request,
-                today=request_today,
-            )
-            if contract_expiry_fallback_interval is not None:
-                # The local classifier does not select the final intent. It only removes
-                # unrelated tools from this exact, non-ambiguous read request.
-                provider_visible = frozenset({"EMP-CONTRACT-001"})
-        usage_key = ModelUsageKey(
-            correlation_id=correlation_id,
-            purpose="intent_route",
-            ordinal=1,
-        )
-        if self._model_usage is not None:
-            await self._model_usage.start(
-                ModelUsageStart(
-                    key=usage_key,
-                    provider=self._model_provider,
-                    model=self._model_name,
-                )
-            )
-        routed: RoutedIntent
-        usage_completed = False
-        try:
-            routed = await self.router.route(provider_request, provider_visible)
-        except IntentProviderError as exc:
-            if self._model_usage is not None:
-                await self._model_usage.complete(
-                    usage_key,
-                    response_received=exc.response_received,
-                    usage=exc.usage,
-                )
-                usage_completed = True
-            if (
-                self._model_provider != "groq"
-                or exc.provider != "groq"
-                or exc.failure_kind is not ProviderFailureKind.TOOL_USE_FAILED
-                or not exc.response_received
-                or contract_expiry_fallback_interval is None
-            ):
-                raise
+        local = parse_local_operational_intent(normalized_request, today=request_today)
+        target_query: str | None = None
+        if local is not None:
             routed = RoutedIntent(
-                envelope=self._direct_intent(
-                    "EMP-CONTRACT-001",
-                    date_from=contract_expiry_fallback_interval[0],
-                    date_to=contract_expiry_fallback_interval[1],
-                ),
+                envelope=local.envelope,
                 metadata=RouteMetadata(
-                    provider="local_fallback",
+                    provider="local",
                     model="deterministic",
-                    tool_name="get_contracts",
+                    tool_name="closed_hr_parser",
                 ),
             )
-        except asyncio.CancelledError:
+            target_query = local.target_query
+            intent = local.envelope
+        else:
+            prepared_request = prepare_provider_input(normalized_request)
+            provider_request, explicit_employee_id = minimize_hr_router_request(prepared_request)
+            local_search_query = local_employee_search_query(prepared_request)
+            contract_expiry_fallback_interval = None
+            provider_visible = visible
+            if "EMP-CONTRACT-001" in visible:
+                contract_expiry_fallback_interval = local_contract_expiry_fallback_interval(
+                    prepared_request,
+                    provider_request,
+                    today=request_today,
+                )
+                if contract_expiry_fallback_interval is not None:
+                    # Narrow only this exact locally recognized read subset.
+                    provider_visible = frozenset({"EMP-CONTRACT-001"})
+            usage_key = ModelUsageKey(
+                correlation_id=correlation_id,
+                purpose="intent_route",
+                ordinal=1,
+            )
             if self._model_usage is not None:
-                await asyncio.shield(
-                    self._model_usage.complete(
+                await self._model_usage.start(
+                    ModelUsageStart(
+                        key=usage_key,
+                        provider=self._model_provider,
+                        model=self._model_name,
+                    )
+                )
+            usage_completed = False
+            try:
+                routed = await self.router.route(provider_request, provider_visible)
+            except IntentProviderError as exc:
+                if self._model_usage is not None:
+                    await self._model_usage.complete(
+                        usage_key,
+                        response_received=exc.response_received,
+                        usage=exc.usage,
+                    )
+                    usage_completed = True
+                if (
+                    self._model_provider != "groq"
+                    or exc.provider != "groq"
+                    or exc.failure_kind is not ProviderFailureKind.TOOL_USE_FAILED
+                    or not exc.response_received
+                    or contract_expiry_fallback_interval is None
+                ):
+                    raise
+                routed = RoutedIntent(
+                    envelope=self._direct_intent(
+                        "EMP-CONTRACT-001",
+                        date_from=contract_expiry_fallback_interval[0],
+                        date_to=contract_expiry_fallback_interval[1],
+                    ),
+                    metadata=RouteMetadata(
+                        provider="local_fallback",
+                        model="deterministic",
+                        tool_name="get_contracts",
+                    ),
+                )
+            except asyncio.CancelledError:
+                if self._model_usage is not None:
+                    try:
+                        await asyncio.shield(
+                            self._model_usage.complete(
+                                usage_key,
+                                response_received=False,
+                                usage=None,
+                            )
+                        )
+                    except (asyncio.CancelledError, Exception):
+                        logger.warning("intent_usage_completion_failed_during_cancellation")
+                raise
+            except Exception:
+                if self._model_usage is not None:
+                    await self._model_usage.complete(
                         usage_key,
                         response_received=False,
                         usage=None,
                     )
-                )
-            raise
-        except Exception:
-            if self._model_usage is not None:
+                raise
+            if self._model_usage is not None and not usage_completed:
                 await self._model_usage.complete(
                     usage_key,
-                    response_received=False,
-                    usage=None,
+                    response_received=True,
+                    usage=routed.metadata.usage,
                 )
-            raise
-        if self._model_usage is not None and not usage_completed:
-            await self._model_usage.complete(
-                usage_key,
-                response_received=True,
-                usage=routed.metadata.usage,
+            # Provider identity/search fields are never trusted. Restore only local values.
+            trusted_updates: dict[str, object] = {
+                "employee_id": explicit_employee_id,
+                "query": None,
+            }
+            if routed.envelope.function_id == "EMP-SEARCH-001":
+                trusted_updates["query"] = local_search_query
+            routed_envelope = routed.envelope.model_copy(update=trusted_updates)
+            intent = normalize_hr_intent(
+                routed_envelope,
+                normalized_request,
+                today=request_today,
             )
-        # Provider identity/search fields are never trusted. A target or search value is restored
-        # only from the locally parsed, validated request after routing.
-        trusted_updates: dict[str, object] = {
-            "employee_id": explicit_employee_id,
-            "query": None,
-        }
-        if routed.envelope.function_id == "EMP-SEARCH-001":
-            trusted_updates["query"] = local_search_query
-        routed_envelope = routed.envelope.model_copy(update=trusted_updates)
-        intent = normalize_hr_intent(routed_envelope, request, today=request_today)
         if intent.requires_clarification:
             await self._audit(
                 actor,
@@ -293,7 +327,15 @@ class BHApplicationCoordinator(InteractionCoordinator):
             )
             return await self._with_request_usage(result, correlation_id)
 
-        scope = self._operation_scope(intent, request)
+        resolved_item: EmployeeListItem | None = None
+        if target_query is not None and intent.function_id in visible:
+            resolved = await self._resolve_employee_target(target_query, correlation_id)
+            if isinstance(resolved, InteractionResult):
+                return await self._with_request_usage(resolved, correlation_id)
+            resolved_item = resolved
+            intent = intent.model_copy(update={"employee_id": resolved.employee_id})
+
+        scope = self._operation_scope(intent, normalized_request)
         decision = self.policy.evaluate(
             self._context(
                 actor,
@@ -304,7 +346,23 @@ class BHApplicationCoordinator(InteractionCoordinator):
         )
         if not decision.allowed:
             await self._audit_denial(actor, correlation_id, intent, decision)
-            raise ApplicationPolicyDenied(decision)
+            raise ApplicationPolicyDenied(decision, correlation_id)
+
+        if resolved_item is not None and intent.function_id in {
+            "EMP-STATUS-001",
+            "EMP-STATUS-002",
+        }:
+            desired = "inactive" if intent.function_id == "EMP-STATUS-001" else "active"
+            if resolved_item.employee_state.value == desired:
+                result = InteractionResult(
+                    title="Nessuna modifica necessaria",
+                    description=(
+                        f"{self._employee_display_name(resolved_item)}, ID "
+                        f"{resolved_item.employee_id}, risulta già {desired}."
+                    ),
+                    correlation_id=correlation_id,
+                )
+                return await self._with_request_usage(result, correlation_id)
 
         if intent.action_class in {
             ActionClass.PREPARE_WRITE,
@@ -341,6 +399,61 @@ class BHApplicationCoordinator(InteractionCoordinator):
             title="BH-DiC — funzioni autorizzate",
             description="\n".join(lines) or "Nessuna funzione disponibile per i ruoli correnti.",
             sensitivity=ResponseSensitivity.SENSITIVE,
+        )
+
+    async def capabilities(self, actor: DiscordActor) -> InteractionResult:
+        """Render the authoritative catalog against current RBAC and feature flags."""
+
+        rows: list[tuple[str, str, str]] = []
+        for function_id, spec in sorted(FUNCTION_CATALOG.items()):
+            # This is an application capability check, not a model-tool exposure check.
+            # Evaluate every catalogued scope with a non-real placeholder target so hidden
+            # local/operator routes remain visible without reading or changing DIC.
+            decisions = tuple(
+                self.policy.evaluate(
+                    self._context(
+                        actor,
+                        function_id,
+                        phase=PolicyPhase.PREPARE,
+                        target_employee_id=("CAPABILITY-CHECK" if spec.requires_target else None),
+                        operation_scope=scoped.scope,
+                    )
+                )
+                for scoped in spec.role_rules
+            )
+            if not spec.operator_live_available:
+                state = "NOT_AVAILABLE_LIVE"
+            elif any(decision.allowed for decision in decisions):
+                state = "AVAILABLE"
+            elif any(decision.code is DecisionCode.FEATURE_DISABLED for decision in decisions):
+                state = "DISABLED_BY_POLICY"
+            elif decisions and all(
+                decision.code is DecisionCode.ROLE_DENIED for decision in decisions
+            ):
+                state = "NOT_AUTHORIZED"
+            else:
+                state = "UNAVAILABLE"
+            rows.append((function_id, spec.title, state))
+        header = "Function ID | Funzione | Stato"
+        body = "\n".join(f"{function_id} | {title} | {state}" for function_id, title, state in rows)
+        matrix = f"{header}\n{'-' * len(header)}\n{body}\n"
+        counts: dict[str, int] = {}
+        for _function_id, _title, state in rows:
+            counts[state] = counts.get(state, 0) + 1
+        summary = " · ".join(f"{state}: {count}" for state, count in sorted(counts.items()))
+        return InteractionResult(
+            title="Matrice funzionalità Dipendenti in Cloud",
+            description=(
+                f"{summary}. AVAILABLE indica un percorso applicativo autorizzato, non una "
+                "certificazione live dell'intera UI DiC; consulta l'allegato per tutte le righe."
+            ),
+            attachments=(
+                ResponseAttachment(
+                    filename="bh_dic_capabilities.txt",
+                    content_type="text/plain; charset=utf-8",
+                    content=matrix.encode("utf-8"),
+                ),
+            ),
         )
 
     async def status(self, actor: DiscordActor) -> InteractionResult:
@@ -458,6 +571,171 @@ class BHApplicationCoordinator(InteractionCoordinator):
             ),
             success=operational,
         )
+
+    async def reconnect_dic(self, actor: DiscordActor) -> InteractionResult:
+        """Re-establish one attested DIC session without exposing credentials to Discord."""
+
+        correlation_id = str(uuid.uuid4())
+        roles = normalize_roles(actor.logical_roles)
+        if not roles & {LogicalRole.SECURITY_ADMIN, LogicalRole.SYSTEM_ADMIN}:
+            decision = PolicyDecision.deny(
+                _DIC_RECONNECT_FUNCTION_ID,
+                DecisionCode.ROLE_DENIED,
+                "DIC reconnect requires SECURITY_ADMIN or SYSTEM_ADMIN",
+            )
+            await self._audit(
+                actor,
+                correlation_id,
+                "dic.reconnect.denied",
+                _DIC_RECONNECT_FUNCTION_ID,
+                AuditOutcome.DENIED,
+                None,
+                {"decision": decision.code.value},
+            )
+            raise ApplicationPolicyDenied(decision, correlation_id)
+        if not self.flags.enabled("ENABLE_DIC_RECONNECT"):
+            decision = PolicyDecision.deny(
+                _DIC_RECONNECT_FUNCTION_ID,
+                DecisionCode.FEATURE_DISABLED,
+                "DIC reconnect is disabled",
+            )
+            await self._audit(
+                actor,
+                correlation_id,
+                "dic.reconnect.denied",
+                _DIC_RECONNECT_FUNCTION_ID,
+                AuditOutcome.DENIED,
+                None,
+                {"decision": decision.code.value},
+            )
+            raise ApplicationPolicyDenied(decision, correlation_id)
+        if self._dic_reconnect_handler is None:
+            return InteractionResult(
+                title="Riconnessione DIC non disponibile",
+                description="Il runtime non dispone di un percorso di login configurato.",
+                correlation_id=correlation_id,
+                success=False,
+            )
+        if self._dic_reconnect_lock.locked():
+            return InteractionResult(
+                title="Riconnessione DIC già in corso",
+                description="Attendi il completamento del tentativo già avviato; non verrà "
+                "eseguito un secondo invio delle credenziali.",
+                correlation_id=correlation_id,
+                success=False,
+            )
+
+        async with self._dic_reconnect_lock:
+            health = await self.dic.adapter.health()
+            if health.ready and health.authenticated:
+                self._dic_reconnect_outcome_unknown = False
+                await self._audit(
+                    actor,
+                    correlation_id,
+                    "dic.reconnect.completed",
+                    _DIC_RECONNECT_FUNCTION_ID,
+                    AuditOutcome.SUCCESS,
+                    None,
+                    {"result": "ALREADY_AUTHENTICATED"},
+                )
+                return InteractionResult(
+                    title="Sessione DIC già attiva",
+                    description=(
+                        "La sessione tenant è già autenticata e verificata; nessuna credenziale "
+                        "è stata inviata."
+                    ),
+                    correlation_id=correlation_id,
+                    fields=(ResultField("DIC tenant", "AUTHENTICATED", True),),
+                )
+            if self._dic_reconnect_outcome_unknown:
+                return InteractionResult(
+                    title="Esito login DIC da verificare",
+                    description=(
+                        "Il tentativo precedente ha avuto esito incerto. Per sicurezza il bot "
+                        "non invia nuovamente le credenziali: verifica `/bh status` e la sessione "
+                        "web, oppure riavvia il solo bot dopo la verifica amministrativa."
+                    ),
+                    correlation_id=correlation_id,
+                    success=False,
+                )
+
+            await self._audit(
+                actor,
+                correlation_id,
+                "dic.reconnect.started",
+                _DIC_RECONNECT_FUNCTION_ID,
+                AuditOutcome.PENDING,
+                None,
+                {"result": "LOGIN_REQUIRED"},
+            )
+            try:
+                status = await self._dic_reconnect_handler()
+                if status.state is not SessionState.AUTHENTICATED:
+                    raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+            except asyncio.CancelledError:
+                self._dic_reconnect_outcome_unknown = True
+                await self._audit_reconnect_failure_without_masking(
+                    actor,
+                    correlation_id,
+                    AuditOutcome.UNCERTAIN,
+                )
+                raise
+            except DicAuthOutcomeUnknownError:
+                self._dic_reconnect_outcome_unknown = True
+                await self._audit_reconnect_failure_without_masking(
+                    actor,
+                    correlation_id,
+                    AuditOutcome.UNCERTAIN,
+                )
+                raise
+            except Exception:
+                await self._audit_reconnect_failure_without_masking(
+                    actor,
+                    correlation_id,
+                    AuditOutcome.FAILED,
+                )
+                raise
+
+            self._dic_reconnect_outcome_unknown = False
+            await self._audit(
+                actor,
+                correlation_id,
+                "dic.reconnect.completed",
+                _DIC_RECONNECT_FUNCTION_ID,
+                AuditOutcome.SUCCESS,
+                None,
+                {"result": "AUTHENTICATED_AND_PERSISTED"},
+            )
+            return InteractionResult(
+                title="Sessione DIC ripristinata",
+                description=(
+                    "Il login è stato completato, il tenant verificato e la nuova sessione "
+                    "salvata nel vault cifrato."
+                ),
+                correlation_id=correlation_id,
+                fields=(ResultField("DIC tenant", "AUTHENTICATED", True),),
+            )
+
+    async def _audit_reconnect_failure_without_masking(
+        self,
+        actor: DiscordActor,
+        correlation_id: str,
+        outcome: AuditOutcome,
+    ) -> None:
+        try:
+            await asyncio.shield(
+                self._audit(
+                    actor,
+                    correlation_id,
+                    "dic.reconnect.failed",
+                    _DIC_RECONNECT_FUNCTION_ID,
+                    outcome,
+                    None,
+                    {"result": "NOT_VERIFIED"},
+                )
+            )
+        except (asyncio.CancelledError, Exception):
+            logger.warning("dic_reconnect_terminal_audit_failed")
 
     async def pending(self, actor: DiscordActor) -> InteractionResult:
         if self.approval_repository is None:
@@ -702,6 +980,55 @@ class BHApplicationCoordinator(InteractionCoordinator):
         )
         return result
 
+    async def _resolve_employee_target(
+        self,
+        query: str,
+        correlation_id: str,
+    ) -> EmployeeListItem | InteractionResult:
+        """Resolve a local name query without exposing it to the model provider."""
+
+        normalized_query = normalize_text(query, max_length=128, allow_newlines=False)
+        result = await self.dic.list_all_employees(
+            EmployeeListQuery(
+                query=normalized_query,
+                employee_filter=EmployeeFilter.ALL,
+                sort_by="name",
+                sort_direction=SortDirection.ASC,
+                page=1,
+                page_size=100,
+            )
+        )
+        exact = [
+            item
+            for item in result.items
+            if self._employee_display_name(item).casefold() == normalized_query.casefold()
+        ]
+        candidates = exact if exact else list(result.items)
+        if not candidates:
+            return InteractionResult(
+                title="Dipendente non trovato",
+                description="Nessun dipendente corrisponde alla ricerca indicata.",
+                correlation_id=correlation_id,
+                success=False,
+            )
+        if len(candidates) > 1:
+            return InteractionResult(
+                title="Risultato non univoco",
+                description=(
+                    f"Ho trovato {len(candidates)} dipendenti. Specifica l'ID DiC esatto."
+                ),
+                fields=tuple(
+                    ResultField(
+                        self._employee_display_name(item),
+                        f"ID: {item.employee_id} · stato: {item.employee_state.value}",
+                    )
+                    for item in candidates[:25]
+                ),
+                correlation_id=correlation_id,
+                success=False,
+            )
+        return candidates[0]
+
     async def _direct_read(
         self,
         actor: DiscordActor,
@@ -781,16 +1108,71 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 page=int(intent.parameters.get("page", 1)),
                 page_size=min(int(intent.parameters.get("page_size", 25)), 100),
             )
-            result = await self.dic.list_employees(employee_query)
+            include_all = intent.parameters.get("include_all") is True
+            result = (
+                await self.dic.list_all_employees(employee_query)
+                if include_all
+                else await self.dic.list_employees(employee_query)
+            )
             if operation_scope == "aggregate":
                 title, description = self._presenter.employee_count(
                     result.total, employee_filter.value
                 )
+                aggregate_fields: tuple[ResultField, ...] = ()
+                if employee_filter is EmployeeFilter.ALL:
+                    active = await self.dic.list_employees(
+                        employee_query.model_copy(
+                            update={"employee_filter": EmployeeFilter.ACTIVE, "page": 1}
+                        )
+                    )
+                    inactive = await self.dic.list_employees(
+                        employee_query.model_copy(
+                            update={"employee_filter": EmployeeFilter.INACTIVE, "page": 1}
+                        )
+                    )
+                    aggregate_fields = (
+                        ResultField("Attivi", str(active.total), True),
+                        ResultField("Disattivati", str(inactive.total), True),
+                        ResultField("Totale", str(result.total), True),
+                    )
                 return InteractionResult(
                     title=title,
                     description=description,
+                    fields=aggregate_fields,
                     correlation_id=correlation_id,
                     sensitivity=ResponseSensitivity.PUBLIC_AGGREGATE,
+                )
+            if intent.parameters.get("view") == "ascii":
+                export_rows = self._employee_export_rows(result.items)
+                table = ascii_table(export_rows)
+                attachment_content = (table + "\n").encode("utf-8")
+                if len(attachment_content) > self._response_attachment_max_bytes:
+                    raise ApplicationError("ASCII export exceeds the configured attachment limit")
+                all_chunks = split_ascii_for_discord(table)
+                inline_chunks = all_chunks[:_MAX_INLINE_ASCII_CHUNKS]
+                timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
+                return InteractionResult(
+                    title="Elenco completo dipendenti",
+                    description=(
+                        f"Record inclusi: {len(export_rows)} su {result.total}. "
+                        "Il netto mensile non è esposto dall'adapter DiC corrente ed è indicato "
+                        "come N/D; nessun valore è stato inventato. "
+                        + (
+                            "La tabella completa è nell'allegato; nel canale è mostrata solo "
+                            "un'anteprima bounded."
+                            if len(all_chunks) > len(inline_chunks)
+                            else "La tabella completa è riportata anche nell'allegato."
+                        )
+                    ),
+                    messages=inline_chunks,
+                    attachments=(
+                        ResponseAttachment(
+                            filename=f"dipendenti_{timestamp}.txt",
+                            content_type="text/plain; charset=utf-8",
+                            content=attachment_content,
+                        ),
+                    ),
+                    correlation_id=correlation_id,
                 )
             fields = tuple(
                 ResultField(
@@ -1156,12 +1538,18 @@ class BHApplicationCoordinator(InteractionCoordinator):
         # Re-check the requester's current RBAC (when a live resolver is configured),
         # tenant, feature flags, target and system state.  Approver roles never
         # substitute for the requester's authorization.
+        execution_scope = (
+            str(parameters.get("scope", "default"))
+            if action.function_id == "EMP-EXPORT-001"
+            else "default"
+        )
         decision = self.policy.evaluate(
             self._context(
                 requester,
                 action.function_id,
                 phase=PolicyPhase.EXECUTE,
                 target_employee_id=action.target_employee_id,
+                operation_scope=execution_scope,
             )
         )
         if not decision.allowed:
@@ -1177,7 +1565,9 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 asyncio.Lock(),
             )
             async with target_lock:
-                completed = await self._execute_write_critical_section(action, parameters)
+                completed, generated_export = await self._execute_write_critical_section(
+                    action, parameters
+                )
         uncertain = completed.status is ActionStatus.UNKNOWN_REQUIRES_RECONCILIATION
         applied = completed.status is ActionStatus.SUCCEEDED
         if uncertain:
@@ -1200,8 +1590,26 @@ class BHApplicationCoordinator(InteractionCoordinator):
         )
         return InteractionResult(
             title="Esito azione",
-            description=f"`{action.action_id}`: {completed.status.value}",
+            description=(
+                f"`{action.action_id}`: {completed.status.value}"
+                + (
+                    f" · export completo con {generated_export.record_count} record."
+                    if generated_export is not None
+                    else ""
+                )
+            ),
             correlation_id=action.correlation_id,
+            attachments=(
+                (
+                    ResponseAttachment(
+                        filename=generated_export.filename,
+                        content_type=generated_export.media_type,
+                        content=generated_export.content,
+                    ),
+                )
+                if generated_export is not None and applied
+                else ()
+            ),
             success=applied,
         )
 
@@ -1209,7 +1617,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
         self,
         action: PendingAction,
         parameters: Mapping[str, Any],
-    ) -> PendingAction:
+    ) -> tuple[PendingAction, GeneratedExport | None]:
         """Run the entire post-approval write transaction under application locks."""
 
         if self.approvals is None:
@@ -1231,7 +1639,25 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 outcome_uncertain=False,
             )
             raise
+        generated_export: GeneratedExport | None = None
         try:
+            if action.function_id == "EMP-EXPORT-001":
+                generated_export = await self._generate_employee_export(action, parameters)
+                result_payload = json.dumps(
+                    {
+                        "filename": generated_export.filename,
+                        "record_count": generated_export.record_count,
+                        "media_type": generated_export.media_type,
+                    },
+                    sort_keys=True,
+                )
+                completed = await self.approvals.complete_success(
+                    action.action_id,
+                    execution_result=result_payload,
+                    postcondition_result="export generated and validated in memory",
+                    postcondition_verified=True,
+                )
+                return completed, generated_export
             result = await self.dic.execute(executing, execution_parameters)
         except (DicAmbiguousWriteOutcomeError, DicReconciliationRequiredError):
             completed = await self._persist_uncertain_and_reconcile(
@@ -1273,7 +1699,65 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     raise ApplicationError(
                         "verified write outcome remains claimed for operator reconciliation"
                     ) from persistence_error
-        return completed
+        return completed, generated_export
+
+    async def _generate_employee_export(
+        self,
+        action: PendingAction,
+        parameters: Mapping[str, Any],
+    ) -> GeneratedExport:
+        if self.exports is None:
+            raise ApplicationError("export generation boundary is unavailable")
+        try:
+            export_format = ExportFormat(str(parameters["format"]))
+            employee_filter = EmployeeFilter(str(parameters["status"]))
+        except (KeyError, ValueError) as exc:
+            raise ApplicationError("export parameters are invalid") from exc
+        dataset = parameters.get("dataset")
+        if dataset not in {"employees", "contracts_expiring"}:
+            raise ApplicationError("export dataset is invalid")
+        result = await self.dic.list_all_employees(
+            EmployeeListQuery(
+                employee_filter=employee_filter,
+                sort_by="name",
+                sort_direction=SortDirection.ASC,
+                page=1,
+                page_size=100,
+            )
+        )
+        rows = list(self._employee_export_rows(result.items))
+        filter_parts = [f"stato={employee_filter.value}"]
+        if dataset == "contracts_expiring":
+            start_raw = parameters.get("date_from")
+            end_raw = parameters.get("date_to")
+            try:
+                start = date.fromisoformat(str(start_raw)) if start_raw is not None else None
+                end = date.fromisoformat(str(end_raw)) if end_raw is not None else None
+            except ValueError as exc:
+                raise ApplicationError("export contract date interval is invalid") from exc
+            rows = [
+                row
+                for row in rows
+                if row.contract_expiry is not None
+                and (start is None or row.contract_expiry >= start)
+                and (end is None or row.contract_expiry <= end)
+            ]
+            filter_parts.extend(
+                (
+                    f"scadenza_da={start.isoformat() if start else 'qualsiasi'}",
+                    f"scadenza_a={end.isoformat() if end else 'qualsiasi'}",
+                )
+            )
+        title = "Contratti in scadenza" if dataset == "contracts_expiring" else "Elenco dipendenti"
+        return await asyncio.to_thread(
+            self.exports.generate_employees,
+            tuple(rows),
+            export_format=export_format,
+            created_at=datetime.now(UTC),
+            requester="Utente Discord autorizzato",
+            filters="; ".join(filter_parts),
+            title=title,
+        )
 
     async def _persist_uncertain_and_reconcile(
         self,
@@ -1769,6 +2253,48 @@ class BHApplicationCoordinator(InteractionCoordinator):
         except InputValidationError:
             return item.display_name_redacted
         return value or item.display_name_redacted
+
+    @classmethod
+    def _employee_export_rows(
+        cls,
+        items: tuple[EmployeeListItem, ...],
+    ) -> tuple[EmployeeExportRow, ...]:
+        rows: list[EmployeeExportRow] = []
+        for item in items:
+            first_name = (
+                item.first_name.get_secret_value().strip() if item.first_name is not None else None
+            )
+            last_name = (
+                item.last_name.get_secret_value().strip() if item.last_name is not None else None
+            )
+            if not first_name and not last_name and item.display_name is not None:
+                # The DIC response normally exposes the separate fields. Preserve the complete
+                # name without guessing compound-name boundaries if those optional keys vanish.
+                first_name = cls._employee_display_name(item)
+            contract_parts = [
+                value
+                for value in (item.contract_state, item.contract_label)
+                if value is not None and value.strip()
+            ]
+            rows.append(
+                EmployeeExportRow(
+                    first_name=first_name or None,
+                    last_name=last_name or None,
+                    employee_id=item.employee_id,
+                    status=item.employee_state.value,
+                    contract_expiry=item.current_contract_valid_to,
+                    contract_type=" · ".join(contract_parts) or None,
+                    monthly_net=None,
+                )
+            )
+        rows.sort(
+            key=lambda row: (
+                (row.last_name or "").casefold(),
+                (row.first_name or "").casefold(),
+                row.employee_id,
+            )
+        )
+        return tuple(rows)
 
     @staticmethod
     def _require_employee(intent: IntentEnvelope) -> str:

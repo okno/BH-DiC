@@ -25,6 +25,7 @@ from bh_dic.dic.models import (
     DicCredentials,
     DocumentMetadata,
     DocumentQuery,
+    EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
     EmployeeSummary,
@@ -306,6 +307,54 @@ class DicService:
 
     async def list_employees(self, query: EmployeeListQuery) -> EmployeeListResult:
         return await self.adapter.list_employees(query)
+
+    async def list_all_employees(
+        self,
+        query: EmployeeListQuery,
+        *,
+        max_pages: int = 500,
+        max_records: int = 50_000,
+    ) -> EmployeeListResult:
+        """Read every page and fail closed on drift, duplicates, or incomplete pagination."""
+
+        if max_pages < 1 or max_records < 1:
+            raise ValueError("employee pagination bounds must be positive")
+        base = query.model_copy(update={"page": 1, "page_size": 100})
+        page = 1
+        expected_total: int | None = None
+        items: list[EmployeeListItem] = []
+        seen: set[str] = set()
+        while True:
+            current = await self.adapter.list_employees(base.model_copy(update={"page": page}))
+            if current.page != page:
+                raise DicValidationError("employee pagination returned an unexpected page")
+            if expected_total is None:
+                expected_total = current.total
+                if expected_total > max_records:
+                    raise DicValidationError("employee result exceeds the configured safety limit")
+            elif current.total != expected_total:
+                raise DicValidationError("employee total changed while reading all pages")
+            for item in current.items:
+                if item.employee_id in seen:
+                    raise DicValidationError("employee pagination returned a duplicate identifier")
+                seen.add(item.employee_id)
+                items.append(item)
+            if len(items) > max_records:
+                raise DicValidationError("employee result exceeds the configured safety limit")
+            if not current.has_next:
+                break
+            page += 1
+            if page > max_pages:
+                raise DicValidationError("employee pagination exceeded the configured page limit")
+        if expected_total is None or len(items) != expected_total:
+            raise DicValidationError("employee pagination did not match the reported total")
+        return EmployeeListResult(
+            items=tuple(items),
+            page=1,
+            page_size=max(1, len(items)),
+            total=expected_total,
+            has_next=False,
+        )
 
     async def get_employee_summary(self, employee_id: str) -> EmployeeSummary:
         return await self.adapter.get_employee_summary(employee_id)

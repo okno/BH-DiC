@@ -100,8 +100,10 @@ path or file content. Security events use the opaque ID and rejection reason.
 The SHA-256 is visible only to an authorized local operator through file metadata. It must never
 appear in events, logs, Discord responses or model-provider requests.
 
-Discord receives status and opaque ID only. A local export/download, if separately enabled and
-approved, remains in the protected area and is never attached back to Discord.
+Gli upload verso DiC mostrano su Discord soltanto stato e ID opaco. Un export PDF/DOCX/XLSX,
+separatamente abilitato e confermato, viene invece costruito in memoria e allegato alla risposta
+Discord autorizzata senza creare un file locale in chiaro. Il download documentale DiC resta
+`NOT_AVAILABLE`. La retention dell'allegato export è esterna e dipende da Discord/canale.
 
 ## Retention and deletion
 

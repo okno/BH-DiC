@@ -5,15 +5,24 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import date
+from io import BytesIO
 
 import discord
 from discord import app_commands
 
-from bh_dic.dic.errors import DicError
+from bh_dic.dic.auth import DicAuthOutcomeUnknownError
+from bh_dic.dic.errors import (
+    DicAuthenticationError,
+    DicCaptchaRequiredError,
+    DicError,
+    DicMfaRequiredError,
+    DicPasswordExpiredError,
+)
 from bh_dic.discord.checks import DiscordAccessDenied, DiscordActor, DiscordGate
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import AttachmentPayload, InteractionCoordinator, InteractionResult
 from bh_dic.discord.views import ApprovalView
+from bh_dic.errors import ApplicationPolicyDenied
 from bh_dic.hr_assistant import HrRequestInputError
 from bh_dic.language import BotLanguageProfile
 from bh_dic.openai.client import IntentProviderError
@@ -23,6 +32,21 @@ from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 logger = logging.getLogger(__name__)
 
 
+class DicCommandGroup(app_commands.Group):
+    """Administrative DIC session commands nested below ``/bh dic``."""
+
+    def __init__(self, reconnect: Callable[[discord.Interaction], Awaitable[None]]) -> None:
+        super().__init__(name="dic", description="Gestione sicura della sessione DiC")
+        self._reconnect = reconnect
+
+    @app_commands.command(
+        name="reconnect",
+        description="Ripristina una sessione DiC scaduta con le credenziali configurate",
+    )
+    async def reconnect_command(self, interaction: discord.Interaction) -> None:
+        await self._reconnect(interaction)
+
+
 class BHCommandGroup(app_commands.Group):
     def __init__(
         self,
@@ -30,6 +54,7 @@ class BHCommandGroup(app_commands.Group):
         gate: DiscordGate,
         coordinator: InteractionCoordinator,
         upload_max_bytes: int = 20 * 1024 * 1024,
+        publish_sensitive_channel_responses: bool = False,
         rate_limiter: SlidingWindowRateLimiter | None = None,
         language_profile: BotLanguageProfile | None = None,
     ) -> None:
@@ -39,8 +64,11 @@ class BHCommandGroup(app_commands.Group):
         self._gate = gate
         self._coordinator = coordinator
         self._upload_max_bytes = upload_max_bytes
+        self._publish_sensitive_channel_responses = publish_sensitive_channel_responses
         self._rate_limiter = rate_limiter or SlidingWindowRateLimiter(limit=30, window_seconds=60)
         self._language_profile = language_profile
+        self.dic_commands = DicCommandGroup(self._reconnect_dic_from_command)
+        self.add_command(self.dic_commands)
 
     def _actor(self, interaction: discord.Interaction) -> DiscordActor:
         role_ids = [role.id for role in getattr(interaction.user, "roles", [])]
@@ -54,10 +82,22 @@ class BHCommandGroup(app_commands.Group):
             is_webhook=False,
         )
 
+    def approval_view(self, action_id: str) -> ApprovalView:
+        return ApprovalView(action_id, self._approve_from_view, self._reject_from_view)
+
+    @staticmethod
+    def _files(result: InteractionResult) -> list[discord.File]:
+        return [
+            discord.File(BytesIO(attachment.content), filename=attachment.filename)
+            for attachment in result.attachments
+        ]
+
     async def _send(
         self,
         interaction: discord.Interaction,
         operation: Callable[[DiscordActor], Awaitable[InteractionResult]],
+        *,
+        publish_sensitive: bool = False,
     ) -> None:
         deferred_ephemeral = False
         try:
@@ -74,14 +114,13 @@ class BHCommandGroup(app_commands.Group):
                     await interaction.response.send_message(message, ephemeral=True)
                 return
             if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True, thinking=True)
-                deferred_ephemeral = True
+                await interaction.response.defer(ephemeral=not publish_sensitive, thinking=True)
+                deferred_ephemeral = not publish_sensitive
             result = await operation(actor)
+            delivery_ephemeral = result.ephemeral and not publish_sensitive
             view: discord.ui.View | None = None
             if result.action_id:
-                view = ApprovalView(
-                    result.action_id, self._approve_from_view, self._reject_from_view
-                )
+                view = self.approval_view(result.action_id)
             embed = result_embed(result, self._language_profile)
             if not result.ephemeral and deferred_ephemeral:
                 # Discord fixes the privacy of the deferred original response.
@@ -95,20 +134,28 @@ class BHCommandGroup(app_commands.Group):
             if view is None:
                 await interaction.followup.send(
                     embed=embed,
-                    ephemeral=result.ephemeral,
+                    ephemeral=delivery_ephemeral,
+                    files=self._files(result),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 await interaction.followup.send(
                     embed=embed,
-                    ephemeral=result.ephemeral,
+                    ephemeral=delivery_ephemeral,
                     view=view,
+                    files=self._files(result),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            for index, message in enumerate(result.messages, start=1):
+                await interaction.followup.send(
+                    content=f"Parte {index}/{len(result.messages)}\n{message}",
+                    ephemeral=delivery_ephemeral,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
         except DiscordAccessDenied as exc:
             logger.warning(
                 "discord_access_denied",
-                extra={"details": {"reason": exc.reason.value}},
+                extra={"reason": exc.reason.value},
             )
             message = "Richiesta non autorizzata per questo server, canale o ruolo."
             if interaction.response.is_done():
@@ -128,7 +175,7 @@ class BHCommandGroup(app_commands.Group):
         except IntentProviderError as exc:
             logger.warning(
                 "model_provider_unavailable",
-                extra={"details": {"exception_type": type(exc).__name__}},
+                extra={"exception_type": type(exc).__name__},
             )
             message = (
                 "Il servizio AI non ha completato l'interpretazione della richiesta. "
@@ -138,15 +185,72 @@ class BHCommandGroup(app_commands.Group):
                 await interaction.followup.send(message, ephemeral=True)
             else:
                 await interaction.response.send_message(message, ephemeral=True)
+        except DicAuthOutcomeUnknownError as exc:
+            logger.warning(
+                "dic_authentication_outcome_unknown",
+                extra={"exception_type": type(exc).__name__},
+            )
+            message = (
+                "L'esito del login DIC è incerto. Per sicurezza le credenziali non saranno "
+                "reinviate automaticamente: verifica `/bh status` e la sessione web prima di "
+                "un nuovo tentativo."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except (DicCaptchaRequiredError, DicMfaRequiredError, DicPasswordExpiredError) as exc:
+            logger.warning(
+                "dic_authentication_interactive_step_required",
+                extra={"exception_type": type(exc).__name__},
+            )
+            message = (
+                "Il provider richiede un passaggio interattivo (MFA, CAPTCHA o rinnovo password). "
+                "Completa la verifica amministrativa via web e poi riprova una sola volta."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except DicAuthenticationError as exc:
+            logger.warning(
+                "dic_authentication_failed",
+                extra={"exception_type": type(exc).__name__},
+            )
+            message = (
+                "Il login DIC non è stato completato. Verifica le credenziali configurate e gli "
+                "eventuali controlli interattivi, senza incollarli su Discord."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
         except (DicError, TimeoutError) as exc:
             logger.warning(
                 "dic_operation_unavailable",
-                extra={"details": {"exception_type": type(exc).__name__}},
+                extra={"exception_type": type(exc).__name__},
             )
             message = (
                 "Dipendenti in Cloud non è disponibile o la sessione verificata è scaduta. "
                 "Il bot resta online, ma questa lettura HR non è stata completata."
             )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except ApplicationPolicyDenied as exc:
+            logger.info(
+                "application_policy_denied",
+                extra={"reason": exc.decision.code.value},
+            )
+            if exc.decision.code.value == "FEATURE_DISABLED":
+                message = "Funzione disabilitata dalla policy operativa corrente."
+            elif exc.decision.code.value == "ROLE_DENIED":
+                message = "Il tuo ruolo Discord non autorizza questa funzione."
+            else:
+                message = "La policy applicativa non autorizza questa richiesta."
+            if exc.correlation_id:
+                message += f" Correlation ID: `{exc.correlation_id}`."
             if interaction.response.is_done():
                 await interaction.followup.send(message, ephemeral=True)
             else:
@@ -177,14 +281,31 @@ class BHCommandGroup(app_commands.Group):
                 confirmation_code,
                 target_confirmation,
             ),
+            publish_sensitive=self._component_may_publish(interaction),
         )
 
     async def _reject_from_view(
         self, interaction: discord.Interaction, action_id: str, reason: str
     ) -> None:
         await self._send(
-            interaction, lambda actor: self._coordinator.reject(actor, action_id, reason)
+            interaction,
+            lambda actor: self._coordinator.reject(actor, action_id, reason),
+            publish_sensitive=self._component_may_publish(interaction),
         )
+
+    def _component_may_publish(self, interaction: discord.Interaction) -> bool:
+        """Allow public completion only for a component attached to a public HR message."""
+
+        if not self._publish_sensitive_channel_responses:
+            return False
+        source_message = getattr(interaction, "message", None)
+        if source_message is None:
+            return False
+        flags = getattr(source_message, "flags", None)
+        return not bool(getattr(flags, "ephemeral", False))
+
+    async def _reconnect_dic_from_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.reconnect_dic)
 
     @app_commands.command(name="ask", description="Interpreta una richiesta HR autorizzata")
     @app_commands.describe(richiesta="Richiesta in italiano (massimo 2.000 caratteri)")
@@ -196,6 +317,14 @@ class BHCommandGroup(app_commands.Group):
     @app_commands.command(name="help", description="Mostra funzioni autorizzate e limiti")
     async def help_command(self, interaction: discord.Interaction) -> None:
         await self._send(interaction, self._coordinator.help)
+
+    @app_commands.command(name="capabilities", description="Mostra la matrice funzioni DiC")
+    async def capabilities_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.capabilities)
+
+    @app_commands.command(name="funzioni", description="Mostra la matrice funzioni DiC")
+    async def functions_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.capabilities)
 
     @app_commands.command(name="status", description="Mostra lo stato operativo redatto")
     async def status_command(self, interaction: discord.Interaction) -> None:

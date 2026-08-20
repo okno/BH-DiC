@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import re
 from calendar import monthrange
+from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Literal
 
 from bh_dic.language import BotLanguageProfile
-from bh_dic.openai.schemas import IntentEnvelope
+from bh_dic.openai.schemas import ActionClass, IntentEnvelope, Sensitivity
 from bh_dic.security.sanitization import InputValidationError, validate_employee_id
 
 _AGGREGATE_MARKERS = ("quanti", "conteggio", "numero", "totale", "organico")
@@ -32,13 +34,71 @@ _NEGATED_REQUEST = re.compile(r"\b(?:no|non|senza)\b", re.IGNORECASE)
 _NEXT_DAYS = re.compile(r"\bprossim[ioe]?\s+(\d{1,3})\s+giorn[io]\b", re.IGNORECASE)
 _EXPLICIT_EMPLOYEE_ID = re.compile(
     r"(?i)\b(?:employee\s*id|dipendente\s+id|id\s+dipendente|id)\s*[:#]?\s*"
+    r"(?!(?:dei|del|della|delle|di|dipendente|dipendenti)\b)"
     r"([A-Za-z0-9_-]{1,64})\b"
 )
-_NUMERIC_EMPLOYEE_TARGET = re.compile(r"(?i)\bdipendente\s+([0-9]{1,19})\b")
+_NUMERIC_EMPLOYEE_TARGET = re.compile(r"(?i)\bdipend(?:ente|e|ete)\s+([0-9]{1,19})\b")
 _ROUTER_EMPLOYEE_PLACEHOLDER = "EMP-LOCAL-REDACTED"
 _LOCAL_SEARCH = re.compile(
     r"(?is)\b(?:cerca|trova|trovami|search)\s+"
     r"(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+|employee\s+)?(.+)$"
+)
+_EMPLOYEE_TERM = re.compile(
+    r"\b(?:dipend(?:ent\w*|e|ete)|employee\w*|organico)\b",
+    re.IGNORECASE,
+)
+_LIST_MARKER = re.compile(
+    r"\b(?:elenc\w*|lista|mostra\w*|stampa\w*|tabella|visualizza\w*)\b",
+    re.IGNORECASE,
+)
+_CAPABILITIES_MARKER = re.compile(
+    r"\b(?:funzioni|funzionalit[aà]|capabilit(?:y|ies)|cosa\s+(?:puoi|sa)\s+fare)\b",
+    re.IGNORECASE,
+)
+_EXPORT_FORMAT = re.compile(
+    r"\b(?P<format>xlsx|excel|foglio\s+di\s+calcolo|pdf|docx|doc|word|documento)\b",
+    re.IGNORECASE,
+)
+_EXPORT_ACTION = re.compile(
+    r"\b(?:genera\w*|crea\w*|prepara\w*|esporta\w*|scarica\w*|fammi|produci)\b",
+    re.IGNORECASE,
+)
+_ACTIVATE_ACTION = re.compile(
+    r"\b(?:attiva|ativa|riattiva|riativa|ri-?attiva)\b",
+    re.IGNORECASE,
+)
+_DEACTIVATE_ACTION = re.compile(
+    r"\b(?:disattiva|disativa|disattivia|disattivia|rendi\s+inattiv[oa])\b",
+    re.IGNORECASE,
+)
+_STATUS_TARGET = re.compile(
+    r"(?is)\b(?:attiva|ativa|riattiva|riativa|ri-?attiva|disattiva|disativa|disattivia|"
+    r"rendi\s+inattiv[oa])\b\s+(?:il\s+|la\s+|un\s+|una\s+)?"
+    r"(?:dipend(?:ent\w*|e|ete)\s+)?(.+?)\s*$"
+)
+_MOTIVATION = re.compile(r"(?is)\b(?:motivo|motivazione)\s*[:=-]\s*(.{3,500})$")
+_GENERAL_HR_TOPIC = re.compile(
+    r"\b(?:hr|risorse\s+umane|ferie|permess\w*|assen\w*|malattia|maternit[aà]|paternit[aà]|"
+    r"contratt\w*|ccnl|busta\s+paga|stipendi\w*|retribuz\w*|"
+    r"dipend(?:ent\w*|e|ete)|employee\w*|"
+    r"timbratur\w*|presenz\w*|maturazion\w*|colloqui\w*|feedback|onboarding|offboarding|"
+    r"smart\s+working)\b",
+    re.IGNORECASE,
+)
+_OPERATIONAL_HR_ACTION = re.compile(
+    r"\b(?:dimmi|quanti|conteggio|numero|totale|elenc\w*|lista|mostra\w*|stampa\w*|"
+    r"tabella|visualizza\w*|cerca|trova|scad\w*|genera\w*|crea\w*|esporta\w*|"
+    r"attiva|ativa|riattiva|riativa|disattiva|disativa|disattivia)\b",
+    re.IGNORECASE,
+)
+_OPERATIONAL_HR_OBJECT = re.compile(
+    r"\b(?:dipend(?:ent\w*|e|ete)|employee\w*|organico|contratt\w*|document\w*|"
+    r"bust[ae]\s+paga|payroll\w*|ferie|permess\w*|maturazion\w*|timbratur\w*|"
+    r"presenz\w*|ruol\w*)\b",
+    re.IGNORECASE,
+)
+_TECHNICAL_TARGET = re.compile(
+    r"(?i)(?:https?://|www\.|\b(?:token|password|cookie|select|drop|curl|powershell|bash)\b)"
 )
 _ROUTER_TOKEN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9_/-]+")
 _ISO_DATE_TOKEN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -120,6 +180,215 @@ _CONTRACT_EXPIRY_ALLOWED_TERMS = frozenset(
 
 class HrRequestInputError(ValueError):
     """A locally rejected request that must not be forwarded to a provider."""
+
+
+@dataclass(frozen=True, slots=True)
+class LocalOperationalIntent:
+    """A closed, deterministic intent whose identity material stays local."""
+
+    envelope: IntentEnvelope
+    target_query: str | None = None
+
+
+def _local_envelope(
+    function_id: str,
+    *,
+    action_class: ActionClass,
+    sensitivity: Sensitivity,
+    employee_id: str | None = None,
+    query: str | None = None,
+    parameters: dict[str, object] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    clarification: str | None = None,
+) -> IntentEnvelope:
+    return IntentEnvelope(
+        intent=function_id.lower().replace("-", "_"),
+        function_id=function_id,
+        action_class=action_class,
+        employee_id=employee_id,
+        query=query,
+        parameters=parameters or {},
+        date_from=date_from,
+        date_to=date_to,
+        requires_clarification=clarification is not None,
+        clarification_question=clarification,
+        sensitivity=sensitivity,
+        confidence=1.0,
+    )
+
+
+def is_capabilities_request(request: str) -> bool:
+    """Return whether the user asks for the locally maintained capability matrix."""
+
+    return _CAPABILITIES_MARKER.search(request) is not None
+
+
+def is_general_hr_request(request: str) -> bool:
+    """Recognize general HR discussion without treating ordinary channel chat as a command."""
+
+    return _GENERAL_HR_TOPIC.search(request) is not None
+
+
+def is_operational_hr_request(request: str) -> bool:
+    """Recognize requests that should enter the authorized DIC coordinator."""
+
+    if is_capabilities_request(request):
+        return True
+    if (
+        _ACTIVATE_ACTION.search(request) is not None
+        or _DEACTIVATE_ACTION.search(request) is not None
+    ):
+        return True
+    if (
+        _EXPORT_FORMAT.search(request) is not None
+        and _EXPORT_ACTION.search(request) is not None
+        and (
+            _EMPLOYEE_TERM.search(request) is not None
+            or re.search(r"\bcontratt\w*\b", request, re.IGNORECASE) is not None
+        )
+    ):
+        return True
+    return (
+        _OPERATIONAL_HR_OBJECT.search(request) is not None
+        and _OPERATIONAL_HR_ACTION.search(request) is not None
+    )
+
+
+def _requested_status(request: str) -> Literal["active", "inactive", "all"]:
+    folded = request.casefold()
+    if "disattiv" in folded or "inattiv" in folded or "cessat" in folded:
+        return "inactive"
+    if "attiv" in folded:
+        return "active"
+    return "all"
+
+
+def _export_format(request: str) -> Literal["pdf", "docx", "xlsx"] | None:
+    match = _EXPORT_FORMAT.search(request)
+    if match is None:
+        return None
+    raw = match.group("format").casefold()
+    if raw in {"xlsx", "excel", "foglio di calcolo"}:
+        return "xlsx"
+    if raw == "pdf":
+        return "pdf"
+    return "docx"
+
+
+def _status_target(request: str) -> tuple[str | None, str | None]:
+    explicit = _EXPLICIT_EMPLOYEE_ID.search(request) or _NUMERIC_EMPLOYEE_TARGET.search(request)
+    if explicit is not None:
+        try:
+            return validate_employee_id(explicit.group(1)), None
+        except InputValidationError as exc:
+            raise HrRequestInputError("explicit Employee ID has an invalid format") from exc
+    target = _STATUS_TARGET.search(request)
+    if target is None:
+        return None, None
+    value = _MOTIVATION.sub("", target.group(1)).strip(" .,:;!?\"'")
+    value = re.sub(r"(?i)^con\s+id\s+", "", value).strip()
+    if not value:
+        return None, None
+    if len(value) > 128 or _TECHNICAL_TARGET.search(value):
+        raise HrRequestInputError("employee target is invalid")
+    return None, " ".join(value.split())
+
+
+def parse_local_operational_intent(
+    request: str,
+    *,
+    today: date,
+) -> LocalOperationalIntent | None:
+    """Parse high-confidence daily HR requests without sending identity data to a model.
+
+    This parser intentionally covers only closed operations. Anything else remains eligible for
+    the existing minimized intent router; it never manufactures a DIC URL or a free-form action.
+    """
+
+    text = " ".join(request.strip().split())
+    if not text:
+        return None
+    has_explicit_employee_id = (
+        _EXPLICIT_EMPLOYEE_ID.search(text) is not None
+        or _NUMERIC_EMPLOYEE_TARGET.search(text) is not None
+    )
+
+    deactivate = _DEACTIVATE_ACTION.search(text) is not None
+    activate = _ACTIVATE_ACTION.search(text) is not None and not deactivate
+    if activate or deactivate:
+        employee_id, target_query = _status_target(text)
+        motivation_match = _MOTIVATION.search(text)
+        motivation = motivation_match.group(1).strip() if motivation_match is not None else None
+        clarification = None
+        if employee_id is None and target_query is None:
+            clarification = "Indica l'Employee ID oppure un nome e cognome da cercare."
+        elif deactivate and motivation is None:
+            clarification = "Indica anche una motivazione, ad esempio `motivo: cessazione`."
+        parameters = {"motivation": motivation} if motivation is not None else {}
+        function_id = "EMP-STATUS-001" if deactivate else "EMP-STATUS-002"
+        return LocalOperationalIntent(
+            _local_envelope(
+                function_id,
+                action_class=ActionClass.PREPARE_WRITE,
+                sensitivity=Sensitivity.CRITICAL if deactivate else Sensitivity.HIGH,
+                employee_id=employee_id,
+                parameters=parameters,
+                clarification=clarification,
+            ),
+            target_query=target_query,
+        )
+
+    export_format = _export_format(text)
+    if export_format is not None and _EXPORT_ACTION.search(text) is not None:
+        if not (_EMPLOYEE_TERM.search(text) or re.search(r"\bcontratt\w*\b", text, re.I)):
+            return None
+        dataset = "contracts_expiring" if re.search(r"\bscad\w*\b", text, re.I) else "employees"
+        date_from, date_to = (None, None)
+        if dataset == "contracts_expiring":
+            interval = _supported_contract_interval(text, today=today)
+            if interval is not None:
+                date_from, date_to = interval
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-EXPORT-001",
+                action_class=ActionClass.EXPORT,
+                sensitivity=Sensitivity.HIGH,
+                parameters={
+                    "scope": "employees",
+                    "format": export_format,
+                    "dataset": dataset,
+                    "status": _requested_status(text),
+                    **({"date_from": date_from.isoformat()} if date_from else {}),
+                    **({"date_to": date_to.isoformat()} if date_to else {}),
+                },
+            )
+        )
+
+    if _EMPLOYEE_TERM.search(text) is not None:
+        if _AGGREGATE_PATTERN.search(text) is not None:
+            return LocalOperationalIntent(
+                _local_envelope(
+                    "EMP-READ-001",
+                    action_class=ActionClass.READ,
+                    sensitivity=Sensitivity.LOW,
+                    parameters={"status": _requested_status(text), "view": "count"},
+                )
+            )
+        if _LIST_MARKER.search(text) is not None and not has_explicit_employee_id:
+            return LocalOperationalIntent(
+                _local_envelope(
+                    "EMP-READ-001",
+                    action_class=ActionClass.READ,
+                    sensitivity=Sensitivity.MEDIUM,
+                    parameters={
+                        "status": _requested_status(text),
+                        "view": "ascii",
+                        "include_all": True,
+                    },
+                )
+            )
+    return None
 
 
 def is_employee_aggregate_request(request: str) -> bool:

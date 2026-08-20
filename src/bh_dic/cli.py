@@ -262,10 +262,14 @@ async def _model_check_live(settings: AppSettings) -> dict[str, object]:
         settings,
         developer_prompt=build_intent_router_prompt(settings.language_profile),
     )
-    routed = await OpenAIIntentRouter(client).route(
-        "Verifica sintetica del router senza dati personali e senza azioni operative.",
-        frozenset(),
-    )
+    router = OpenAIIntentRouter(client)
+    try:
+        routed = await router.route(
+            "Verifica sintetica del router senza dati personali e senza azioni operative.",
+            frozenset(),
+        )
+    finally:
+        await router.close()
     if (
         routed.envelope.function_id != "UNSUPPORTED"
         or routed.metadata.tool_name != "unsupported_request"

@@ -1,10 +1,11 @@
 # BH-DiC
 
 BH-DiC è un assistente Discord Senior HR per flussi autorizzati nell'area Dipendenti di
-Dipendenti in Cloud. Discord raccoglie la richiesta, il provider di modello selezionato
-(`openai`, `groq` o `llama`) propone soltanto un intento strutturato e un'applicazione
-deterministica applica scope, RBAC, feature flag, approvazioni e controlli prima di invocare
-l'adapter browser.
+Dipendenti in Cloud. Negli slash command il provider selezionato (`openai`, `groq` o `llama`)
+propone soltanto un intento strutturato e l'applicazione deterministica applica scope, RBAC,
+feature flag, approvazioni e controlli prima di invocare l'adapter browser. La modalità opzionale
+`channel` inoltra le richieste operative riconosciute allo stesso coordinator di `/bh` e usa un
+responder stateless senza tool soltanto per l'orientamento HR generale.
 
 > Stato al 17 agosto 2026: il commit applicativo della versione `0.3.0`, SHA esatto
 > `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target Debian un unico gate live
@@ -30,9 +31,8 @@ committare `.env`, token, sessioni browser, documenti, screenshot, trace o dump.
 ## Architettura
 
 ```text
-Discord -> validazione scope/RBAC -> router modello -> validazione schema/policy
-        -> read deterministica oppure preview -> conferma/A1/A2 -> adapter DIC
-        -> postcondizione/riconciliazione -> audit append-only
+Discord /bh o richiesta operativa nel canale -> scope/RBAC -> parser/router -> policy -> DIC
+Discord domanda HR generale -> scope/RBAC -> redazione -> modello senza tool -> risposta pubblica
 ```
 
 Il provider non riceve credenziali, file, primitive browser o facoltà di autorizzazione.
@@ -54,6 +54,12 @@ dell'adapter.
 - catalogo di 32 Function ID e policy fail-closed;
 - router multi-provider OpenAI/Groq/llama limitato all'intento, con minimizzazione identità,
   tuning comune e rendering deterministico locale;
+- responder HR pubblico opzionale, stateless e senza tool per il solo canale allowlistato, con
+  input/output redatti, rate limit e limite di concorrenza separati dagli slash command;
+- parser locale chiuso per conteggi, tabella ASCII completa, export e attiva/disattiva: nomi e ID
+  restano nel runtime e non raggiungono il provider;
+- export PDF, DOCX e XLSX generati e validati interamente in memoria, con preview e conferma;
+- `/bh capabilities` e `/bh funzioni` per distinguere disponibilità, policy e RBAC correnti;
 - presenter Senior HR italiano/inglese con tono, indirizzo e verbosità configurabili, separato da
   RBAC e autorizzazioni;
 - totale organico con semantica locale esatta (`all` se non qualificato; `active`/`inactive` se
@@ -142,6 +148,24 @@ dipendenti`; il risultato finale viene pubblicato nel canale. `/bh ask richiesta
 con contratto a scadenza nel prossimo mese` richiede invece un ruolo umano dedicato `HR_READ` e
 resta ephemeral perché contiene dettagli individuali. L'ownership Discord non sostituisce questi
 ruoli applicativi.
+
+Con `DISCORD_INTERACTION_MODE=channel`, nel solo canale configurato le richieste HR operative
+riconosciute attraversano lo stesso RBAC e lo stesso coordinator di `/bh`; i messaggi generici non
+HR vengono ignorati. La pubblicazione di dati DIC sensibili richiede anche l'opt-in
+`DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES=true` e un ruolo umano `HR_READ` in un canale privato.
+Abilitare il **Message Content Intent** e concedere al bot **View Channel**, **Send Messages**,
+**Embed Links**, **Read Message History** e, per gli export, **Attach Files**.
+
+Esempi locali supportati: `dimmi il numero totale dei dipendenti`, `stampa una tabella ASCII con
+tutti i dipendenti`, `genera un PDF/Word/Excel con tutti i dipendenti`, `riattiva <nome o ID>` e
+`disattiva <nome o ID> motivo: ...`. Attiva/disattiva restano write con preview, conferma e A1/A2;
+non vengono abilitate automaticamente. Il netto mensile non è disponibile nella proiezione DiC
+corrente e viene indicato `N/D`, mai inventato.
+
+Quando `/bh status` segnala una sessione DIC non disponibile, un utente del canale con ruolo
+applicativo `SECURITY_ADMIN` o `SYSTEM_ADMIN` può usare `/bh dic reconnect`, se
+`ENABLE_DIC_RECONNECT=true`. Il comando usa le credenziali configurate sul server, risponde in
+ephemeral, esegue un solo login e persiste la sessione soltanto dopo attestazione del tenant.
 
 `model-check` è offline per default. Solo con autorizzazione esplicita a rete/costo usare
 `model-check --live`: esegue una singola richiesta sintetica chiusa al provider, senza DIC,

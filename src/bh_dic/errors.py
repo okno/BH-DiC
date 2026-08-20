@@ -1,6 +1,6 @@
 """Stable, safe application errors.
 
-Internal exceptions may contain confidential provider details.  The exceptions in this module
+Internal exceptions may contain confidential provider details. The exceptions in this module
 carry a safe public message and a stable machine-readable code; callers must not surface the
 original exception to Discord.
 """
@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Any
+
+from bh_dic.policies.decisions import PolicyDecision
 
 
 class ErrorCode(StrEnum):
@@ -76,3 +78,16 @@ class AuthorizationDeniedError(BHDicError):
 class FeatureDisabledError(BHDicError):
     default_code = ErrorCode.FEATURE_DISABLED
     default_message = "Funzione disabilitata dalla policy di sicurezza."
+
+
+class ApplicationError(RuntimeError):
+    """A deterministic application operation could not be completed."""
+
+
+class ApplicationPolicyDenied(ApplicationError):
+    """The authoritative application policy rejected an operation."""
+
+    def __init__(self, decision: PolicyDecision, correlation_id: str | None = None) -> None:
+        super().__init__(decision.reason)
+        self.decision = decision
+        self.correlation_id = correlation_id

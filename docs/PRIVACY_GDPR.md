@@ -31,6 +31,7 @@ BH-DiC applies data protection by design through:
 | Attachment content | Discord | bounded quarantine/clean/processed area | DIC upload workflow only when enabled |
 | Original attachment filename | Discord | protected metadata; never a path or ordinary log field | not sent to a model provider |
 | Model intent input | Discord | minimized and redacted; no persistent conversation | selected provider with `MODEL_STORE=false` |
+| Public HR message | Discord allowlisted channel | current message only; normalized, redacted and not persisted as conversation | selected provider with no tools; public Discord reply |
 | Model usage counters | selected provider | provider/model, status, timestamps and exact token counts only | local database and authorized Discord status |
 | Persona decorations | local configuration | bounded and validated; values omitted from safe summary/logs | configured Discord embed only; not sent to provider |
 | Audit/log metadata | application | redacted JSON and HMAC chain | optional Wazuh ingestion |
@@ -40,9 +41,11 @@ documents, payrolls, passwords, plaintext cookies or full HR prompts.
 
 ## Model-provider privacy boundary
 
-OpenAI, Groq or the configured llama endpoint is used only to classify supported requests,
-normalize parameters and request clarification.
-The following are forbidden provider inputs:
+OpenAI, Groq or the configured llama endpoint classifies supported `/bh` requests. In optional
+`channel` mode it also generates general HR guidance from one redacted current message, without
+tools, DIC data or conversation history.
+For the operational intent router shared by `/bh` and recognized channel requests, the following
+are forbidden provider inputs:
 
 - credentials, tokens, cookies, TOTP secrets and browser storage state;
 - complete documents and payrolls;
@@ -56,7 +59,13 @@ than forwarding raw recognized words. Search values are removed as a whole befor
 so a name that also resembles an HR term or month cannot survive the boundary. Unknown terms and
 employee identity material become placeholders; an explicitly labelled Employee ID and a local
 employee search query are restored only inside the deterministic application boundary after
-routing. The Senior HR presenter is local and does not call the model.
+routing. The operational Senior HR presenter is local. The separate public responder calls the
+configured provider only after removing recognized contacts, secrets, Discord references, URLs,
+employee identifiers, amounts, name-shaped sequences and likely individual cases. This
+deterministic boundary also covers labelled, directed and common lowercase person contexts; it
+cannot serve as general-purpose natural-language named-entity recognition. Output passes through
+the same public redactor and mention neutralizer. Automated redaction is not a substitute for
+channel policy: users must not post personal or special-category data in the public channel.
 
 `MODEL_STORE=false` is mandatory. OpenAI/Groq requests apply the supported storage control; the
 llama chat-compatible request omits unsupported storage and conversation-state parameters.
@@ -71,9 +80,12 @@ application. A local llama endpoint still requires host, access, model and log-r
 
 ## Discord disclosure rules
 
-Public channel output is limited to non-sensitive aggregate information. Employee lists, details,
-contracts, balances, document metadata and approval previews use ephemeral responses where the
-Discord interaction permits it. Never publish:
+By default, operational DIC output in ordinary channel messages is limited to non-sensitive
+aggregate information. The optional public responder may publish general HR guidance, but never
+DIC-derived or individual data. In a deliberately private HR channel, an operator may enable
+`DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES=true`; the same application RBAC remains mandatory
+and Discord then becomes an explicit recipient of employee lists, contracts, approval previews
+and generated attachments. Never publish:
 
 - IBAN, complete tax code, phone, address or full birth date;
 - employee internal notes, health/family data;
@@ -81,17 +93,23 @@ Discord interaction permits it. Never publish:
 - local filesystem paths, tokens, cookies or credentials.
 
 For an authorized `HR_READ` list or contract-expiry result, the local presenter may unwrap the
-employee display name from `SecretStr` into the ephemeral Discord embed. This is the only clear-name
-destination: the value is never placed in a public aggregate, provider request, log, audit event,
-token telemetry, database record or model dump. Other personal fields remain redacted according
-to their typed projection.
+employee display name from `SecretStr` into an ephemeral Discord embed or, after the explicit
+private-channel opt-in, the protected channel response. The value is never placed in a public
+aggregate, provider request, log, audit event, token telemetry, database record or model dump.
+Other personal fields remain redacted according to their typed projection.
 
 Ephemeral delivery reduces accidental exposure but is not a substitute for authorization or a
 retention policy: Discord and user clients remain external systems.
 
-An aggregate request is first acknowledged privately and only its explicitly classified
-`PUBLIC_AGGREGATE` result is sent as a public follow-up in the allowlisted channel. Contract
-expiry lists remain ephemeral even when the original question is phrased conversationally.
+An aggregate slash request is first acknowledged privately and only its explicitly classified
+`PUBLIC_AGGREGATE` result is sent as a public follow-up. In `channel` mode, recognized operational
+messages enter the same coordinator as `/bh`; sensitive results are blocked unless the explicit
+private-channel flag above is enabled. General-HR messages continue to use the stateless redacted
+responder, while unrelated chat is ignored.
+
+PDF, DOCX, XLSX and TXT artifacts are built in memory and are not written in clear text to the bot
+filesystem. Once attached to Discord, however, message and file retention are governed by Discord
+and the server/channel policy; regeneration is required if delivery fails after completion.
 
 ## Retention
 
@@ -101,6 +119,7 @@ The deployment owner must document concrete retention periods. Technical default
 | --- | --- | --- |
 | Pending approval | actionable for `PENDING_ACTION_TTL_MINUTES` (default 10) | retention of terminal metadata |
 | Attachment bytes | expires after `UPLOAD_RETENTION_HOURS` (default 24) | scheduled purge and exception process |
+| Generated export | in-memory until Discord delivery; no local clear-text retention | Discord message/file retention and deletion policy |
 | Playwright traces | vietati in non-mock; solo fixture sintetiche in ambiente mock | cancellazione alla scadenza |
 | Browser session | encrypted until expiry/invalidation | invalidate after personnel/credential changes |
 | Application/security logs | structured and redacted | rotation and deletion interval |

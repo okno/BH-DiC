@@ -141,6 +141,12 @@ distinto dal richiedente e da A1.
 e `DIC_TEST_TENANT_CONFIRMED=true`. Queste condizioni non costituiscono comunque autorizzazione;
 nel rilascio corrente le write live sono vietate.
 
+`ENABLE_DIC_RECONNECT=true` abilita il solo comando amministrativo `/bh dic reconnect`. Non è una
+write sui dati HR e non dipende dal kill switch globale, ma richiede un ruolo Discord mappato a
+`SECURITY_ADMIN` o `SYSTEM_ADMIN`. Il comando usa esclusivamente le credenziali già presenti nel
+file `.env` protetto, esegue al massimo un submit, attesta il tenant e salva il nuovo stato nel
+vault cifrato. Credenziali, cookie e stato browser non transitano mai su Discord o nei log.
+
 ## Ruoli Discord
 
 Gli ID sono interi positivi separati da virgole, senza nomi o menzioni:
@@ -163,14 +169,27 @@ write/admin. Procedura completa: [Configurazione Discord](DISCORD_SETUP.md).
 
 `READ_ONLY` consente gli aggregati non sensibili e lo stato previsto dal catalogo; non consente
 elenchi, Employee ID, contratti o scadenze individuali. Gli aggregati possono essere pubblicati
-nel canale allowlistato, mentre tutti i risultati sensibili restano ephemeral. Per la domanda
+nel canale allowlistato; i risultati sensibili restano ephemeral salvo l'opt-in esplicito per il
+canale HR privato descritto sotto. Per la domanda
 “dipendenti con contratto a scadenza nel prossimo mese” assegnare quindi un ruolo umano dedicato
 presente in `DISCORD_HR_READ_ROLE_IDS`, senza allargare `@everyone`.
 
 Negli elenchi e nelle scadenze autorizzate `HR_READ`, il nome visualizzato può apparire in chiaro
-nella sola risposta ephemeral. Nel modello applicativo è un `SecretStr`: non compare in repr/dump,
-aggregati pubblici, provider, log, audit o telemetria. E-mail, codice fiscale e matricola restano
-mascherati.
+nella risposta ephemeral o, con opt-in, nel canale HR privato. Nel modello applicativo è un
+`SecretStr`: non compare in repr/dump, aggregati pubblici, provider, log, audit o telemetria.
+E-mail, codice fiscale e matricola restano mascherati.
+
+`DISCORD_INTERACTION_MODE` accetta `slash`, `mention` o `channel`. `slash` non legge i messaggi e
+non richiede il Message Content Intent. `channel` considera soltanto il `DISCORD_CHANNEL_ID`,
+ignora la chat non HR, usa il responder stateless per domande HR generali e invia le richieste
+operative riconosciute allo stesso coordinator/RBAC di `/bh`. Richiede Message Content Intent e
+Read Message History. Per rendere disponibili soltanto gli aggregati a tutti i membri usare
+`DISCORD_READONLY_ROLE_IDS=<DISCORD_GUILD_ID>`; non ampliare `HR_READ` o ruoli privilegiati.
+
+`DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES=false` è il default. Impostarlo a `true` soltanto per
+un canale HR privato dopo aver configurato almeno un ruolo umano dedicato in
+`DISCORD_HR_READ_ROLE_IDS`; la validazione rifiuta combinazioni meno restrittive. I file generati
+sono limitati da `EXPORT_MAX_MB` (default 8 MiB) e richiedono **Attach Files** sul ruolo bot.
 
 Analogamente, [redaction.example.yaml](../config/redaction.example.yaml) documenta il profilo
 atteso: i controlli effettivi sono nel codice di logging, security e provider. Modificare il file
@@ -178,9 +197,12 @@ YAML da solo non modifica la redazione runtime.
 
 ## Confine del provider e tool exposure
 
-Il provider selezionato riceve solo testo minimizzato/redatto, JSON schema e Function ID che la
-policy ha già reso visibili all'attore. Non riceve browser, file, segreti o la decisione finale.
-L'output è un candidato non attendibile e viene rivalidato. `MODEL_STORE=true` è vietato.
+Nel percorso operativo `/bh` o `channel` il provider di routing riceve solo testo
+minimizzato/redatto, JSON schema e Function ID già visibili; le operazioni chiuse quotidiane sono
+risolte localmente. Per una domanda HR generale in `channel`, il responder riceve soltanto il
+messaggio corrente ulteriormente redatto e nessun tool. Nessun provider riceve browser, file,
+segreti, risultati DIC o la decisione finale. Ogni output è non attendibile e rivalidato/redatto.
+`MODEL_STORE=true` è vietato.
 
 La minimizzazione della 0.3.0 proietta la domanda su categorie semantiche canoniche chiuse, come
 `employee_headcount`, `employment_contract` e `contract_deadline`, anziché inoltrare i vocaboli

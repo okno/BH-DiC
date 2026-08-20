@@ -116,7 +116,7 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 | `EMP-DOC-002` | Upload documento | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-004` | Modifica metadati documento | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-005` | Eliminazione documento | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
-| `EMP-EXPORT-001` | Esportazione locale protetta | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
+| `EMP-EXPORT-001` | Esportazione locale protetta PDF/DOCX/XLSX | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — artifact locale in memoria; dati live NEEDS_VALIDATION | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-003` | Download in area locale protetta | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DELETE-001` | Eliminazione definitiva dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-CONTRACT-003` | Eliminazione contratto | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
@@ -134,10 +134,11 @@ dell'esecuzione. L'adapter Playwright possiede inoltre un gate
 tenant. Le write sono eseguite una sola volta, senza retry automatico, e seguite
 da riconciliazione quando esiste una postcondizione sicura.
 
-Cinque write (`EMP-INVITE-001`, `EMP-DOC-005`, `EMP-EXPORT-001`, `EMP-DOC-003` e
+Quattro write (`EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e
 `EMP-CONTRACT-003`) hanno catalogo, policy e comportamento mock, ma sono
 `PARTIALLY_COMPLETED`: l'adapter Playwright le rifiuta intenzionalmente come `NOT_AVAILABLE`.
-Per export e download manca inoltre un artifact service locale protetto. `EMP-CREATE-001` è
+Per il download manca inoltre un artifact service locale protetto; l'export usa invece il nuovo
+generatore in memoria ma non è ancora verificato con dati live. `EMP-CREATE-001` è
 `PARTIALLY_COMPLETED` perché il mock copre lo schema completo, mentre il percorso live accetta
 soltanto il subset con postcondizione verificabile riportato in matrice; `birth_date`, `iban`,
 `phone`, `address` e `notes` sono rifiutati prima di creare il pending. `EMP-DOC-002` richiede un
