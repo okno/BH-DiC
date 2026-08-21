@@ -1349,7 +1349,7 @@ async def test_maturation_balance_and_payroll_pages_read_and_validate_writes() -
 
     missing_year = SyntheticPage()
     missing_year.add("payrolls.rows", _row({"payroll_row.month": "7"}))
-    with pytest.raises(DicUiChangedError, match="does not expose its year"):
+    with pytest.raises(DicUiChangedError, match="did not hydrate"):
         await EmployeePayrollsPage(missing_year, "https://secure.dipendentincloud.it").read(
             "EMP-SYNTH-001"
         )

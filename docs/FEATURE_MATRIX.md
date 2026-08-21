@@ -49,7 +49,7 @@ catalogo esclude anche dalla tool exposure ordinaria.
 | `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-PAY-001` | metadati buste paga | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — LIVE_READ_VERIFIED 2026-08-21 |
 | `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-DOC-001` | metadati documenti | document operator | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 

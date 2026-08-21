@@ -35,6 +35,7 @@ from bh_dic.dic.models import (
     EmployeeListItem,
     EmployeeListQuery,
     FunctionId,
+    PayrollMetadata,
     ReconciliationState,
     SessionState,
     SessionStatus,
@@ -1015,7 +1016,8 @@ class BHApplicationCoordinator(InteractionCoordinator):
             return InteractionResult(
                 title="Risultato non univoco",
                 description=(
-                    f"Ho trovato {len(candidates)} dipendenti. Specifica l'ID DiC esatto."
+                    f"Ho trovato {len(candidates)} dipendenti. Scegli quello corretto e ripeti "
+                    "la richiesta indicando `employee id <ID>`."
                 ),
                 fields=tuple(
                     ResultField(
@@ -1274,27 +1276,61 @@ class BHApplicationCoordinator(InteractionCoordinator):
         if function_id == "EMP-PAY-001":
             employee_id = self._require_employee(intent)
             payroll_year_raw = intent.parameters.get("year")
+            payroll_month_raw = intent.parameters.get("month")
             payroll_records = await self.dic.get_payroll_metadata(
                 employee_id,
                 int(payroll_year_raw) if payroll_year_raw is not None else None,
             )
+            if isinstance(payroll_month_raw, int) and not isinstance(payroll_month_raw, bool):
+                payroll_records = tuple(
+                    record for record in payroll_records if record.month == payroll_month_raw
+                )
+            if not payroll_records:
+                period = (
+                    f"{payroll_month_raw:02d}/{payroll_year_raw}"
+                    if isinstance(payroll_month_raw, int) and isinstance(payroll_year_raw, int)
+                    else str(payroll_year_raw or "richiesto")
+                )
+                return InteractionResult(
+                    title=f"Busta paga non trovata — {employee_id}",
+                    description=f"Non risulta una busta paga disponibile per il periodo {period}.",
+                    correlation_id=correlation_id,
+                    success=False,
+                )
+
+            def net_text(record: PayrollMetadata) -> str:
+                if record.net_cents is None:
+                    return "—"
+                euros, cents = divmod(record.net_cents, 100)
+                whole = f"{euros:,}".replace(",", ".")
+                return f"€ {whole},{cents:02d}"
+
+            def attachment_text(record: PayrollMetadata) -> str:
+                if record.attachment_url is None:
+                    return "PDF non disponibile"
+                target = record.attachment_url.get_secret_value()
+                if len(target) > 850:
+                    return "PDF disponibile su DIC; link temporaneo troppo lungo per Discord"
+                return f"[Apri il PDF della busta paga](<{target}>)"
+
             return InteractionResult(
-                title=f"Metadati buste paga {employee_id}",
+                title=f"Busta paga {employee_id}",
                 description=(
-                    f"Record minimizzati: {len(payroll_records)}; "
-                    f"mostrati: {min(len(payroll_records), 25)}"
+                    f"Ho consultato la sezione Buste paga di Dipendenti in Cloud. "
+                    f"Record trovati: {len(payroll_records)}."
                 ),
                 fields=tuple(
                     ResultField(
-                        f"Record {index}",
+                        f"{record.month:02d}/{record.year}"
+                        if record.month is not None
+                        else str(record.year),
                         (
-                            f"Anno: {record.year} · "
-                            f"mese: {record.month if record.month is not None else '—'} · "
-                            f"stato: {record.status or '—'} · "
-                            f"pubblicata: {record.published_at or '—'}"
+                            f"Netto a pagare: **{net_text(record)}** · "
+                            f"emessa: {record.published_at or '—'} · "
+                            f"stato: {record.status or '—'}\n{attachment_text(record)}"
                         ),
                     )
-                    for index, record in enumerate(payroll_records[:25], start=1)
+                    for record in payroll_records[:25]
                 ),
                 correlation_id=correlation_id,
             )

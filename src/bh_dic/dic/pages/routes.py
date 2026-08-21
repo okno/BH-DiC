@@ -49,6 +49,7 @@ from bh_dic.dic.models import (
     TimeAccessResult,
 )
 from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, PageLike, VerifiedUploadPayload
+from bh_dic.dic.payroll_capture import PayrollResponseCapture, payrolls_from_response
 from bh_dic.dic.selectors import DEFAULT_SELECTORS, SelectorRegistry
 from bh_dic.dic.values import canonical_decimal_text
 
@@ -1326,8 +1327,49 @@ class EmployeeBalancePage(BaseDicPage):
 class EmployeePayrollsPage(BaseDicPage):
     route_template = "/it/app/employees/info/{employee_id}/payrolls"
 
-    async def read(self, employee_id: str, year: int | None = None) -> tuple[PayrollMetadata, ...]:
-        await self.open(employee_id)
+    _HYDRATION_POLL_SECONDS = 0.05
+
+    async def _wait_for_year_control(self) -> tuple[Literal["custom", "legacy"], int | None]:
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        while True:
+            custom = await self.locate("payrolls.year_selector", required=False)
+            if custom is not None:
+                current_text = await self.read_text("payrolls.year_current")
+                if current_text is not None and current_text.isdigit():
+                    current = int(current_text)
+                    if 2000 <= current <= 2200:
+                        return "custom", current
+            legacy = await self.locate("payrolls.year", required=False)
+            if legacy is not None:
+                return "legacy", None
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("payroll page did not hydrate")
+            await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _select_custom_year(self, current: int, expected: int) -> None:
+        if abs(expected - current) > 50:
+            raise DicValidationError("requested payroll year is outside the bounded UI range")
+        while current != expected:
+            key = "payrolls.year_next" if expected > current else "payrolls.year_previous"
+            await self.click(key)
+            wanted = current + (1 if expected > current else -1)
+            deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+            while True:
+                observed = await self.read_text("payrolls.year_current")
+                if observed == str(wanted):
+                    current = wanted
+                    break
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise DicUiChangedError("payroll year selection did not settle")
+                await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _read_legacy(
+        self,
+        employee_id: str,
+        year: int | None,
+    ) -> tuple[PayrollMetadata, ...]:
         if year is not None:
             await self.select("payrolls.year", str(year))
         rows = await self.all_matches("payrolls.rows")
@@ -1352,6 +1394,32 @@ class EmployeePayrollsPage(BaseDicPage):
                 )
             )
         return tuple(result)
+
+    async def read(self, employee_id: str, year: int | None = None) -> tuple[PayrollMetadata, ...]:
+        with PayrollResponseCapture(self.page) as capture:
+            navigation_mark = capture.mark()
+            await self.open(employee_id)
+            control_kind, current_year = await self._wait_for_year_control()
+            if control_kind == "legacy":
+                return await self._read_legacy(employee_id, year)
+            if current_year is None:
+                raise DicUiChangedError("payroll year is unavailable")
+            expected_year = current_year if year is None else year
+            response_mark = navigation_mark
+            if expected_year != current_year:
+                response_mark = capture.mark()
+                await self._select_custom_year(current_year, expected_year)
+            response = await capture.wait_for(
+                employee_id,
+                expected_year,
+                after_sequence=response_mark,
+                timeout_ms=self.timeout_ms,
+            )
+            return await payrolls_from_response(
+                response,
+                employee_id=employee_id,
+                year=expected_year,
+            )
 
 
 class EmployeeDocumentsPage(BaseDicPage):

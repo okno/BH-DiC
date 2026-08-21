@@ -13,7 +13,7 @@ from uuid import uuid4
 import discord
 from discord.ext import commands
 
-from bh_dic.dic.errors import DicError
+from bh_dic.dic.errors import DicError, DicUiChangedError
 from bh_dic.discord.approvals import PendingViewSource, restore_approval_views
 from bh_dic.discord.checks import DiscordAccessDenied, DiscordGate
 from bh_dic.discord.commands import BHCommandGroup
@@ -356,6 +356,20 @@ class BHDiCBot(commands.Bot):
                 await message.reply(
                     "Il servizio AI non ha completato il routing. Nessuna operazione DIC è "
                     "stata eseguita; riprova più tardi.",
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except Exception:
+                return
+        except DicUiChangedError as exc:
+            logger.warning(
+                "discord_message_dic_ui_contract_changed",
+                extra={"exception_type": type(exc).__name__},
+            )
+            try:
+                await message.reply(
+                    "La sessione DIC è attiva, ma la pagina richiesta è cambiata. Nessun dato "
+                    "è stato modificato; segnala la richiesta all'amministratore del bot.",
                     mention_author=False,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )

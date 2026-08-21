@@ -17,6 +17,7 @@ from bh_dic.dic.errors import (
     DicError,
     DicMfaRequiredError,
     DicPasswordExpiredError,
+    DicUiChangedError,
 )
 from bh_dic.discord.checks import DiscordAccessDenied, DiscordActor, DiscordGate
 from bh_dic.discord.embeds import result_embed
@@ -220,6 +221,20 @@ class BHCommandGroup(app_commands.Group):
             message = (
                 "Il login DIC non è stato completato. Verifica le credenziali configurate e gli "
                 "eventuali controlli interattivi, senza incollarli su Discord."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except DicUiChangedError as exc:
+            logger.warning(
+                "dic_ui_contract_changed",
+                extra={"exception_type": type(exc).__name__},
+            )
+            message = (
+                "La sessione DIC è attiva, ma la pagina richiesta non corrisponde più al "
+                "contratto UI verificato. Nessun dato è stato modificato; segnala la richiesta "
+                "all'amministratore del bot."
             )
             if interaction.response.is_done():
                 await interaction.followup.send(message, ephemeral=True)

@@ -306,6 +306,9 @@ class PayrollMetadata(StrictModel):
     month: int | None = Field(default=None, ge=1, le=12)
     status: str | None = Field(default=None, max_length=64)
     published_at: str | None = Field(default=None, max_length=64)
+    net_cents: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    attachment_filename: str | None = Field(default=None, max_length=255)
+    attachment_url: SecretStr | None = Field(default=None, repr=False)
 
 
 class DocumentMetadata(StrictModel):

@@ -8,11 +8,11 @@
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
 | Discord | trasporto storico verificato su una release precedente; servizio 0.3.0 `active/running`, zero riavvii osservati e gateway `discord_ready`; il gate applicativo ha verificato sensibilità `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, non il round-trip slash | Smoke trasporto 0.3.0 RBAC/read-only/HR-read ancora `PENDING` |
-| DIC | `LIVE_AUTHENTICATED` e tenant attestato sullo SHA 0.3.0 verificato; conteggio aggregato e scadenze bounded del prossimo mese di calendario `LIVE_READ_VERIFIED` | Altre modalità read `NEEDS_VALIDATION`; nessuna write live |
+| DIC | `LIVE_AUTHENTICATED` e tenant attestato; conteggio aggregato, scadenze bounded e payroll individuale bounded `LIVE_READ_VERIFIED` | Altre modalità read e futuri cambi UI/API `NEEDS_VALIDATION`; nessuna write live |
 | Debian deployment | commit applicativo `0.3.0` allo SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, gate live PASS; servizio `active/running`, zero riavvii osservati, gateway `discord_ready`; hotfix operativi successivi con gate/deployment separati | Smoke trasporto Discord e restore drill `PENDING` |
 
 Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. Il gate DIC
-applicativo promuove soltanto i due subset read bounded indicati; non attesta il trasporto Discord.
+applicativo promuove soltanto i subset read bounded indicati; non attesta il trasporto Discord.
 Il doctor Debian attesta i prerequisiti controllati, non il restore né lo smoke slash.
 
 Per lo stesso SHA: 834 test locali PASS; branch coverage 85% su 10.361 statement e 3.258 branch;
@@ -99,7 +99,7 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 | `EMP-TIME-001` | Consultazione timbratura | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED (link/controlli) — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-MAT-001` | Consultazione maturazioni | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-BAL-001` | Consultazione bilancio | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-PAY-001` | Metadati buste paga | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED (campione vuoto) — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
+| `EMP-PAY-001` | Busta paga individuale, netto e link PDF temporaneo | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED soltanto per route UI, anno/mese, netto e link PDF first-party osservati il 2026-08-21 — NEEDS_VALIDATION dopo ogni cambio UI/API | ENABLED_BY_DEFAULT |
 | `EMP-PAY-002` | Ricerca collettiva buste paga per mese | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED (route payroll per dipendente) — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-DOC-001` | Metadati documenti | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
 | `EMP-UPDATE-001` | Modifica dati dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |

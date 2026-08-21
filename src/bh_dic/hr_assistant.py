@@ -70,6 +70,16 @@ _PAYROLL_MONTH = re.compile(
     re.IGNORECASE,
 )
 _PAYROLL_YEAR = re.compile(r"\b(20\d{2})\b")
+_NET_PAY_REQUEST = re.compile(
+    r"\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\b|\bnett\w*\s+(?:mensile|da\s+pagare)\b",
+    re.IGNORECASE,
+)
+_NET_PAY_TARGET = re.compile(
+    r"(?is)\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\s+"
+    r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
+    r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di)\s+(?:gennaio|febbraio|marzo|aprile|"
+    r"maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b|[?!.]|$)"
+)
 _MONTH_NUMBER_BY_NAME = {
     "gennaio": 1,
     "febbraio": 2,
@@ -262,6 +272,8 @@ def is_operational_hr_request(request: str) -> bool:
         return True
     if is_payroll_presence_request(request):
         return True
+    if _NET_PAY_REQUEST.search(request) is not None:
+        return True
     if (
         _ACTIVATE_ACTION.search(request) is not None
         or _DEACTIVATE_ACTION.search(request) is not None
@@ -384,6 +396,38 @@ def parse_local_operational_intent(
                 clarification=clarification,
             ),
             target_query=target_query,
+        )
+
+    if _NET_PAY_REQUEST.search(text) is not None:
+        employee_id, _ = _status_target(text)
+        pay_target_query: str | None = None
+        if employee_id is None:
+            target = _NET_PAY_TARGET.search(text)
+            if target is not None:
+                candidate = " ".join(target.group(1).strip(" .,:;!?\"'").split())
+                if (
+                    candidate
+                    and len(candidate) <= 128
+                    and _TECHNICAL_TARGET.search(candidate) is None
+                ):
+                    pay_target_query = candidate
+        period = local_payroll_presence_period(text, today=today)
+        if period is None:
+            previous = today.replace(day=1) - timedelta(days=1)
+            period = (previous.year, previous.month)
+        clarification = None
+        if employee_id is None and pay_target_query is None:
+            clarification = "Indica l'Employee ID oppure un nome da cercare."
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-PAY-001",
+                action_class=ActionClass.READ,
+                sensitivity=Sensitivity.HIGH,
+                employee_id=employee_id,
+                parameters={"year": period[0], "month": period[1], "include_net": True},
+                clarification=clarification,
+            ),
+            target_query=pay_target_query,
         )
 
     export_format = _export_format(text)

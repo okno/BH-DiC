@@ -389,7 +389,7 @@ async def test_public_aggregate_is_published_only_after_private_defer_is_complet
     [
         (
             DicUiChangedError("EMP-SYNTH-PRIVATE DOM detail"),
-            "Dipendenti in Cloud non è disponibile",
+            "La sessione DIC è attiva",
         ),
         (
             IntentProviderError("private provider body", provider="groq"),
@@ -979,7 +979,7 @@ async def test_operational_channel_dic_failure_returns_a_typed_safe_reply() -> N
     raw_coordinator.ask.assert_awaited_once()
     raw_responder.assert_not_awaited()
     rendered = cast(str, message.replies[0][0][0])
-    assert "Dipendenti in Cloud non è disponibile" in rendered
+    assert "La sessione DIC è attiva" in rendered
     assert "PRIVATE" not in rendered
     await bot.close()
 

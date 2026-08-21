@@ -42,6 +42,7 @@ TODAY = date(2026, 8, 20)
         ("genera excel contratti in scadenza il prossimo mese", "EMP-EXPORT-001"),
         ("quali dipendenti hanno una busta paga a luglio?", "EMP-PAY-002"),
         ("fammi la lista di chi ha il cedolino di dicembre 2025", "EMP-PAY-002"),
+        ("qual è lo stipendio netto di Amin del mese di luglio?", "EMP-PAY-001"),
         ("attiva un dipendente Mario Rossi", "EMP-STATUS-002"),
         ("riattiva dipendente id EMP-SYNTH-001", "EMP-STATUS-002"),
         ("riativa il dipende Mario Rossi", "EMP-STATUS-002"),
@@ -111,6 +112,25 @@ def test_collective_payroll_presence_resolves_month_and_year_locally() -> None:
     assert parsed is not None
     assert parsed.envelope.function_id == "EMP-PAY-002"
     assert parsed.envelope.parameters == {"year": 2026, "month": 7}
+
+
+def test_individual_net_pay_keeps_name_local_and_defaults_to_previous_month() -> None:
+    named = parse_local_operational_intent(
+        "qual è lo stipendio netto di Amin del mese di luglio?",
+        today=TODAY,
+    )
+    previous = parse_local_operational_intent(
+        "dimmi lo stipendio netto di Amin",
+        today=TODAY,
+    )
+
+    assert named is not None
+    assert named.envelope.function_id == "EMP-PAY-001"
+    assert named.target_query == "Amin"
+    assert named.envelope.employee_id is None
+    assert named.envelope.parameters == {"year": 2026, "month": 7, "include_net": True}
+    assert previous is not None
+    assert previous.envelope.parameters == {"year": 2026, "month": 7, "include_net": True}
 
 
 def test_doc_is_an_alias_for_a_real_docx_export() -> None:

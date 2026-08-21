@@ -1136,10 +1136,12 @@ async def test_payroll_read_renders_only_useful_minimized_metadata() -> None:
     finally:
         await adapter.close()
 
-    assert result.description == "Record minimizzati: 1; mostrati: 1"
-    assert result.fields[0].name == "Record 1"
+    assert result.description == (
+        "Ho consultato la sezione Buste paga di Dipendenti in Cloud. Record trovati: 1."
+    )
+    assert result.fields[0].name == "01/2026"
     assert result.fields[0].value == (
-        "Anno: 2026 · mese: 1 · stato: published · pubblicata: 2026-02-01"
+        "Netto a pagare: **—** · emessa: 2026-02-01 · stato: published\nPDF non disponibile"
     )
     assert "PAY-SYNTH-001" not in result.fields[0].value
 
@@ -1554,7 +1556,7 @@ async def test_contract_query_without_employee_id_is_allowed_and_paginated() -> 
             LogicalRole.HR_READ,
             "EMP-SYNTH-001",
             {"year": 2026},
-            "Metadati buste paga EMP-SYNTH-001",
+            "Busta paga EMP-SYNTH-001",
         ),
         (
             "EMP-DOC-001",
