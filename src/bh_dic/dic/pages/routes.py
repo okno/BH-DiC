@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
+from bh_dic.dic.balance_capture import BalanceResponseCapture, empty_balance_from_response
 from bh_dic.dic.employee_list_capture import (
     EMPLOYEE_LIST_PAGE_SIZE,
     EmployeeListResponseCapture,
@@ -1210,8 +1211,45 @@ class EmployeeMaturationsPage(BaseDicPage):
 class EmployeeBalancePage(BaseDicPage):
     route_template = "/it/app/employees/info/{employee_id}/counters"
 
-    async def read(self, employee_id: str, year: int) -> BalanceResult:
-        await self.open(employee_id)
+    _HYDRATION_POLL_SECONDS = 0.05
+
+    async def _wait_for_year_control(self) -> tuple[Literal["custom", "legacy"], int | None]:
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        while True:
+            custom = await self.locate("balance.year_selector", required=False)
+            if custom is not None:
+                current_text = await self.read_text("balance.year_current")
+                if current_text is not None and current_text.isdigit():
+                    current = int(current_text)
+                    if 2000 <= current <= 2200:
+                        return "custom", current
+            legacy = await self.locate("balance.year", required=False)
+            if legacy is not None:
+                return "legacy", None
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("balance page did not hydrate")
+            await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _select_custom_year(self, current: int, expected: int) -> None:
+        if abs(expected - current) > 50:
+            raise DicValidationError("requested balance year is outside the bounded UI range")
+        while current != expected:
+            key = "balance.year_next" if expected > current else "balance.year_previous"
+            await self.click(key)
+            wanted = current + (1 if expected > current else -1)
+            deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+            while True:
+                observed = await self.read_text("balance.year_current")
+                if observed == str(wanted):
+                    current = wanted
+                    break
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise DicUiChangedError("balance year selection did not settle")
+                await asyncio.sleep(min(self._HYDRATION_POLL_SECONDS, remaining))
+
+    async def _read_legacy(self, employee_id: str, year: int) -> BalanceResult:
         await self.select("balance.year", str(year))
         rows = await self.all_matches("balance.rows")
         lines: list[BalanceLine] = []
@@ -1229,6 +1267,30 @@ class EmployeeBalancePage(BaseDicPage):
                 )
             )
         return BalanceResult(employee_id=employee_id, year=year, lines=tuple(lines))
+
+    async def read(self, employee_id: str, year: int) -> BalanceResult:
+        if isinstance(year, bool) or year not in range(2000, 2201):
+            raise DicValidationError("year must be between 2000 and 2200")
+        with BalanceResponseCapture(self.page) as capture:
+            navigation_mark = capture.mark()
+            await self.open(employee_id)
+            control_kind, current_year = await self._wait_for_year_control()
+            if control_kind == "legacy":
+                return await self._read_legacy(employee_id, year)
+            if current_year is None:
+                raise DicUiChangedError("balance year is unavailable")
+            response_mark = navigation_mark
+            if year != current_year:
+                response_mark = capture.mark()
+                await self._select_custom_year(current_year, year)
+            response = await capture.wait_for(
+                employee_id,
+                year,
+                after_sequence=response_mark,
+                timeout_ms=self.timeout_ms,
+            )
+            await empty_balance_from_response(response, employee_id=employee_id, year=year)
+        return BalanceResult(employee_id=employee_id, year=year, lines=())
 
     async def read_correction_state(
         self, employee_id: str, year: int, month: int, category: str

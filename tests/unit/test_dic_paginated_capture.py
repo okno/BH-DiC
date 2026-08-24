@@ -99,6 +99,21 @@ async def test_parser_accepts_additive_fields_but_requires_identity_fields() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"current_page":1,"current_page":1}',
+        b'{"current_page":NaN}',
+    ],
+)
+async def test_parser_rejects_duplicate_keys_and_nonfinite_numbers(body: bytes) -> None:
+    response = Response(_document())
+    response._body = body
+    with pytest.raises(DicUiChangedError, match="response document"):
+        await page_from_response(response, contract=CONTRACT, employee_id="123")
+
+
+@pytest.mark.asyncio
 async def test_parser_rejects_wrong_employee_origin_method_and_unknown_query() -> None:
     with pytest.raises(DicUiChangedError, match="requested employee"):
         await page_from_response(

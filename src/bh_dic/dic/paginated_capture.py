@@ -113,6 +113,30 @@ class _ResponseMismatch(DicUiChangedError):
     pass
 
 
+def _reject_non_finite(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant is forbidden: {value}")
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def strict_json_loads(raw: bytes | str) -> object:
+    """Decode first-party JSON without accepting duplicate keys or non-finite numbers."""
+
+    text = raw.decode("utf-8", errors="strict") if isinstance(raw, bytes) else raw
+    return json.loads(
+        text,
+        parse_constant=_reject_non_finite,
+        object_pairs_hook=_unique_object,
+    )
+
+
 def _failure(resource: str, reason: str) -> DicUiChangedError:
     return DicUiChangedError(f"{resource} response validation failed: {reason}")
 
@@ -275,8 +299,8 @@ async def page_from_response(
     if len(body) > MAX_RESPONSE_BYTES:
         raise _failure(contract.resource, "response exceeds read limit")
     try:
-        document = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        document = strict_json_loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         raise _failure(contract.resource, "invalid response document") from None
     return _page_from_document(
         document,
@@ -312,8 +336,8 @@ def _page_from_fetch(
         raise _failure(contract.resource, "unexpected next-page response")
     _validate_url(url, contract, employee_id, expected_page=expected_page)
     try:
-        document = json.loads(body)
-    except json.JSONDecodeError:
+        document = strict_json_loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         raise _failure(contract.resource, "invalid response document") from None
     page = _page_from_document(
         document,
@@ -427,4 +451,5 @@ __all__ = [
     "PaginatedResponseCapture",
     "collect_complete_pages",
     "page_from_response",
+    "strict_json_loads",
 ]
