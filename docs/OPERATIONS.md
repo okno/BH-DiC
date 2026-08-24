@@ -22,8 +22,8 @@
 La 0.2.7 separa il gateway dal login DIC e conserva cifrato lo snapshot bounded
 `sessionStorage`; la 0.2.8 limita il contratto TeamSystem/OIDC alle route esatte documentate. La
 0.3.0 aggiunge presenter Senior HR, lettura passiva elenco, refresh del vault e telemetria token.
-Le risorse read attraversate dal gate sono `LIVE_READ_VERIFIED`; il test payroll collettivo,
-l'inbound Discord e tutte le write restano evidenze separate. Il primo deny RBAC resta
+Le risorse read attraversate dal gate, inclusa la traversata payroll collettiva, sono
+`LIVE_READ_VERIFIED`; l'inbound Discord e tutte le write restano evidenze separate. Il primo deny RBAC resta
 un'evidenza storica, non il risultato della configurazione corrente.
 
 ## Runbook giornaliero

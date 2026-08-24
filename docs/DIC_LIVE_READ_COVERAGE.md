@@ -39,6 +39,6 @@ ricognizione. I relativi flag di accesso restano leggibili.
 
 - Il gate dimostra le superfici e i contratti implementati, non che ogni dipendente abbia almeno
   un record in ciascuna sezione.
-- La query collettiva payroll attraversa serialmente i dipendenti; è testata con mock/contract ma
-  il round-trip collettivo completo non è incluso nel gate rapido di avvio.
+- La query collettiva payroll attraversa serialmente i dipendenti; il round-trip completo di
+  luglio 2026 ha scansionato l'intero elenco ed è riuscito sullo SHA applicativo finale.
 - Nessuna write e nessun download documento sono stati eseguiti.

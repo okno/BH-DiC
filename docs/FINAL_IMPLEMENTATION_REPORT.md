@@ -2,7 +2,7 @@
 
 Baseline revision: `98b03932ca1bf548bff44a82a1fedd976e5603d0` on `main`.
 Discovery and live-read verification: 2026-08-24. Last production revision covered by the complete
-read gate before this report: `3d9283a8070aa3f73bd061adc3b608bb1440c1b5`.
+read gate before this report: `ec3359403a27c61226fe9193c2c76e58fb818881`.
 
 ## Outcome
 
@@ -57,6 +57,10 @@ The authorized production gate returned `success=true`, `failed=[]` and verified
 For contract, balance and document surfaces, a separate read-only schema probe also exercised a
 non-empty response. The machine report contains only sanitized states and counts. It contains no
 names, Employee IDs, payroll values, document categories or signed URLs.
+
+The exact collective July payroll request also completed on the final application revision: it
+scanned the complete 56-employee listing and returned a bounded match set. Only aggregate counts
+were printed during verification; identities and payroll values remained in process memory.
 
 Workplaces and schedule-model assignments are available through the employee projection and their
 lookup endpoints were discovered. Dedicated expense/travel and complete shift/timesheet datasets

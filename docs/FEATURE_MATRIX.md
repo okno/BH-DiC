@@ -54,7 +54,7 @@ catalogo esclude anche dalla tool exposure ordinaria.
 | `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 | `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 | `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read + `payroll:read`; link con `protected_documents:download` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_VERIFIED 2026-08-24 |
-| `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read + `payroll:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per la sorgente payroll; query collettiva live da rieseguire |
+| `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read + `payroll:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED con traversata collettiva completa |
 | `EMP-DOC-001` | metadati documenti | document operator + `documents:metadata` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 
 ## Write, file ed export

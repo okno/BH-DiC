@@ -11,8 +11,9 @@ riavvio.
 - Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato un gate live autorizzato in
   sola lettura per autenticazione/tenant, elenco completo, riepilogo, ruoli, timbratura target,
   contratti, maturazioni, bilanci, payroll e documenti. Non sono state eseguite write live.
-- La prova riguarda un dipendente rappresentativo per le risorse individuali. Non certifica che
-  ogni dipendente abbia record in ciascun modulo né la query payroll collettiva completa.
+- La prova riguarda un dipendente rappresentativo per le risorse individuali e include una
+  traversata payroll collettiva completa. Non certifica che ogni dipendente abbia record in
+  ciascun modulo.
 - `data-testid`, attributi `data-*`, ordinamento dei fallback e controlli distintivi delle pagine
   HR richiedono rivalidazione dopo ogni cambio UI. Un cambio può produrre `DicUiChangedError` e
   aprire il circuit breaker.

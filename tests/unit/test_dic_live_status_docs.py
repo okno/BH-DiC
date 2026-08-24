@@ -20,7 +20,6 @@ PARTIALLY_COMPLETED_FUNCTIONS = {
     "EMP-INVITE-001",
 }
 LIVE_NOT_AVAILABLE_FUNCTIONS = PARTIALLY_COMPLETED_FUNCTIONS - {"EMP-CREATE-001"}
-COLLECTIVE_READ_REQUIRING_LIVE_TRAVERSAL = {"EMP-PAY-002"}
 
 
 def _matrix_rows() -> dict[str, str]:
@@ -48,10 +47,7 @@ def test_live_matrix_preserves_truthful_read_and_write_statuses() -> None:
     for function_id in READ_FUNCTION_IDS:
         row = rows[function_id]
         assert "IMPLEMENTED — TESTED_WITH_MOCK" in row
-        if function_id in COLLECTIVE_READ_REQUIRING_LIVE_TRAVERSAL:
-            assert "traversata collettiva da verificare live" in row
-        else:
-            assert "LIVE_READ_VERIFIED" in row
+        assert "LIVE_READ_VERIFIED" in row
 
     for function_id in WRITE_FUNCTION_IDS:
         row = rows[function_id]
