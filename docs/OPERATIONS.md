@@ -7,14 +7,12 @@
   runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
 - Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
 - Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- commit applicativo della versione `0.3.0`, SHA esatto
-  `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, distribuito e verificato con un unico gate live
-  autorizzato in sola lettura; gli hotfix operativi/documentali successivi restano evidenza
-  separata;
-- autenticazione/tenant, conteggio aggregato `PUBLIC`/non-ephemeral, scadenze bounded del prossimo
-  mese di calendario `SENSITIVE`/ephemeral, telemetria token e status API/token verificati;
-- servizio `active/running`, zero riavvii osservati e gateway `discord_ready`; smoke del trasporto
-  Discord 0.3.0 ancora `PENDING`;
+- SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` distribuito e verificato con il gate live
+  autorizzato in sola lettura su tutte le risorse read implementate;
+- autenticazione/tenant, elenco completo, riepilogo, ruoli, timbratura target, contratti,
+  maturazioni, bilanci, payroll, documenti, telemetria token e status verificati;
+- servizio `active/running`, zero riavvii osservati, gateway `discord_ready` e startup outbound
+  Discord verificato; il round-trip inbound richiede un utente reale autorizzato;
 - check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED` e tenant
   `VERIFIED_BY_ADAPTER` nel processo corrente; il vault pre-0.2.7 non conservava `sessionStorage`;
 - comando guild-scoped registrato e gateway storicamente responsivo; primo smoke negato dal gate
@@ -24,9 +22,9 @@
 La 0.2.7 separa il gateway dal login DIC e conserva cifrato lo snapshot bounded
 `sessionStorage`; la 0.2.8 limita il contratto TeamSystem/OIDC alle route esatte documentate. La
 0.3.0 aggiunge presenter Senior HR, lettura passiva elenco, refresh del vault e telemetria token.
-Soltanto i due subset read bounded attraversati dal gate sono `LIVE_READ_VERIFIED`; altre read,
-trasporto Discord e tutte le write restano separati. Il primo deny RBAC resta un'evidenza storica,
-non il risultato dello smoke Discord ancora da eseguire.
+Le risorse read attraversate dal gate sono `LIVE_READ_VERIFIED`; il test payroll collettivo,
+l'inbound Discord e tutte le write restano evidenze separate. Il primo deny RBAC resta
+un'evidenza storica, non il risultato della configurazione corrente.
 
 ## Runbook giornaliero
 

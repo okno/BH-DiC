@@ -21,7 +21,13 @@ def test_registry_contains_every_current_page_template_once() -> None:
         RouteVerificationState.LIVE_READ_VERIFIED
     )
     assert DIC_ROUTES.get("employees.contracts").verification is (
-        RouteVerificationState.DEGRADED_SCHEMA
+        RouteVerificationState.LIVE_READ_VERIFIED
+    )
+    assert DIC_ROUTES.get("employees.balances").verification is (
+        RouteVerificationState.LIVE_READ_VERIFIED
+    )
+    assert DIC_ROUTES.get("employees.documents").verification is (
+        RouteVerificationState.LIVE_READ_VERIFIED
     )
 
 

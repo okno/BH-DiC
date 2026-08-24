@@ -6,30 +6,33 @@ non deve essere mantenuta come secondo catalogo runtime.
 ## Stato verificato
 
 - **32/32** Function ID hanno specifica policy e percorso mock sintetico testato.
-- **13 read**: tutte hanno policy e test sintetici. La ricognizione read-only del 2026-08-24 ha
-  verificato live elenco, riepilogo, ruoli, target timbratura e payroll. Contratti, maturazioni e
-  documenti sono stati migrati al contratto first-party paginato e sono `CONTRACT_VERIFIED`, ma
-  richiedono il nuovo gate live dopo il deploy. Bilanci restano `DEGRADED_SCHEMA`.
+- **14 read**: tutte hanno policy e test sintetici. Il gate read-only del 2026-08-24 sullo SHA
+  `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha verificato live elenco completo, riepilogo,
+  ruoli, target timbratura, contratti, maturazioni, bilanci, payroll e documenti. Un empty state
+  valido non viene confuso con un errore; per contratti, bilanci e documenti è stato verificato
+  separatamente anche uno schema non vuoto, senza stampare contenuti personali.
 - **14 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; **5 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
   limitato al subset verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e
   `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. `EMP-EXPORT-001` genera artifact locali
-  in memoria; la sorgente dati live resta `NEEDS_VALIDATION`. I 19 Function ID write
+  in memoria; le sorgenti read sono verificate, mentre l'artifact resta `CONTRACT_VERIFIED` con
+  dati sintetici. I 19 Function ID write
   sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
-- La versione 0.3.0, SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target
-  Debian un unico gate applicativo live autorizzato in sola lettura per i due subset sopra. Lo
-  smoke del trasporto Discord resta `PENDING`; il servizio è `active/running`, con zero riavvii
-  osservati e gateway `discord_ready`, mentre tutte le write restano disabilitate.
+- Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato sul target Debian il gate
+  applicativo live autorizzato in sola lettura sulle superfici sopra. L'invio outbound del
+  messaggio startup Discord è verificato; un nuovo round-trip inbound manuale resta da eseguire
+  dal client Discord. Nessuna write live è stata eseguita.
 
 La 0.3.0 estende i percorsi read senza ampliare il catalogo: `EMP-READ-001` usa la risposta elenco
 emessa dalla UI sotto schema chiuso; `EMP-CONTRACT-001` può analizzare le date del contratto
 corrente sull'intero elenco paginato senza fetch per-dipendente. La semantica “totale” e gli
 intervalli relativi sono risolti localmente. `current_contract` accetta per-record soltanto i
 keyset esatti `BASE` o `EXTENDED=BASE+6` chiavi tecniche; queste ultime hanno shape stretta e sono
-discard-only. Il gate live prova soltanto i due subset esplicitamente indicati, non l'intera
-superficie read.
+discard-only. Il gate live rapido verifica ogni risorsa una volta su un dipendente
+rappresentativo; non dimostra che ogni dipendente abbia record in ogni modulo e non sostituisce
+il test collettivo payroll.
 
 “Tool eligible” significa soltanto che il catalogo permette l'esposizione dopo tutti i filtri.
 Con i flag write correnti a `false`, nessuna write viene esposta. “Mai” indica le funzioni che il
@@ -39,20 +42,20 @@ catalogo esclude anche dalla tool exposure ordinaria.
 
 | Function ID | Funzione | Ruolo/scope minimo | Flag | Tool | Stato |
 |---|---|---|---|---|---|
-| `EMP-READ-001` | elenco/conteggio; totale non qualificato = intero organico | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per il solo conteggio aggregato bounded; altre modalità NEEDS_VALIDATION |
-| `EMP-READ-002` | riepilogo anagrafico redatto | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-SEARCH-001` | ricerca dipendente | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-FILTER-001` | filtri elenco | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-SORT-001` | ordinamento | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-PAGE-001` | paginazione | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-CONTRACT-001` | contratti e scadenze bulk senza N+1 | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per le sole scadenze bounded del prossimo mese di calendario; altre modalità NEEDS_VALIDATION |
-| `EMP-RBAC-001` | gruppi/ruoli | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-READ-001` | elenco/conteggio; totale non qualificato = intero organico | read-only aggregate o HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-READ-002` | riepilogo anagrafico redatto | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-SEARCH-001` | ricerca dipendente | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED sulla sorgente elenco; matching locale |
+| `EMP-FILTER-001` | filtri elenco | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED sulla sorgente elenco; filtro locale |
+| `EMP-SORT-001` | ordinamento | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED sulla sorgente elenco; sort locale |
+| `EMP-PAGE-001` | paginazione | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-CONTRACT-001` | contratti e scadenze bulk senza N+1 | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-RBAC-001` | gruppi/ruoli | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per target singolo |
+| `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 | `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read + `payroll:read`; link con `protected_documents:download` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_VERIFIED 2026-08-24 |
 | `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read + `payroll:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per la sorgente payroll; query collettiva live da rieseguire |
-| `EMP-DOC-001` | metadati documenti | document operator + `documents:metadata` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_GATE_REQUIRED |
+| `EMP-DOC-001` | metadati documenti | document operator + `documents:metadata` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 
 ## Write, file ed export
 
@@ -77,7 +80,7 @@ richiedente. Il numero `0` non elimina preview, conferma, RBAC, idempotenza o po
 | `EMP-DOC-002` | upload documento | `ENABLE_DOCUMENT_UPLOAD` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-004` | metadati documento | `ENABLE_DOCUMENT_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-005` | elimina documento | `ENABLE_DOCUMENT_DELETE` | A2 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
-| `EMP-EXPORT-001` | export PDF/DOCX/XLSX locale in memoria | `ENABLE_EXPORT` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; dati live NEEDS_VALIDATION |
+| `EMP-EXPORT-001` | export PDF/DOCX/XLSX locale in memoria | `ENABLE_EXPORT` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — CONTRACT_VERIFIED — DISABLED_BY_POLICY; nessun export live eseguito |
 | `EMP-DOC-003` | download locale protetto | `ENABLE_DOCUMENT_DOWNLOAD` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |
 | `EMP-DELETE-001` | elimina dipendente | `ENABLE_EMPLOYEE_DELETE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-CONTRACT-003` | elimina contratto | `ENABLE_CONTRACT_DELETE` | A2 | mai | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |

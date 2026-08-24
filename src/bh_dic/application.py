@@ -1573,15 +1573,46 @@ class BHApplicationCoordinator(InteractionCoordinator):
         if function_id == "EMP-MAT-001":
             employee_id = self._require_employee(intent)
             maturation_records = await self.dic.get_maturations(employee_id)
+            shown_maturations = maturation_records[:25]
+            maturation_attachments: tuple[ResponseAttachment, ...] = ()
+            if len(maturation_records) > len(shown_maturations):
+                rows = ["category\tvalid_from\tvalid_to\tstatus"]
+                rows.extend(
+                    "\t".join(
+                        (
+                            record.category.replace("\t", " ").replace("\n", " "),
+                            record.valid_from or "",
+                            record.valid_to or "",
+                            record.status or "",
+                        )
+                    )
+                    for record in maturation_records
+                )
+                content = ("\n".join(rows) + "\n").encode("utf-8")
+                if len(content) > self._response_attachment_max_bytes:
+                    raise ApplicationError(
+                        "maturation result exceeds the configured attachment limit"
+                    )
+                maturation_attachments = (
+                    ResponseAttachment(
+                        filename="maturazioni.tsv",
+                        content_type="text/tab-separated-values; charset=utf-8",
+                        content=content,
+                    ),
+                )
             return InteractionResult(
                 title=f"Maturazioni {employee_id}",
-                description=f"Record: {len(maturation_records)}",
+                description=(
+                    f"Record totali: {len(maturation_records)} · "
+                    f"mostrati: {len(shown_maturations)} · acquisizione completa"
+                ),
                 fields=tuple(
                     ResultField(
                         record.category, f"{record.valid_from or '—'} → {record.valid_to or '—'}"
                     )
-                    for record in maturation_records[:25]
+                    for record in shown_maturations
                 ),
+                attachments=maturation_attachments,
                 correlation_id=correlation_id,
             )
         if function_id == "EMP-BAL-001":
@@ -1665,6 +1696,34 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     success=False,
                 )
 
+            shown_payroll_records = payroll_records[:25]
+            payroll_attachments: tuple[ResponseAttachment, ...] = ()
+            if len(payroll_records) > len(shown_payroll_records):
+                rows = ["year\tmonth\tstatus\tpublished_at\tnet_cents\tpdf_available"]
+                rows.extend(
+                    "\t".join(
+                        (
+                            str(record.year),
+                            str(record.month or ""),
+                            (record.status or "").replace("\t", " ").replace("\n", " "),
+                            record.published_at or "",
+                            str(record.net_cents) if record.net_cents is not None else "",
+                            "yes" if record.attachment_url is not None else "no",
+                        )
+                    )
+                    for record in payroll_records
+                )
+                content = ("\n".join(rows) + "\n").encode("utf-8")
+                if len(content) > self._response_attachment_max_bytes:
+                    raise ApplicationError("payroll result exceeds the configured attachment limit")
+                payroll_attachments = (
+                    ResponseAttachment(
+                        filename=f"buste_paga_{payroll_records[0].year}.tsv",
+                        content_type="text/tab-separated-values; charset=utf-8",
+                        content=content,
+                    ),
+                )
+
             def net_text(record: PayrollMetadata) -> str:
                 if record.net_cents is None:
                     return "—"
@@ -1686,7 +1745,8 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 title=f"Busta paga {employee_id}",
                 description=(
                     f"Ho consultato la sezione Buste paga di Dipendenti in Cloud. "
-                    f"Record trovati: {len(payroll_records)}."
+                    f"Record totali: {len(payroll_records)} · "
+                    f"mostrati: {len(shown_payroll_records)} · acquisizione completa."
                 ),
                 fields=tuple(
                     ResultField(
@@ -1699,8 +1759,9 @@ class BHApplicationCoordinator(InteractionCoordinator):
                             f"stato: {record.status or '—'}\n{attachment_text(record)}"
                         ),
                     )
-                    for record in payroll_records[:25]
+                    for record in shown_payroll_records
                 ),
+                attachments=payroll_attachments,
                 correlation_id=correlation_id,
             )
         if function_id == "EMP-PAY-002":
@@ -1762,17 +1823,49 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 normalized_document_status = "pending"
             document_query = DocumentQuery(state=normalized_document_status)
             document_records = await self.dic.get_document_metadata(employee_id, document_query)
+            shown_documents = document_records[:25]
+            document_attachments: tuple[ResponseAttachment, ...] = ()
+            if len(document_records) > len(shown_documents):
+                rows = ["document_id\tcategory\tstate\texpiry_date\tuploaded_at"]
+                rows.extend(
+                    "\t".join(
+                        (
+                            record.document_id,
+                            (record.category or "").replace("\t", " ").replace("\n", " "),
+                            record.state,
+                            record.expiry_date or "",
+                            record.uploaded_at or "",
+                        )
+                    )
+                    for record in document_records
+                )
+                content = ("\n".join(rows) + "\n").encode("utf-8")
+                if len(content) > self._response_attachment_max_bytes:
+                    raise ApplicationError(
+                        "document result exceeds the configured attachment limit"
+                    )
+                document_attachments = (
+                    ResponseAttachment(
+                        filename="documenti.tsv",
+                        content_type="text/tab-separated-values; charset=utf-8",
+                        content=content,
+                    ),
+                )
             return InteractionResult(
                 title=f"Metadati documenti {employee_id}",
-                description=f"Record: {len(document_records)}",
+                description=(
+                    f"Record totali: {len(document_records)} · "
+                    f"mostrati: {len(shown_documents)} · acquisizione completa"
+                ),
                 fields=tuple(
                     ResultField(
                         record.document_id,
                         f"{record.category or '—'} · {record.state} · "
                         f"scadenza {record.expiry_date or '—'}",
                     )
-                    for record in document_records[:25]
+                    for record in shown_documents
                 ),
+                attachments=document_attachments,
                 correlation_id=correlation_id,
             )
         raise ApplicationError(f"read dispatcher missing for {function_id}")

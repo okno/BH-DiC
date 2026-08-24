@@ -62,6 +62,40 @@ def test_compound_plan_has_ordered_read_only_steps_and_local_dates() -> None:
     assert plan.sensitivity is Sensitivity.HIGH
 
 
+@pytest.mark.parametrize(
+    ("utterance", "function_id", "target_query"),
+    [
+        ("Mostrami i documenti del dipendente Test A.", "EMP-DOC-001", "Test A"),
+        ("Che ruoli ha il dipendente Test A?", "EMP-RBAC-001", "Test A"),
+        ("Verifica la timbratura del dipendente Test A", "EMP-TIME-001", "Test A"),
+        ("Bilancio 2025 del dipendente Test A", "EMP-BAL-001", "Test A"),
+        ("Maturazioni del dipendente Test A", "EMP-MAT-001", "Test A"),
+        ("Fammi vedere tutti i dati del dipendente Test A", "EMP-READ-002", "Test A"),
+    ],
+)
+def test_daily_employee_resources_are_planned_locally(
+    utterance: str, function_id: str, target_query: str
+) -> None:
+    planned = build_local_hr_query_plan(utterance, today=TODAY)
+    assert planned is not None
+    assert planned.plan.steps[0].function_id == function_id
+    assert planned.plan.entity_resolution is EntityResolutionMode.LOCAL_SEARCH
+    assert planned.legacy_intent is not None
+    assert planned.legacy_intent.target_query == target_query
+
+
+def test_contract_relative_period_is_local_and_does_not_require_an_employee() -> None:
+    planned = build_local_hr_query_plan(
+        "Quali contratti scadono nei prossimi tre mesi?", today=TODAY
+    )
+    assert planned is not None
+    assert planned.plan.steps[0].function_id == "EMP-CONTRACT-001"
+    assert planned.plan.clarification_required is False
+    assert planned.legacy_intent is not None
+    assert planned.legacy_intent.envelope.date_from == TODAY
+    assert planned.legacy_intent.envelope.date_to == date(2026, 11, 24)
+
+
 def test_plan_rejects_writes_real_entity_values_and_unordered_dependencies() -> None:
     base = {
         "intent": "synthetic_read",
@@ -202,9 +236,35 @@ def test_at_least_120_natural_italian_requests_cross_a_safe_planning_boundary() 
     }.issubset(categories)
     for category, request in corpus:
         planned = build_local_hr_query_plan(request, today=TODAY)
-        if category in {"count", "payroll_target", "payroll_presence", "compound"}:
-            assert planned is not None, request
+        assert planned is not None, request
+        assert prepare_provider_input(request)
+        expected = {
+            "count": "EMP-READ-001",
+            "payroll_target": "EMP-PAY-001",
+            "payroll_presence": "EMP-PAY-002",
+            "documents": "EMP-DOC-001",
+            "roles": "EMP-RBAC-001",
+            "timestamps": "EMP-TIME-001",
+            "balances": "EMP-BAL-001",
+            "maturations": "EMP-MAT-001",
+            "contracts": "EMP-CONTRACT-001",
+        }
+        if category == "compound":
+            assert [step.function_id for step in planned.plan.steps] == [
+                "EMP-READ-001",
+                "EMP-CONTRACT-001",
+                "EMP-PAY-002",
+            ]
+            assert planned.plan.clarification_required is False
         else:
-            # Provider-routed paraphrases still cross the local minimization gate;
-            # no destructive keyword pre-filter may discard them at transport.
-            assert prepare_provider_input(request)
+            assert planned.plan.steps[0].function_id == expected[category]
+            if category in {
+                "documents",
+                "roles",
+                "timestamps",
+                "balances",
+                "maturations",
+                "contracts",
+            }:
+                assert planned.plan.clarification_required is True
+                assert planned.plan.delivery_mode is DeliveryMode.EPHEMERAL

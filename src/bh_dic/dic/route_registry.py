@@ -165,7 +165,7 @@ _ROUTES = (
         RouteSensitivity.PERSONAL,
         30_000,
         "resource_circuit_then_fail",
-        RouteVerificationState.DEGRADED_SCHEMA,
+        RouteVerificationState.LIVE_READ_VERIFIED,
         ("701fd4eccadeaf8ebe675bcadbe78807c5254bb85bde936e40a9ff84fd171138",),
     ),
     DicRouteSpec(
@@ -178,20 +178,20 @@ _ROUTES = (
         RouteSensitivity.PERSONAL,
         30_000,
         "resource_circuit_then_fail",
-        RouteVerificationState.DEGRADED_SCHEMA,
+        RouteVerificationState.LIVE_READ_VERIFIED,
         ("65c6845f23b0e9508ebfbccab022f826bd2753879c790253f985c0846f50a38d",),
     ),
     DicRouteSpec(
         "employees.balances",
         "/it/app/employees/info/{employee_id}/counters",
-        ("balance.year",),
+        ("balance.year_selector", "balance.year_current"),
         ("balance.rows", "balance.month"),
         ("counters", "balances", "corrections"),
         ("read", "write"),
         RouteSensitivity.HIGHLY_CONFIDENTIAL,
         30_000,
         "resource_circuit_then_fail",
-        RouteVerificationState.DEGRADED_SCHEMA,
+        RouteVerificationState.LIVE_READ_VERIFIED,
         ("6b14f0968884b7feb7be1ce46208632117ee01b31245ac9ff7375c381cfe3f5a",),
     ),
     DicRouteSpec(
@@ -216,7 +216,7 @@ _ROUTES = (
         RouteSensitivity.HIGHLY_CONFIDENTIAL,
         30_000,
         "resource_circuit_then_fail",
-        RouteVerificationState.DEGRADED_SCHEMA,
+        RouteVerificationState.LIVE_READ_VERIFIED,
     ),
 )
 

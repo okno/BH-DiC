@@ -1,23 +1,22 @@
 # Stato di verifica live DIC
 
-## Integrazioni: stato osservato al 17 agosto 2026
+## Integrazioni: stato osservato al 24 agosto 2026
 
 | Integrazione | Stato documentato | Evidenza ancora richiesta |
 |---|---|---|
 | OpenAI | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | `model-check --live` autorizzato: autenticazione, modello e contratto chiuso |
 | Groq | `LIVE_VERIFIED` per `openai/gpt-oss-120b` | Verificare nuovamente dopo rotazione chiave, cambio modello o aggiornamento provider |
 | llama locale | configurazione implementata; `LIVE_PROVIDER_UNVERIFIED` | runtime/modello/protezione host e `model-check --live` autorizzato |
-| Discord | trasporto storico verificato su una release precedente; servizio 0.3.0 `active/running`, zero riavvii osservati e gateway `discord_ready`; il gate applicativo ha verificato sensibilità `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, non il round-trip slash | Smoke trasporto 0.3.0 RBAC/read-only/HR-read ancora `PENDING` |
-| DIC | `LIVE_AUTHENTICATED` e tenant attestato; conteggio aggregato, scadenze bounded e payroll individuale bounded `LIVE_READ_VERIFIED` | Altre modalità read e futuri cambi UI/API `NEEDS_VALIDATION`; nessuna write live |
-| Debian deployment | commit applicativo `0.3.0` allo SHA `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, gate live PASS; servizio `active/running`, zero riavvii osservati, gateway `discord_ready`; hotfix operativi successivi con gate/deployment separati | Smoke trasporto Discord e restore drill `PENDING` |
+| Discord | servizio `active/running`, zero riavvii osservati, gateway `discord_ready`; startup outbound nel canale HR configurato inviato con `dic_available=true` | Nuovo round-trip inbound da utente reale autorizzato |
+| DIC | `LIVE_AUTHENTICATED`, tenant attestato; elenco, summary, ruoli, timbratura target, contratti, maturazioni, bilanci, payroll e documenti `LIVE_READ_VERIFIED` | Query payroll collettiva completa e futuri cambi UI/API; nessuna write live |
+| Debian deployment | SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5`, gate live completo PASS; servizio e startup Discord verificati | Restore drill `PENDING` |
 
 Il `model-check --live` riuscito promuove soltanto la coppia Groq/modello osservata. Il gate DIC
-applicativo promuove soltanto i subset read bounded indicati; non attesta il trasporto Discord.
-Il doctor Debian attesta i prerequisiti controllati, non il restore né lo smoke slash.
+applicativo promuove le risorse read bounded attraversate, non una write né un messaggio inbound.
+Il doctor Debian attesta i prerequisiti controllati, non il restore.
 
-Per lo stesso SHA: 834 test locali PASS; branch coverage 85% su 10.361 statement e 3.258 branch;
-Ruff, mypy, Bandit e `pip-audit` verdi; CI e CodeQL remoti riusciti. Nessuno di questi gate statici
-o sintetici sostituisce le evidenze live separate.
+Sul target allo SHA sopra: 1.021 test PASS; Ruff, mypy, Bandit e `pip-audit` verdi. Nessuno di
+questi gate statici o sintetici sostituisce le evidenze live separate.
 
 ## Legenda ed evidenza disponibile
 
@@ -88,20 +87,20 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 
 | Function ID | Funzione | Implementazione e test | Evidenza live | Stato predefinito |
 | --- | --- | --- | --- | --- |
-| `EMP-READ-001` | Elenco e conteggio dipendenti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED soltanto per conteggio aggregato bounded; elenco e altre modalità NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-READ-002` | Dettaglio anagrafico redatto | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-SEARCH-001` | Ricerca dipendente | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-FILTER-001` | Filtri elenco | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-SORT-001` | Ordinamento elenco | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-PAGE-001` | Paginazione | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-CONTRACT-001` | Consultazione contratti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED soltanto per scadenze bounded del prossimo mese di calendario; altre modalità NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-RBAC-001` | Consultazione gruppi e ruoli | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-TIME-001` | Consultazione timbratura | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED (link/controlli) — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-MAT-001` | Consultazione maturazioni | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-BAL-001` | Consultazione bilancio | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-PAY-001` | Busta paga individuale, netto e link PDF temporaneo | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED soltanto per route UI, anno/mese, netto e link PDF first-party osservati il 2026-08-21 — NEEDS_VALIDATION dopo ogni cambio UI/API | ENABLED_BY_DEFAULT |
-| `EMP-PAY-002` | Ricerca collettiva buste paga per mese | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED (route payroll per dipendente) — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
-| `EMP-DOC-001` | Metadati documenti | IMPLEMENTED — TESTED_WITH_MOCK | BASELINE_OBSERVED — NEEDS_VALIDATION | ENABLED_BY_DEFAULT |
+| `EMP-READ-001` | Elenco e conteggio dipendenti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED, 56/56 record nel gate | ENABLED_BY_DEFAULT |
+| `EMP-READ-002` | Dettaglio anagrafico redatto | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-SEARCH-001` | Ricerca dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED sulla sorgente elenco; matching locale | ENABLED_BY_DEFAULT |
+| `EMP-FILTER-001` | Filtri elenco | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED sulla sorgente elenco; filtro locale | ENABLED_BY_DEFAULT |
+| `EMP-SORT-001` | Ordinamento elenco | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED sulla sorgente elenco; sort locale | ENABLED_BY_DEFAULT |
+| `EMP-PAGE-001` | Paginazione | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-CONTRACT-001` | Consultazione contratti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-RBAC-001` | Consultazione gruppi e ruoli | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-TIME-001` | Consultazione timbratura | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED per target singolo | ENABLED_BY_DEFAULT |
+| `EMP-MAT-001` | Consultazione maturazioni | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-BAL-001` | Consultazione bilancio | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-PAY-001` | Busta paga individuale, netto e link PDF temporaneo | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-PAY-002` | Ricerca collettiva buste paga per mese | IMPLEMENTED — TESTED_WITH_MOCK | sorgente per-dipendente LIVE_READ_VERIFIED; traversata collettiva da verificare live | ENABLED_BY_DEFAULT |
+| `EMP-DOC-001` | Metadati documenti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
 | `EMP-UPDATE-001` | Modifica dati dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-CREATE-001` | Creazione dipendente | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — subset verificabile: `first_name`, `last_name`, `payroll_number`, `tax_code`, `job_title`, `business_email`, `workplace`; rifiuto pre-pending: `birth_date`, `iban`, `phone`, `address`, `notes` | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-CONTRACT-002` | Creazione o modifica contratto | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
@@ -117,7 +116,7 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 | `EMP-DOC-002` | Upload documento | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-004` | Modifica metadati documento | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-005` | Eliminazione documento | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
-| `EMP-EXPORT-001` | Esportazione locale protetta PDF/DOCX/XLSX | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — artifact locale in memoria; dati live NEEDS_VALIDATION | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
+| `EMP-EXPORT-001` | Esportazione locale protetta PDF/DOCX/XLSX | IMPLEMENTED — TESTED_WITH_MOCK | CONTRACT_VERIFIED — LIVE_WRITE_UNVERIFIED — artifact locale in memoria; nessun export live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-003` | Download in area locale protetta | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DELETE-001` | Eliminazione definitiva dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-CONTRACT-003` | Eliminazione contratto | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |

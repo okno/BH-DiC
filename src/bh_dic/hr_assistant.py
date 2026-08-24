@@ -32,6 +32,25 @@ _THIS_MONTH = re.compile(
 )
 _NEGATED_REQUEST = re.compile(r"\b(?:no|non|senza)\b", re.IGNORECASE)
 _NEXT_DAYS = re.compile(r"\bprossim[ioe]?\s+(\d{1,3})\s+giorn[io]\b", re.IGNORECASE)
+_NEXT_MONTHS = re.compile(
+    r"\bprossim[ei]\s+(uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|"
+    r"dodici|\d{1,2})\s+mes[ei]\b",
+    re.IGNORECASE,
+)
+_MONTH_COUNT = {
+    "uno": 1,
+    "due": 2,
+    "tre": 3,
+    "quattro": 4,
+    "cinque": 5,
+    "sei": 6,
+    "sette": 7,
+    "otto": 8,
+    "nove": 9,
+    "dieci": 10,
+    "undici": 11,
+    "dodici": 12,
+}
 _EXPLICIT_EMPLOYEE_ID = re.compile(
     r"(?i)\b(?:employee\s*id|dipendente\s+id|id\s+dipendente|id)\s*[:#]?\s*"
     r"(?!(?:dei|del|della|delle|di|dipendente|dipendenti)\b)"
@@ -80,6 +99,58 @@ _NET_PAY_TARGET = re.compile(
     r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
     r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di|per)\s+(?:gennaio|febbraio|marzo|aprile|"
     r"maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b|[?!.]|$)"
+)
+_PROFILE_TERM = re.compile(
+    r"\b(?:profilo|anagrafica|tutti\s+i\s+dati|dati\s+disponibili)\b",
+    re.IGNORECASE,
+)
+_LOCAL_RESOURCE_TERMS: tuple[tuple[re.Pattern[str], str, Sensitivity], ...] = (
+    (re.compile(r"\b(?:document[oi]|documents?)\b", re.I), "EMP-DOC-001", Sensitivity.HIGH),
+    (
+        re.compile(r"\b(?:ruol[oi]|roles?|permess[oi])\b", re.I),
+        "EMP-RBAC-001",
+        Sensitivity.HIGH,
+    ),
+    (
+        re.compile(r"\b(?:timbratur\w*|timestamps?|access[oi]\s+presenze)\b", re.I),
+        "EMP-TIME-001",
+        Sensitivity.HIGH,
+    ),
+    (
+        re.compile(r"\b(?:bilanc(?:io|i)|sald[oi]|contator[ei]|balances?)\b", re.I),
+        "EMP-BAL-001",
+        Sensitivity.HIGH,
+    ),
+    (
+        re.compile(r"\b(?:maturazion[ei]|maturations?)\b", re.I),
+        "EMP-MAT-001",
+        Sensitivity.HIGH,
+    ),
+    (
+        re.compile(r"\b(?:contratt[oi]|contracts?)\b", re.I),
+        "EMP-CONTRACT-001",
+        Sensitivity.HIGH,
+    ),
+)
+_NAMED_EMPLOYEE_TARGET = re.compile(
+    r"(?is)\b(?:del(?:la)?\s+dipendente|dipendente)\s+"
+    r"(.+?)(?=\s+(?:del|nel|per|a)\s+(?:mese|periodo|20\d{2})\b|[?!.]|$)"
+)
+_GENERIC_TARGET_WORDS = frozenset(
+    {
+        "indicato",
+        "indicata",
+        "questa persona",
+        "questa dipendente",
+        "questo dipendente",
+        "selezionato",
+        "selezionata",
+    }
+)
+_RESOURCE_READ_ACTION = re.compile(
+    r"\b(?:mostra\w*|controlla\w*|vedere|recupera\w*|confronta\w*|qual[ei]?|quali|"
+    r"apri\w*|verifica\w*|riporta\w*|dammi|cerca\w*|esporta\w*|fammi\s+vedere)\b",
+    re.IGNORECASE,
 )
 _MONTH_NUMBER_BY_NAME = {
     "gennaio": 1,
@@ -469,6 +540,75 @@ def parse_local_operational_intent(
             )
         )
 
+    resource_matches = [
+        (function_id, sensitivity)
+        for pattern, function_id, sensitivity in _LOCAL_RESOURCE_TERMS
+        if pattern.search(text) is not None
+    ]
+    profile_requested = _PROFILE_TERM.search(text) is not None
+    resource_read_requested = (
+        len(resource_matches) == 1
+        and (
+            _RESOURCE_READ_ACTION.search(text) is not None
+            or _NAMED_EMPLOYEE_TARGET.search(text) is not None
+        )
+        and not (
+            resource_matches[0][0] == "EMP-CONTRACT-001" and _NEXT_MONTH.search(text) is not None
+        )
+    )
+    if profile_requested or resource_read_requested:
+        resource_employee_id: str | None = None
+        resource_target_query: str | None = None
+        explicit = _EXPLICIT_EMPLOYEE_ID.search(text) or _NUMERIC_EMPLOYEE_TARGET.search(text)
+        if explicit is not None:
+            try:
+                resource_employee_id = validate_employee_id(explicit.group(1))
+            except InputValidationError as exc:
+                raise HrRequestInputError("explicit Employee ID has an invalid format") from exc
+        else:
+            named = _NAMED_EMPLOYEE_TARGET.search(text)
+            if named is not None:
+                candidate = " ".join(named.group(1).strip(" .,:;!?\"'").split())
+                if (
+                    candidate.casefold() not in _GENERIC_TARGET_WORDS
+                    and len(candidate) <= 128
+                    and _TECHNICAL_TARGET.search(candidate) is None
+                ):
+                    resource_target_query = candidate
+        function_id = "EMP-READ-002" if profile_requested else resource_matches[0][0]
+        sensitivity = Sensitivity.HIGH if profile_requested else resource_matches[0][1]
+        resource_date_from: date | None = None
+        resource_date_to: date | None = None
+        if function_id == "EMP-CONTRACT-001":
+            interval = _supported_contract_interval(text, today=today)
+            if interval is not None:
+                resource_date_from, resource_date_to = interval
+        requires_target = function_id != "EMP-CONTRACT-001" or resource_date_from is None
+        clarification = (
+            "Indica l'Employee ID oppure un nome da cercare."
+            if (requires_target and resource_employee_id is None and resource_target_query is None)
+            else None
+        )
+        resource_parameters: dict[str, object] = {}
+        if function_id == "EMP-BAL-001":
+            year_match = _PAYROLL_YEAR.search(text)
+            resource_parameters["year"] = int(year_match.group(1)) if year_match else today.year
+        if function_id == "EMP-DOC-001" and re.search(r"\b(?:attes[ao]|pending)\b", text, re.I):
+            resource_parameters["status"] = "pending"
+        return LocalOperationalIntent(
+            _local_envelope(
+                function_id,
+                action_class=ActionClass.READ,
+                sensitivity=sensitivity,
+                employee_id=resource_employee_id,
+                parameters=resource_parameters,
+                date_from=resource_date_from,
+                date_to=resource_date_to,
+                clarification=clarification,
+            ),
+            target_query=resource_target_query,
+        )
+
     if _EMPLOYEE_TERM.search(text) is not None:
         if _AGGREGATE_PATTERN.search(text) is not None:
             return LocalOperationalIntent(
@@ -584,6 +724,15 @@ def _supported_contract_interval(request: str, *, today: date) -> tuple[date, da
         return _next_month_interval(today)
     if _THIS_MONTH.search(request):
         return _month_interval(today.year, today.month)
+    next_months = _NEXT_MONTHS.search(request)
+    if next_months is not None:
+        raw = next_months.group(1).casefold()
+        months = int(raw) if raw.isdigit() else _MONTH_COUNT[raw]
+        target_index = today.month - 1 + months
+        target_year = today.year + target_index // 12
+        target_month = target_index % 12 + 1
+        target_day = min(today.day, monthrange(target_year, target_month)[1])
+        return today, date(target_year, target_month, target_day)
     next_days = _NEXT_DAYS.search(request)
     if next_days is None:
         return None

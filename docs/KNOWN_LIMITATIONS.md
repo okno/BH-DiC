@@ -1,21 +1,20 @@
 # Limitazioni note dell'adapter DIC
 
-La nuova proiezione network di contratti, maturazioni e documenti richiede ancora la rivalidazione
-live post-deploy. I bilanci restano sul contratto DOM degradato in attesa di una fixture first-party
-sanitizzata. Follow-up generali su result set arbitrari, paginazione bulk completa timbrature,
+Contratti, maturazioni, bilanci e documenti hanno superato il gate first-party live del 2026-08-24.
+Follow-up generali su result set arbitrari, paginazione bulk completa timbrature,
 workplace, modelli orario, spese/viaggi e superfici complete turni/presenze non sono implementati.
 Il contesto conversazionale supporta selezioni candidate/ordinali bounded, non il ripristino dopo
 riavvio.
 
 ## Verifica live e compatibilità UI
 
-- Oltre alla ricognizione iniziale, lo SHA 0.3.0 esatto documentato ha superato un unico gate live
-  autorizzato in sola lettura per autenticazione/tenant, conteggio aggregato e scadenze bounded del
-  prossimo mese di calendario. Non sono state eseguite write live.
-- La baseline di Fase 1 non certifica da sola il DOM attuale. Soltanto i due subset bounded
-  attraversati dal gate hanno stato `LIVE_READ_VERIFIED`; le altre read restano da validare.
+- Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato un gate live autorizzato in
+  sola lettura per autenticazione/tenant, elenco completo, riepilogo, ruoli, timbratura target,
+  contratti, maturazioni, bilanci, payroll e documenti. Non sono state eseguite write live.
+- La prova riguarda un dipendente rappresentativo per le risorse individuali. Non certifica che
+  ogni dipendente abbia record in ciascun modulo né la query payroll collettiva completa.
 - `data-testid`, attributi `data-*`, ordinamento dei fallback e controlli distintivi delle pagine
-  HR richiedono validazione live autorizzata. Un cambio UI può produrre `DicUiChangedError` e
+  HR richiedono rivalidazione dopo ogni cambio UI. Un cambio può produrre `DicUiChangedError` e
   aprire il circuit breaker.
 - Non è stata identificata o adottata un'API pubblica supportata da DIC. L'attestazione tenant
   osserva passivamente una risposta first-party emessa durante una normale navigazione UI; non la
@@ -104,8 +103,8 @@ riavvio.
 - `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e `EMP-CONTRACT-003` sono presenti nel
   catalogo/policy/mock, ma il dispatch Playwright è `NOT_AVAILABLE` e fallisce chiuso.
 - `EMP-EXPORT-001` genera PDF, DOCX e XLSX in memoria e non persiste contenuto in chiaro. Il
-  percorso è testato con dati sintetici; la completezza delle colonne provenienti dalla UI DiC è
-  `NEEDS_VALIDATION` live e la consegna Discord segue la retention esterna del canale.
+  percorso artifact è testato con dati sintetici e non è stato eseguito live; la consegna Discord
+  segue la retention esterna del canale.
 - `EMP-CREATE-001` è `PARTIALLY_COMPLETED`: il mock copre lo schema completo, mentre il live
   accetta solo il subset riconciliabile. `birth_date`, `iban`, `phone`, `address` e `notes` sono
   rifiutati prima della creazione del pending.
@@ -165,8 +164,8 @@ semantica, permessi e postcondizioni.
 - Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
   offline/online sono stati verificati sul Debian target. La versione 0.3.0 allo SHA esatto
   documentato ha superato il gate applicativo live; il servizio è `active/running`, con zero
-  riavvii osservati e gateway `discord_ready`. Smoke del trasporto Discord, restore drill e carico
-  reale restano da verificare sul target.
+  riavvii osservati, gateway `discord_ready` e messaggio startup outbound inviato. Un nuovo
+  round-trip inbound manuale Discord, restore drill e carico reale restano da verificare sul target.
 
 ## Criterio per rimuovere una limitazione
 

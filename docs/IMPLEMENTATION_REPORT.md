@@ -1,5 +1,9 @@
 # Implementation report
 
+> Archivio storico del 17 agosto 2026. Per lo stato corrente usare
+> `FINAL_IMPLEMENTATION_REPORT.md` e `DIC_LIVE_READ_COVERAGE.md`; gli stati di questo snapshot non
+> descrivono il deploy del 24 agosto.
+
 Snapshot documentale: **17 agosto 2026**. L'artefatto applicativo verificato sul server è la
 versione `0.3.0`, SHA esatto `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`. Commit successivi di
 soli script operativi o documentazione richiedono gate/deployment propri e non ereditano

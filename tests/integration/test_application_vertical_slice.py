@@ -1250,7 +1250,8 @@ async def test_payroll_read_renders_only_useful_minimized_metadata() -> None:
         await adapter.close()
 
     assert result.description == (
-        "Ho consultato la sezione Buste paga di Dipendenti in Cloud. Record trovati: 1."
+        "Ho consultato la sezione Buste paga di Dipendenti in Cloud. "
+        "Record totali: 1 · mostrati: 1 · acquisizione completa."
     )
     assert result.fields[0].name == "01/2026"
     assert result.fields[0].value == (

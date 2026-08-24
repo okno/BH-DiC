@@ -7,14 +7,12 @@ feature flag, approvazioni e controlli prima di invocare l'adapter browser. La m
 `channel` inoltra le richieste operative riconosciute allo stesso coordinator di `/bh` e usa un
 responder stateless senza tool soltanto per l'orientamento HR generale.
 
-> Stato al 17 agosto 2026: il commit applicativo della versione `0.3.0`, SHA esatto
-> `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, ha superato sul target Debian un unico gate live
-> autorizzato in sola lettura. Il gate ha attestato autenticazione/tenant, conteggio aggregato
-> `PUBLIC` non-ephemeral, scadenze bounded del prossimo mese di calendario `SENSITIVE`/ephemeral,
-> stato API e telemetria token. Non è uno smoke del trasporto Discord: il round-trip slash nel
-> canale resta `PENDING`; il servizio è `active/running`, con zero riavvii osservati e gateway
-> `discord_ready`. Tutte le write restano
-> `DISABLED_BY_POLICY`.
+> Stato al 24 agosto 2026: lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato
+> sul target Debian il gate live read-only completo per elenco, riepilogo, ruoli, timbratura
+> target, contratti, maturazioni, bilanci, payroll e documenti. Il servizio è risultato
+> `active/running`, con zero riavvii osservati, gateway `discord_ready` e messaggio startup
+> outbound inviato con DiC disponibile. Un round-trip inbound va avviato da un utente Discord
+> reale autorizzato. Nessuna write live è stata eseguita.
 
 Le evidenze storiche `VERIFIED_BY_ADAPTER`, `TEAMSYSTEM_EMAIL`, restore `sessionStorage`, gateway
 `DEGRADED` e primo deny RBAC restano nel report come tappe separate; non sostituiscono né

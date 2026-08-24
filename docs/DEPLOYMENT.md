@@ -7,14 +7,11 @@ installato senza sostituire il Python di sistema, virtualenv e dipendenze, migra
 directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
 doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
 
-Il commit applicativo della versione `0.3.0`, SHA esatto
-`c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`, è stato distribuito e ha superato un unico gate live
-autorizzato in sola lettura: autenticazione e tenant,
-conteggio aggregato `PUBLIC`/non-ephemeral, scadenze bounded del prossimo mese di calendario
-`SENSITIVE`/ephemeral, telemetria token e status API/token. Il servizio è `active/running`, con
-zero riavvii osservati e gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING`.
-Non confondere il PASS applicativo o il gateway pronto con un
-round-trip slash riuscito.
+Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` è stato distribuito e ha superato il gate
+live autorizzato in sola lettura per autenticazione/tenant ed ogni risorsa read implementata. Il
+servizio è risultato `active/running`, con zero riavvii osservati, gateway `discord_ready` e
+messaggio startup outbound inviato con DiC disponibile. Non confondere questi PASS con un
+round-trip inbound, che deve essere iniziato da un utente Discord reale autorizzato.
 Gli hotfix successivi di soli script operativi o documentazione hanno gate/deployment separati e
 non cambiano retroattivamente l'evidenza DIC associata a quello SHA.
 `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
