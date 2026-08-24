@@ -11,7 +11,11 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from bh_dic.dic.balance_capture import BalanceResponseCapture, empty_balance_from_response
+from bh_dic.dic.balance_capture import (
+    BalanceResponseCapture,
+    balance_lines_from_response,
+    counters_from_response,
+)
 from bh_dic.dic.employee_list_capture import (
     EMPLOYEE_LIST_PAGE_SIZE,
     EmployeeListResponseCapture,
@@ -1273,6 +1277,7 @@ class EmployeeBalancePage(BaseDicPage):
             raise DicValidationError("year must be between 2000 and 2200")
         with BalanceResponseCapture(self.page) as capture:
             navigation_mark = capture.mark()
+            counter_mark = capture.counter_mark()
             await self.open(employee_id)
             control_kind, current_year = await self._wait_for_year_control()
             if control_kind == "legacy":
@@ -1289,8 +1294,18 @@ class EmployeeBalancePage(BaseDicPage):
                 after_sequence=response_mark,
                 timeout_ms=self.timeout_ms,
             )
-            await empty_balance_from_response(response, employee_id=employee_id, year=year)
-        return BalanceResult(employee_id=employee_id, year=year, lines=())
+            counter_response = await capture.wait_for_counters(
+                after_sequence=counter_mark,
+                timeout_ms=self.timeout_ms,
+            )
+            counters = await counters_from_response(counter_response)
+            lines = await balance_lines_from_response(
+                response,
+                employee_id=employee_id,
+                year=year,
+                counters=counters,
+            )
+        return BalanceResult(employee_id=employee_id, year=year, lines=lines)
 
     async def read_correction_state(
         self, employee_id: str, year: int, month: int, category: str

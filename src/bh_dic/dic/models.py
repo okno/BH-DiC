@@ -277,6 +277,12 @@ class MaturationRecord(StrictModel):
 
 class BalanceLine(StrictModel):
     category: str = Field(max_length=128)
+    counter_id: str | None = Field(default=None, max_length=64)
+    month: int | None = Field(default=None, ge=1, le=12)
+    balance: str | None = Field(default=None, max_length=64)
+    maturation: str | None = Field(default=None, max_length=64)
+    utilization: str | None = Field(default=None, max_length=64)
+    projection: str | None = Field(default=None, max_length=64)
     previous_year: str | None = Field(default=None, max_length=64)
     previous_month: str | None = Field(default=None, max_length=64)
     accrued: str | None = Field(default=None, max_length=64)

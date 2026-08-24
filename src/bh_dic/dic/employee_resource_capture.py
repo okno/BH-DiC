@@ -165,7 +165,7 @@ def contracts_from_items(
         flexible = _strict_bool(item["flexible_workinghours"], resource=resource)
         ongoing = _strict_bool(item["ongoing"], resource=resource)
         percentage = item["part_time_percentage"]
-        if type(percentage) is not int or not 0 <= percentage <= 100:
+        if percentage is not None and (type(percentage) is not int or not 0 <= percentage <= 100):
             raise _failure(resource, "invalid work percentage")
         start = _bounded_text(item["valid_from"], resource=resource, maximum=32)
         end = _bounded_text(item["valid_to"], resource=resource, maximum=32, optional=True)
@@ -186,7 +186,11 @@ def contracts_from_items(
                     end_date=end,
                     ccnl_level=level,
                     work_regime=(
-                        "tempo pieno" if percentage == 100 else f"part-time {percentage}%"
+                        hours_type
+                        if percentage is None
+                        else "tempo pieno"
+                        if percentage == 100
+                        else f"part-time {percentage}%"
                     ),
                     description="[REDACTED]" if note else None,
                     contract_type=("tempo indeterminato" if permanent else "tempo determinato"),
@@ -251,8 +255,11 @@ def documents_from_items(
         category_value = item["category"]
         if not isinstance(category_value, dict):
             raise _failure(resource, "invalid category")
-        category = _bounded_text(
-            category_value.get("name"), resource=resource, maximum=128, optional=True
+        raw_category = category_value.get("name")
+        category = (
+            None
+            if isinstance(raw_category, str) and not raw_category.strip()
+            else _bounded_text(raw_category, resource=resource, maximum=128, optional=True)
         )
         requested = _strict_bool(item["requested"], resource=resource)
         state: Literal["uploaded", "pending", "unknown"] = "pending" if requested else "uploaded"

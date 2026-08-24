@@ -1588,13 +1588,56 @@ class BHApplicationCoordinator(InteractionCoordinator):
             employee_id = self._require_employee(intent)
             year = int(intent.parameters.get("year", datetime.now(UTC).year))
             balance = await self.dic.get_balance(employee_id, year)
+            shown_balance_lines = balance.lines[:25]
+            attachment: tuple[ResponseAttachment, ...] = ()
+            if len(balance.lines) > len(shown_balance_lines):
+                rows = [
+                    "month\tcategory\tcounter_id\tbalance\tmaturation\tutilization\t"
+                    "correction\tresidue\tprojection"
+                ]
+                rows.extend(
+                    "\t".join(
+                        (
+                            str(line.month or ""),
+                            line.category.replace("\t", " ").replace("\n", " "),
+                            line.counter_id or "",
+                            line.balance or "",
+                            line.maturation or line.accrued or "",
+                            line.utilization or line.used or "",
+                            line.corrections or "",
+                            line.current_residual or "",
+                            line.projection or "",
+                        )
+                    )
+                    for line in balance.lines
+                )
+                content = ("\n".join(rows) + "\n").encode("utf-8")
+                if len(content) > self._response_attachment_max_bytes:
+                    raise ApplicationError("balance result exceeds the configured attachment limit")
+                attachment = (
+                    ResponseAttachment(
+                        filename=f"bilancio_{year}.tsv",
+                        content_type="text/tab-separated-values; charset=utf-8",
+                        content=content,
+                    ),
+                )
             return InteractionResult(
                 title=f"Bilancio {employee_id} — {year}",
-                description=f"Categorie: {len(balance.lines)}",
-                fields=tuple(
-                    ResultField(line.category, f"Residuo corrente: {line.current_residual or '—'}")
-                    for line in balance.lines[:25]
+                description=(
+                    f"Record totali: {len(balance.lines)} · "
+                    f"mostrati: {len(shown_balance_lines)} · "
+                    "acquisizione completa"
                 ),
+                fields=tuple(
+                    ResultField(
+                        f"{line.month:02d} · {line.category}" if line.month else line.category,
+                        f"Residuo: {line.current_residual or '—'} · "
+                        f"maturato: {line.maturation or line.accrued or '—'} · "
+                        f"utilizzato: {line.utilization or line.used or '—'}",
+                    )
+                    for line in shown_balance_lines
+                ),
+                attachments=attachment,
                 correlation_id=correlation_id,
             )
         if function_id == "EMP-PAY-001":
