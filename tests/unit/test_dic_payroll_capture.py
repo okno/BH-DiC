@@ -109,6 +109,32 @@ async def test_payroll_capture_projects_net_and_keeps_signed_url_secret() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("net", "expected_cents"),
+    [(1234, 123_400), (1234.5, 123_450), (1234.56, 123_456)],
+)
+async def test_payroll_capture_accepts_exact_json_euro_numbers(
+    net: int | float, expected_cents: int
+) -> None:
+    document = _document()
+    document["data"][0]["net"] = net
+
+    records = await payrolls_from_response(_Response(document), employee_id="123", year=2026)
+
+    assert records[0].net_cents == expected_cents
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("net", [True, "1234.56", -1, 0.001, float("inf"), float("nan")])
+async def test_payroll_capture_rejects_ambiguous_or_invalid_money(net: object) -> None:
+    document = _document()
+    document["data"][0]["net"] = net
+
+    with pytest.raises(DicUiChangedError, match="invalid response schema"):
+        await payrolls_from_response(_Response(document), employee_id="123", year=2026)
+
+
+@pytest.mark.asyncio
 async def test_payroll_capture_rejects_a_different_employee() -> None:
     with pytest.raises(DicUiChangedError, match="does not match requested employee"):
         await payrolls_from_response(_Response(_document()), employee_id="124", year=2026)

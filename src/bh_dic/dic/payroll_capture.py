@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Protocol
 from urllib.parse import parse_qsl, urlsplit
 
@@ -123,6 +125,21 @@ def _strict_int(value: object, *, minimum: int = 0) -> int:
     if type(value) is not int or value < minimum:
         raise _failure("invalid response schema")
     return value
+
+
+def _money_cents(value: object) -> int:
+    """Normalize the observed JSON euro amount without rounding or string coercion."""
+
+    if type(value) is int:
+        amount = Decimal(value)
+    elif type(value) is float and math.isfinite(value):
+        amount = Decimal(str(value))
+    else:
+        raise _failure("invalid response schema")
+    cents = amount * 100
+    if amount < 0 or amount > 10_000_000 or cents != cents.to_integral_value():
+        raise _failure("invalid response schema")
+    return int(cents)
 
 
 def _bounded_text(value: object, *, maximum: int, optional: bool = False) -> str | None:
@@ -263,8 +280,8 @@ def _payroll(item: object, employee_id: str, year: int) -> PayrollMetadata:
             month=_strict_int(item["month"], minimum=1),
             status="letta" if read_state else "non letta",
             published_at=emitted,
-            # The live DIC response exposes whole euros; normalize once at the boundary.
-            net_cents=_strict_int(item["net"]) * 100,
+            # DIC emits JSON euros as either an integer or a two-decimal number.
+            net_cents=_money_cents(item["net"]),
             attachment_filename=pdf_filename,
             attachment_url=pdf_url,
         )
