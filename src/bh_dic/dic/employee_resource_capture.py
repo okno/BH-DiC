@@ -70,8 +70,10 @@ DOCUMENTS_ENDPOINT = PaginatedEndpointContract(
             "filter[0][op]",
             "filter[0][value]",
             "filter_type",
+            "filter_validity",
             "page",
             "per_page",
+            "search",
             "search_fields",
             "sort",
         }

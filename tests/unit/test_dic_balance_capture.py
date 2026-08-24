@@ -16,7 +16,7 @@ class Response:
             {
                 "employees_ids": json.dumps([int(employee_id)]),
                 "include_pending": "true",
-                "months": json.dumps(list(range(1, 13))),
+                "months": "|".join(str(month) for month in range(1, 13)),
                 "years": json.dumps([year]),
             }
         )

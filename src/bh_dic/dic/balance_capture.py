@@ -54,7 +54,14 @@ def _valid_months(raw: str) -> bool:
     try:
         value = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return False
+        value = raw
+    if isinstance(value, str):
+        parts = value.split("|")
+        return (
+            1 <= len(parts) <= 12
+            and all(part.isdigit() and 1 <= int(part) <= 12 for part in parts)
+            and len(set(parts)) == len(parts)
+        )
     if isinstance(value, int) and not isinstance(value, bool):
         return 1 <= value <= 12
     return (
