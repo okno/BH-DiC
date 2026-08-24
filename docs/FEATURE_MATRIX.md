@@ -6,9 +6,10 @@ non deve essere mantenuta come secondo catalogo runtime.
 ## Stato verificato
 
 - **32/32** Function ID hanno specifica policy e percorso mock sintetico testato.
-- **13 read**: `IMPLEMENTED`, `TESTED_WITH_MOCK`; il conteggio aggregato bounded di
-  `EMP-READ-001` e le scadenze bounded del prossimo mese di calendario di `EMP-CONTRACT-001` sono
-  `LIVE_READ_VERIFIED`. Ogni altra modalità resta `NEEDS_VALIDATION`.
+- **13 read**: tutte hanno policy e test sintetici. La ricognizione read-only del 2026-08-24 ha
+  verificato live elenco, riepilogo, ruoli, target timbratura e payroll. Contratti, maturazioni e
+  documenti sono stati migrati al contratto first-party paginato e sono `CONTRACT_VERIFIED`, ma
+  richiedono il nuovo gate live dopo il deploy. Bilanci restano `DEGRADED_SCHEMA`.
 - **14 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; **5 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
@@ -49,9 +50,9 @@ catalogo esclude anche dalla tool exposure ordinaria.
 | `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
 | `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — LIVE_READ_VERIFIED 2026-08-21 |
-| `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
-| `EMP-DOC-001` | metadati documenti | document operator | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION |
+| `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read + `payroll:read`; link con `protected_documents:download` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_VERIFIED 2026-08-24 |
+| `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read + `payroll:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per la sorgente payroll; query collettiva live da rieseguire |
+| `EMP-DOC-001` | metadati documenti | document operator + `documents:metadata` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_GATE_REQUIRED |
 
 ## Write, file ed export
 

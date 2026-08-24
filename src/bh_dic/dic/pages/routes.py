@@ -19,6 +19,14 @@ from bh_dic.dic.employee_list_capture import (
 from bh_dic.dic.employee_list_capture import (
     ResponseLike as EmployeeResponseLike,
 )
+from bh_dic.dic.employee_resource_capture import (
+    CONTRACTS_ENDPOINT,
+    DOCUMENTS_ENDPOINT,
+    MATURATIONS_ENDPOINT,
+    contracts_from_items,
+    documents_from_items,
+    maturations_from_items,
+)
 from bh_dic.dic.errors import (
     DicConfigurationError,
     DicNotFoundError,
@@ -49,6 +57,11 @@ from bh_dic.dic.models import (
     TimeAccessResult,
 )
 from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, PageLike, VerifiedUploadPayload
+from bh_dic.dic.paginated_capture import (
+    PaginatedResponseCapture,
+    collect_complete_pages,
+    page_from_response,
+)
 from bh_dic.dic.payroll_capture import PayrollResponseCapture, payrolls_from_response
 from bh_dic.dic.selectors import DEFAULT_SELECTORS, SelectorRegistry
 from bh_dic.dic.values import canonical_decimal_text
@@ -902,58 +915,26 @@ class EmployeeContractsPage(BaseDicPage):
         raise DicNotFoundError("contract row not found")
 
     async def read(self, employee_id: str) -> tuple[ContractRecord, ...]:
-        await self.open(employee_id)
-        rows = await self._rows()
-        result: list[ContractRecord] = []
-        for index in range(await rows.count()):
-            row = rows.nth(index)
-            values = {
-                key: await self.read_text(f"contract_row.{key}", root=row)
-                for key in (
-                    "schedule",
-                    "flexibility",
-                    "permanent",
-                    "start_date",
-                    "end_date",
-                    "ccnl_level",
-                    "work_regime",
-                    "description",
-                    "type",
-                    "status",
-                    "period",
-                )
-            }
-            contract_id = await self.read_attribute("contract_row.id", "data-contract-id", root=row)
-            stable_identifier = bool(contract_id)
-            contract_id = contract_id or _stable_record_id(
-                "CON", values["start_date"], values["type"], values["period"]
+        with PaginatedResponseCapture(self.page, CONTRACTS_ENDPOINT) as capture:
+            mark = capture.mark()
+            await self.open(employee_id)
+            response = await capture.wait_for(
+                employee_id,
+                after_sequence=mark,
+                timeout_ms=self.timeout_ms,
             )
-            edit = await self.locate("contracts.edit", root=row, required=False)
-            delete = await self.locate("contracts.delete", root=row, required=False)
-            permanent_text = (values["permanent"] or "").casefold()
-            permanent = None
-            if permanent_text:
-                permanent = any(word in permanent_text for word in ("sì", "si", "true", "yes"))
-            result.append(
-                ContractRecord(
-                    contract_id=contract_id,
-                    employee_id=employee_id,
-                    stable_identifier=stable_identifier,
-                    actionable=stable_identifier and edit is not None and delete is not None,
-                    schedule=values["schedule"],
-                    flexibility=values["flexibility"],
-                    permanent=permanent,
-                    start_date=values["start_date"],
-                    end_date=values["end_date"],
-                    ccnl_level=values["ccnl_level"],
-                    work_regime=values["work_regime"],
-                    description="[REDACTED]" if values["description"] else None,
-                    contract_type=values["type"],
-                    status=values["status"],
-                    period=values["period"],
-                )
+            first = await page_from_response(
+                response,
+                contract=CONTRACTS_ENDPOINT,
+                employee_id=employee_id,
             )
-        return tuple(result)
+            items = await collect_complete_pages(
+                self.page,
+                first,
+                contract=CONTRACTS_ENDPOINT,
+                employee_id=employee_id,
+            )
+        return contracts_from_items(items, employee_id=employee_id)
 
     async def stable_contract_ids(self, employee_id: str) -> frozenset[str]:
         """Return only DOM-stable identifiers for an in-process create baseline."""
@@ -1129,29 +1110,26 @@ class EmployeeMaturationsPage(BaseDicPage):
         return await self.all_matches("maturations.rows")
 
     async def read(self, employee_id: str) -> tuple[MaturationRecord, ...]:
-        await self.open(employee_id)
-        rows = await self._rows()
-        result: list[MaturationRecord] = []
-        for index in range(await rows.count()):
-            row = rows.nth(index)
-            category = await self.read_text("maturation_row.category", root=row)
-            valid_from = await self.read_text("maturation_row.valid_from", root=row)
-            valid_to = await self.read_text("maturation_row.valid_to", root=row)
-            record_id = await self.read_attribute(
-                "maturation_row.id", "data-maturation-id", root=row
+        with PaginatedResponseCapture(self.page, MATURATIONS_ENDPOINT) as capture:
+            mark = capture.mark()
+            await self.open(employee_id)
+            response = await capture.wait_for(
+                employee_id,
+                after_sequence=mark,
+                timeout_ms=self.timeout_ms,
             )
-            result.append(
-                MaturationRecord(
-                    maturation_id=record_id
-                    or _stable_record_id("MAT", category, valid_from, valid_to),
-                    employee_id=employee_id,
-                    category=category or "unknown",
-                    valid_from=valid_from,
-                    valid_to=valid_to,
-                    status=await self.read_text("maturation_row.status", root=row),
-                )
+            first = await page_from_response(
+                response,
+                contract=MATURATIONS_ENDPOINT,
+                employee_id=employee_id,
             )
-        return tuple(result)
+            items = await collect_complete_pages(
+                self.page,
+                first,
+                contract=MATURATIONS_ENDPOINT,
+                employee_id=employee_id,
+            )
+        return maturations_from_items(items, employee_id=employee_id)
 
     async def stable_maturation_ids(self, employee_id: str) -> frozenset[str]:
         """Return only DOM-stable identifiers for an in-process create baseline."""
@@ -1442,49 +1420,26 @@ class EmployeeDocumentsPage(BaseDicPage):
         raise DicNotFoundError("document row not found")
 
     async def read(self, employee_id: str, query: DocumentQuery) -> tuple[DocumentMetadata, ...]:
-        await self.open(employee_id)
-        if query.state == "uploaded":
-            await self.click("documents.uploaded")
-        elif query.state == "pending":
-            await self.click("documents.pending")
-        if query.query:
-            await self.fill("documents.search", query.query)
-        rows = await self._rows()
-        result: list[DocumentMetadata] = []
-        for index in range(await rows.count()):
-            row = rows.nth(index)
-            title = await self.read_text("document_row.title", root=row)
-            category = await self.read_text("document_row.category", root=row)
-            if query.category and category != query.category:
-                continue
-            state_text = (await self.read_text("document_row.state", root=row) or "").casefold()
-            state: Literal["uploaded", "pending", "unknown"] = (
-                "pending" if "attesa" in state_text or "pending" in state_text else "uploaded"
+        with PaginatedResponseCapture(self.page, DOCUMENTS_ENDPOINT) as capture:
+            mark = capture.mark()
+            await self.open(employee_id)
+            response = await capture.wait_for(
+                employee_id,
+                after_sequence=mark,
+                timeout_ms=self.timeout_ms,
             )
-            expiry_date = await self.read_text("document_row.expiry", root=row)
-            uploaded_at = await self.read_text("document_row.uploaded_at", root=row)
-            record_id = await self.read_attribute("document_row.id", "data-document-id", root=row)
-            stable_identifier = bool(record_id)
-            edit = await self.locate("documents.edit", root=row, required=False)
-            delete = await self.locate("documents.delete", root=row, required=False)
-            result.append(
-                DocumentMetadata(
-                    document_id=record_id
-                    or _stable_record_id("DOC", category, expiry_date, uploaded_at, str(index)),
-                    employee_id=employee_id,
-                    stable_identifier=stable_identifier,
-                    actionable=stable_identifier and edit is not None and delete is not None,
-                    title_redacted="[REDACTED]" if title else "untitled [REDACTED]",
-                    category=category,
-                    expiry_date=expiry_date,
-                    uploaded_at=uploaded_at,
-                    uploaded_by_redacted=self.redact_name(
-                        await self.read_text("document_row.uploaded_by", root=row)
-                    ),
-                    state=state,
-                )
+            first = await page_from_response(
+                response,
+                contract=DOCUMENTS_ENDPOINT,
+                employee_id=employee_id,
             )
-        return tuple(result)
+            items = await collect_complete_pages(
+                self.page,
+                first,
+                contract=DOCUMENTS_ENDPOINT,
+                employee_id=employee_id,
+            )
+        return documents_from_items(items, employee_id=employee_id, query=query)
 
     async def stable_document_ids(self, employee_id: str) -> frozenset[str]:
         """Return only stable DOM identifiers for an in-process upload baseline."""

@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 
 from bh_dic.dic.errors import DicConfigurationError, DicUiChangedError, DicValidationError
 from bh_dic.dic.models import OpaqueStateDigest
+from bh_dic.dic.route_registry import DIC_ROUTES
 from bh_dic.dic.selectors import (
     DEFAULT_SELECTORS,
     SelectorCandidate,
@@ -177,13 +178,8 @@ class BaseDicPage:
         return employee_id
 
     def route(self, employee_id: str | None = None) -> str:
-        if "{employee_id}" not in self.route_template:
-            if employee_id is not None:
-                raise DicValidationError("this route does not accept employee_id")
-            return self.route_template
-        if employee_id is None:
-            raise DicValidationError("employee_id is required by this route")
-        return self.route_template.format(employee_id=self.validate_employee_id(employee_id))
+        route = DIC_ROUTES.for_template(self.route_template)
+        return route.render(employee_id=employee_id)
 
     def absolute_url(self, employee_id: str | None = None) -> str:
         path = self.route(employee_id)

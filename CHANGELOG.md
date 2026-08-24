@@ -7,6 +7,15 @@ stable public API is declared.
 
 ### Added
 
+- Registro route DIC versionato, paginator first-party generico con verifica di completezza,
+  schemi forward-compatible per campi additivi e circuit breaker separati per risorsa/operazione.
+- `HRQueryPlan` read-only tipizzato, piano multi-step contratti+payroll, contesto locale LRU/TTL
+  isolato per utente/conversazione e selezione ordinale senza inviare identità al provider.
+- DM Discord realmente autorizzati tramite `fetch_member` del guild corrente, entitlement separati
+  per PII/payroll/documenti/bilanci e consegna privata dei risultati sensibili.
+- Comandi amministrativi `/bh diagnostics`, `/bh coverage`, `/bh route-status` e
+  `/bh schema-status`, oltre al gate esplicito `scripts/run_live_read_coverage_gate.sh`.
+
 - Modalità Discord `channel` nel solo canale allowlistato: ignora la chat non HR, usa un responder
   stateless senza tool per orientamento generale e il coordinator autorizzato per richieste DIC.
   Input/output del solo responder generale sono minimizzati, redatti e protetti dalle mention.
@@ -22,6 +31,14 @@ stable public API is declared.
   registrate, senza URL o selettori forniti dal modello.
 
 ### Changed
+
+- Nel canale HR dedicato ogni messaggio umano attraversa il coordinator; soltanto un esito
+  operativo `UNSUPPORTED` usa il risponditore HR generale. Non esiste più il pre-filtro distruttivo
+  azione+oggetto.
+- Contratti, maturazioni e documenti usano le risposte first-party paginate emesse dalla UI,
+  validate per origine, path, tenant/employee, schema, progressione e totale dichiarato.
+- Payroll/netto e link al documento richiedono entitlement distinti e consegna privata; la
+  matricola è visibile integralmente soltanto con `pii:read`.
 
 - Il routing Groq usa Chat Completions con una sola tool call obbligatoria e validazione locale,
   evitando il percorso Responses che in produzione restituiva `tool_use_failed` su richieste reali.

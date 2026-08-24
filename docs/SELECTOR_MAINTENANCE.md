@@ -1,5 +1,10 @@
 # Manutenzione dei selettori DIC
 
+Contratti, maturazioni e documenti preferiscono ora la risposta first-party strutturata generata
+dalla UI autorizzata. Mantenere origin/path/query/schema e contratti di paginazione prima di
+modificare fallback DOM. Campi additivi sono accettati ma non esposti automaticamente; identità
+obbligatorie mancanti, ID duplicati, totali variabili o paginazione incompleta restano errori hard.
+
 ## Fonte unica e stato
 
 La fonte eseguibile unica è

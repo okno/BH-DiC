@@ -255,9 +255,11 @@ def _write(
 
 
 HR_READ = (_rule(LogicalRole.HR_READ),)
+PAYROLL_READ = (_rule(LogicalRole.HR_READ, entitlements=("payroll:read",)),)
 HR_WRITE = (_rule(LogicalRole.HR_WRITE),)
 IAM = (_rule(LogicalRole.IAM_OPERATOR),)
 DOCS = (_rule(LogicalRole.DOCUMENT_OPERATOR),)
+DOCS_READ = (_rule(LogicalRole.DOCUMENT_OPERATOR, entitlements=("documents:metadata",)),)
 APPROVERS = frozenset({LogicalRole.APPROVER, LogicalRole.SYSTEM_ADMIN})
 OPTIONAL_MOTIVATION = WriteParameterSpec(
     "motivation",
@@ -342,14 +344,26 @@ _SPECS = (
         sensitivity=Sensitivity.HIGH,
         target=True,
     ),
-    _read("EMP-PAY-001", "Metadati buste paga", HR_READ, sensitivity=Sensitivity.HIGH, target=True),
+    _read(
+        "EMP-PAY-001",
+        "Metadati e netto buste paga",
+        PAYROLL_READ,
+        sensitivity=Sensitivity.HIGH,
+        target=True,
+    ),
     _read(
         "EMP-PAY-002",
         "Ricerca dipendenti con busta paga per mese",
-        HR_READ,
+        PAYROLL_READ,
         sensitivity=Sensitivity.HIGH,
     ),
-    _read("EMP-DOC-001", "Metadati documenti", DOCS, sensitivity=Sensitivity.HIGH, target=True),
+    _read(
+        "EMP-DOC-001",
+        "Metadati documenti",
+        DOCS_READ,
+        sensitivity=Sensitivity.HIGH,
+        target=True,
+    ),
     _write(
         "EMP-UPDATE-001",
         "Modifica dati dipendente",

@@ -71,13 +71,14 @@ _PAYROLL_MONTH = re.compile(
 )
 _PAYROLL_YEAR = re.compile(r"\b(20\d{2})\b")
 _NET_PAY_REQUEST = re.compile(
-    r"\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\b|\bnett\w*\s+(?:mensile|da\s+pagare)\b",
+    r"\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\b|"
+    r"\bnett\w*\s+(?:mensile|da\s+pagare|di\b|del\b|della\b|per\b)",
     re.IGNORECASE,
 )
 _NET_PAY_TARGET = re.compile(
-    r"(?is)\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\s+"
+    r"(?is)\b(?:(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*|nett\w*)\s+"
     r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
-    r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di)\s+(?:gennaio|febbraio|marzo|aprile|"
+    r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di|per)\s+(?:gennaio|febbraio|marzo|aprile|"
     r"maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b|[?!.]|$)"
 )
 _MONTH_NUMBER_BY_NAME = {

@@ -196,6 +196,41 @@ async def test_circuit_breaker_opens_and_fails_fast() -> None:
     await coordinator.close()
 
 
+@pytest.mark.asyncio
+async def test_default_circuits_are_isolated_by_semantic_resource() -> None:
+    coordinator = BrowserCoordinator(
+        read_retry=ReadRetryPolicy(
+            attempts=1,
+            initial_delay_seconds=0,
+            maximum_delay_seconds=0,
+            operation_timeout_seconds=1,
+        )
+    )
+
+    async def contract_drift() -> None:
+        raise DicUiChangedError("synthetic contract drift")
+
+    for _ in range(3):
+        with pytest.raises(DicUiChangedError):
+            await coordinator.run_read("employees.contracts", "dic-browser", contract_drift)
+
+    with pytest.raises(DicCircuitOpenError):
+        await coordinator.run_read("employees.contracts", "dic-browser", contract_drift)
+
+    async def payroll_ok() -> str:
+        return "payroll remains available"
+
+    assert (
+        await coordinator.run_read("employees.payrolls", "dic-browser", payroll_ok)
+        == "payroll remains available"
+    )
+    assert coordinator.circuit_states() == {
+        "employees.contracts": CircuitState.OPEN,
+        "employees.payrolls": CircuitState.CLOSED,
+    }
+    await coordinator.close()
+
+
 def test_runtime_configuration_rejects_unsafe_bounds_and_caps_backoff() -> None:
     with pytest.raises(ValueError, match="circuit breaker"):
         CircuitBreaker(failure_threshold=0)

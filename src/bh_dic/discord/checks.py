@@ -44,12 +44,18 @@ class DiscordGate:
         role_mapping: Mapping[str, Iterable[int]],
         entitlement_mapping: Mapping[str, Iterable[int]] | None = None,
         allow_dms: bool = False,
+        dm_allowed_role_ids: Iterable[int] = (),
+        mention_channel_ids: Iterable[int] = (),
     ) -> None:
         if guild_id <= 0 or channel_id <= 0:
             raise ValueError("guild_id and channel_id must be positive")
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.allow_dms = allow_dms
+        self.dm_allowed_role_ids = frozenset(int(role_id) for role_id in dm_allowed_role_ids)
+        self.mention_channel_ids = frozenset(int(value) for value in mention_channel_ids)
+        if self.allow_dms and not self.dm_allowed_role_ids:
+            raise ValueError("DM mode requires an explicit allowed-role list")
         self.role_mapping = {
             logical_role: frozenset(int(role_id) for role_id in role_ids)
             for logical_role, role_ids in role_mapping.items()
@@ -69,6 +75,7 @@ class DiscordGate:
         is_thread: bool = False,
         is_bot: bool = False,
         is_webhook: bool = False,
+        allow_mention_channel: bool = False,
     ) -> DiscordActor:
         if is_bot:
             raise DiscordAccessDenied(AccessDenialReason.BOT_NOT_ALLOWED)
@@ -84,7 +91,9 @@ class DiscordGate:
             raise DiscordAccessDenied(AccessDenialReason.GUILD_NOT_ALLOWED)
         if is_thread:
             raise DiscordAccessDenied(AccessDenialReason.THREAD_NOT_ALLOWED)
-        if channel_id != self.channel_id:
+        if channel_id != self.channel_id and not (
+            allow_mention_channel and channel_id in self.mention_channel_ids
+        ):
             raise DiscordAccessDenied(AccessDenialReason.CHANNEL_NOT_ALLOWED)
 
         actual_role_ids = frozenset(int(role_id) for role_id in role_ids)
@@ -104,6 +113,48 @@ class DiscordGate:
             user_id=user_id,
             guild_id=guild_id,
             channel_id=channel_id,
+            logical_roles=logical_roles,
+            discord_role_ids=actual_role_ids,
+            entitlements=entitlements,
+        )
+
+    def authorize_dm(
+        self,
+        *,
+        user_id: int,
+        verified_guild_id: int,
+        role_ids: Iterable[int],
+        is_bot: bool = False,
+    ) -> DiscordActor:
+        """Authorize a DM only from a freshly fetched member of the configured guild."""
+
+        if is_bot:
+            raise DiscordAccessDenied(AccessDenialReason.BOT_NOT_ALLOWED)
+        if not self.allow_dms:
+            raise DiscordAccessDenied(AccessDenialReason.DM_NOT_ALLOWED)
+        if verified_guild_id != self.guild_id:
+            raise DiscordAccessDenied(AccessDenialReason.GUILD_NOT_ALLOWED)
+        actual_role_ids = frozenset(int(role_id) for role_id in role_ids)
+        if not (actual_role_ids & self.dm_allowed_role_ids):
+            raise DiscordAccessDenied(AccessDenialReason.ROLE_NOT_ALLOWED)
+        logical_roles = frozenset(
+            logical_role
+            for logical_role, configured_ids in self.role_mapping.items()
+            if configured_ids & actual_role_ids
+        )
+        if not logical_roles:
+            raise DiscordAccessDenied(AccessDenialReason.ROLE_NOT_ALLOWED)
+        entitlements = frozenset(
+            entitlement
+            for entitlement, configured_ids in self.entitlement_mapping.items()
+            if configured_ids & actual_role_ids
+        )
+        # The policy context remains anchored to the configured HR channel; the
+        # transport has independently proved this is an authorized private delivery.
+        return DiscordActor(
+            user_id=user_id,
+            guild_id=self.guild_id,
+            channel_id=self.channel_id,
             logical_roles=logical_roles,
             discord_role_ids=actual_role_ids,
             entitlements=entitlements,

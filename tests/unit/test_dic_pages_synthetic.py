@@ -206,6 +206,7 @@ class SyntheticPage:
         self._url = ""
         self.visited: list[str] = []
         self.response_handlers: list[object] = []
+        self.navigation_response_factory: Callable[[], object] | None = None
 
     def add(self, key: str, *nodes: SyntheticNode) -> None:
         container_key = {
@@ -294,6 +295,8 @@ class SyntheticPage:
         del wait_until, timeout
         self._url = url
         self.visited.append(url)
+        if self.navigation_response_factory is not None:
+            self.emit_response(self.navigation_response_factory())
         return object()
 
     async def wait_for_load_state(
@@ -347,6 +350,17 @@ class SyntheticResponse:
             "content-type": "application/json",
             "content-length": str(len(self._body)),
         }.get(name.casefold())
+
+
+def _paginated_document(*items: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "current_page": 1,
+        "data": list(items),
+        "last_page": 1,
+        "next_page_url": None,
+        "per_page": max(1, len(items)),
+        "total": len(items),
+    }
 
 
 def _api_employee(
@@ -1152,15 +1166,31 @@ async def test_contract_page_reads_rows_and_executes_create_and_delete() -> None
         }
     )
     page.add("contracts.rows", row, fallback_row)
+    page.navigation_response_factory = lambda: SyntheticResponse(
+        "https://secure.dipendentincloud.it/backend_apiV2/contracts?"
+        "employee_id=EMP-SYNTH-001&page=1",
+        _paginated_document(
+            {
+                "id": 10,
+                "employee": {"id": "EMP-SYNTH-001"},
+                "flexible_workinghours": False,
+                "hours_type": "40h",
+                "ongoing": True,
+                "part_time_percentage": 100,
+                "permanent": True,
+                "valid_from": "2026-01-01",
+                "valid_to": None,
+                "level": "L1",
+                "note": "Synthetic description",
+            }
+        ),
+    )
     contract_page = EmployeeContractsPage(page, "https://secure.dipendentincloud.it")
     records = await contract_page.read("EMP-SYNTH-001")
     assert records[0].permanent is True
     assert records[0].description == "[REDACTED]"
     assert records[0].stable_identifier is True
-    assert records[0].actionable is True
-    assert records[1].contract_id.startswith("CON-")
-    assert records[1].stable_identifier is False
-    assert records[1].actionable is False
+    assert records[0].actionable is False
     assert (
         await contract_page.verify_expected(
             "EMP-SYNTH-001",
@@ -1246,9 +1276,24 @@ async def test_maturation_balance_and_payroll_pages_read_and_validate_writes() -
             attributes={"data-maturation-id": "MAT-SYNTH-NEW"},
         ),
     )
+    maturation_dom.navigation_response_factory = lambda: SyntheticResponse(
+        "https://secure.dipendentincloud.it/backend_apiV2/maturations?"
+        "employee_id=EMP-SYNTH-001&page=1",
+        _paginated_document(
+            {
+                "id": 20,
+                "employee": {"id": "EMP-SYNTH-001"},
+                "counter": {"name": "ROL"},
+                "from": {"month": 1, "year": 2026},
+                "to": {"month": 12, "year": 2026},
+                "ongoing": True,
+                "valid": True,
+            }
+        ),
+    )
     maturation_page = EmployeeMaturationsPage(maturation_dom, "https://secure.dipendentincloud.it")
     maturations = await maturation_page.read("EMP-SYNTH-001")
-    assert maturations[0].maturation_id.startswith("MAT-")
+    assert maturations[0].maturation_id == "20"
     assert (
         await maturation_page.verify_created_maturation(
             "EMP-SYNTH-001", frozenset(), {"category": "ROL"}
@@ -1385,20 +1430,43 @@ async def test_document_page_reads_filtered_metadata_and_executes_file_workflows
     matching.add("documents.delete", page.root.children["documents.delete"][0])
     ignored = _row({"document_row.title": "Other", "document_row.category": "Patente"})
     page.add("documents.rows", matching, ignored)
+    page.navigation_response_factory = lambda: SyntheticResponse(
+        "https://secure.dipendentincloud.it/backend_apiV2/documents?"
+        "employee_ids=%5B%22EMP-SYNTH-001%22%5D&page=1",
+        _paginated_document(
+            {
+                "id": 30,
+                "employee_id": "EMP-SYNTH-001",
+                "title": "Synthetic CV",
+                "category": {"name": "CV"},
+                "date": "2026-01-01",
+                "expiration_date": "2027-01-01",
+                "requested": True,
+                "creator": {"full_name": "Alice Example"},
+            },
+            {
+                "id": 31,
+                "employee_id": "EMP-SYNTH-001",
+                "title": "Other",
+                "category": {"name": "Patente"},
+                "date": "2026-02-01",
+                "expiration_date": None,
+                "requested": False,
+            },
+        ),
+    )
     documents_page = EmployeeDocumentsPage(page, "https://secure.dipendentincloud.it")
     documents = await documents_page.read(
         "EMP-SYNTH-001", DocumentQuery(query="synthetic", state="pending", category="CV")
     )
     assert len(documents) == 1
     assert documents[0].title_redacted == "[REDACTED]"
-    assert documents[0].uploaded_by_redacted == "A. E."
+    assert documents[0].uploaded_by_redacted == "[PERSON_REDACTED]"
     assert documents[0].state == "pending"
     assert documents[0].stable_identifier is True
-    assert documents[0].actionable is True
+    assert documents[0].actionable is False
     all_documents = await documents_page.read("EMP-SYNTH-001", DocumentQuery())
-    fallback = next(record for record in all_documents if record.document_id != "DOC-SYNTH-001")
-    assert fallback.stable_identifier is False
-    assert fallback.actionable is False
+    assert {record.document_id for record in all_documents} == {"30", "31"}
     assert await documents_page.stable_document_ids("EMP-SYNTH-001") == frozenset({"DOC-SYNTH-001"})
     assert (
         await documents_page.verify_expected_metadata(

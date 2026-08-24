@@ -1,5 +1,17 @@
 # Threat model
 
+## New conversational threats and controls
+
+- Cross-user/session fixation: context keys include user, guild and conversation; TTL/LRU bounds and
+  explicit process-local storage prevent persistence and cross-user reuse.
+- Stale DM roles: every DM uses `fetch_member`; cache-only membership is insufficient.
+- Channel data disclosure: sensitive results are never published by default and require private
+  delivery plus field entitlements.
+- Provider exfiltration: identity/results/browser primitives are prohibited and the local public-HR
+  boundary rejects or redacts names, health/family/pay, addresses, dates, secrets and links.
+- Route/schema drift: exact allowlists, typed projections, completeness checks and resource-scoped
+  circuits fail closed without disabling unrelated reads.
+
 ## Model scope
 
 This model covers Discord input, multi-provider intent routing, local persistence, Playwright

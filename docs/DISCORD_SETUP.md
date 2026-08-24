@@ -2,8 +2,8 @@
 
 Questa procedura prepara un'applicazione Discord limitata al guild e al canale allowlistati nella
 configurazione locale. La modalità predefinita è slash-only; la modalità opzionale `channel`
-legge i messaggi nel solo canale configurato, ignora quelli non HR e separa richieste operative
-DIC da orientamento HR generale. I
+legge ogni messaggio umano nel solo canale configurato e usa il responder HR generale soltanto
+dopo un esito operativo `UNSUPPORTED`. I
 relativi ID non sono conservati nella repository e devono essere copiati dal client Discord: non
 ricavarli dai nomi e non inventarli.
 
@@ -64,6 +64,9 @@ DISCORD_GUILD_ID=<DISCORD_GUILD_ID>
 DISCORD_CHANNEL_ID=<DISCORD_CHANNEL_ID>
 DISCORD_INTERACTION_MODE=slash
 DISCORD_ALLOW_DMS=false
+DISCORD_DM_AUTH_GUILD_ID=
+DISCORD_DM_ALLOWED_ROLE_IDS=
+DISCORD_SENSITIVE_DELIVERY_MODE=ephemeral_only
 ```
 
 Proteggere `.env` con modo `0600`. Token, chiavi e Guild/Channel/Role ID operativi restano nella
@@ -109,6 +112,10 @@ Mappare gli ID dei ruoli Discord già approvati:
 ```dotenv
 DISCORD_READONLY_ROLE_IDS=<ID_LIST>
 DISCORD_HR_READ_ROLE_IDS=<ID_LIST>
+DISCORD_PII_ROLE_IDS=<ID_LIST>
+DISCORD_PAYROLL_ROLE_IDS=<ID_LIST>
+DISCORD_DOCUMENT_METADATA_ROLE_IDS=<ID_LIST>
+DISCORD_PROTECTED_DOCUMENT_ROLE_IDS=<ID_LIST>
 DISCORD_BALANCE_ROLE_IDS=<ID_LIST>
 DISCORD_HR_WRITE_ROLE_IDS=<ID_LIST>
 DISCORD_IAM_ROLE_IDS=<ID_LIST>

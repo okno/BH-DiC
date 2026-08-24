@@ -1,5 +1,12 @@
 # Limitazioni note dell'adapter DIC
 
+La nuova proiezione network di contratti, maturazioni e documenti richiede ancora la rivalidazione
+live post-deploy. I bilanci restano sul contratto DOM degradato in attesa di una fixture first-party
+sanitizzata. Follow-up generali su result set arbitrari, paginazione bulk completa timbrature,
+workplace, modelli orario, spese/viaggi e superfici complete turni/presenze non sono implementati.
+Il contesto conversazionale supporta selezioni candidate/ordinali bounded, non il ripristino dopo
+riavvio.
+
 ## Verifica live e compatibilità UI
 
 - Oltre alla ricognizione iniziale, lo SHA 0.3.0 esatto documentato ha superato un unico gate live

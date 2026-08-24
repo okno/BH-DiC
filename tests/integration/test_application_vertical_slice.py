@@ -141,16 +141,21 @@ class CapturingMockAdapter(MockDicAdapter):
 
 def actor(
     *roles: LogicalRole,
-    entitlements: frozenset[str] = frozenset(),
+    entitlements: frozenset[str] | None = None,
     user_id: int = 1001,
 ) -> DiscordActor:
+    effective_entitlements = set(entitlements or ())
+    if entitlements is None and LogicalRole.HR_READ in roles:
+        effective_entitlements.update({"pii:read", "payroll:read", "protected_documents:download"})
+    if entitlements is None and LogicalRole.DOCUMENT_OPERATOR in roles:
+        effective_entitlements.update({"documents:metadata", "protected_documents:download"})
     return DiscordActor(
         user_id=user_id,
         guild_id=2001,
         channel_id=3001,
         logical_roles=frozenset(role.value for role in roles),
         discord_role_ids=frozenset({4001}),
-        entitlements=entitlements,
+        entitlements=frozenset(effective_entitlements),
     )
 
 
@@ -335,6 +340,70 @@ async def test_natural_excel_export_requires_confirmation_then_returns_real_arti
 
 
 @pytest.mark.asyncio
+async def test_diagnostics_are_admin_only_and_report_runtime_route_states() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    try:
+        with pytest.raises(ApplicationPolicyDenied):
+            await coordinator.diagnostics(actor(LogicalRole.HR_READ))
+        diagnostics = await coordinator.diagnostics(actor(LogicalRole.SECURITY_ADMIN))
+        coverage = await coordinator.coverage(actor(LogicalRole.SECURITY_ADMIN))
+        routes = await coordinator.route_status(actor(LogicalRole.SYSTEM_ADMIN))
+        schemas = await coordinator.schema_status(actor(LogicalRole.SYSTEM_ADMIN))
+    finally:
+        await adapter.close()
+
+    assert diagnostics.title == "Diagnostica DIC redatta"
+    assert "payload" in diagnostics.description
+    assert "Route inventariate" in coverage.description
+    assert routes.fields
+    assert all("/" not in field.name for field in routes.fields)
+    assert schemas.title == "Stato schemi DIC"
+
+
+@pytest.mark.asyncio
+async def test_field_entitlements_protect_pii_payroll_and_document_link() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-001",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            net_cents=123_456,
+            attachment_url=SecretStr(
+                "https://s3.eu-west-1.amazonaws.com/synthetic/payroll.pdf?"
+                "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            ),
+        )
+    ]
+    no_fields = actor(LogicalRole.HR_READ, entitlements=frozenset())
+    payroll_only = actor(
+        LogicalRole.HR_READ,
+        entitlements=frozenset({"payroll:read"}),
+    )
+    try:
+        profile = await coordinator.employee(no_fields, "EMP-SYNTH-001")
+        with pytest.raises(ApplicationPolicyDenied):
+            await coordinator.ask(
+                no_fields,
+                "netto di employee id EMP-SYNTH-001 per luglio",
+            )
+        payroll = await coordinator.ask(
+            payroll_only,
+            "netto di employee id EMP-SYNTH-001 per luglio",
+        )
+    finally:
+        await adapter.close()
+
+    payroll_number = next(field.value for field in profile.fields if field.name == "Matricola")
+    assert payroll_number.endswith("-001")
+    assert payroll_number != "SYN-001"
+    assert "€ 1.234,56" in payroll.fields[0].value
+    assert "download non autorizzato" in payroll.fields[0].value
+    assert "s3.eu-west-1.amazonaws.com" not in payroll.fields[0].value
+
+
+@pytest.mark.asyncio
 async def test_large_ascii_list_bounds_channel_preview_but_keeps_every_row_in_attachment() -> None:
     coordinator, adapter, _ = await coordinator_for(_operator_router())
     seed = adapter._items["EMP-SYNTH-001"]
@@ -447,6 +516,50 @@ async def test_status_change_with_ambiguous_name_lists_ids_and_creates_no_pendin
         "ID: EMP-SYNTH-002",
     }
     assert pending == ()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_target_can_be_selected_by_local_ordinal_followup() -> None:
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(),
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_STATUS_CHANGE"}),
+    )
+    first = adapter._items["EMP-SYNTH-001"].model_copy(
+        update={
+            "display_name": SecretStr("Mario Rossi"),
+            "display_name_redacted": "Mario Rossi",
+            "employee_state": EmployeeState.INACTIVE,
+        }
+    )
+    adapter._items["EMP-SYNTH-001"] = first
+    adapter._items["EMP-SYNTH-002"] = first.model_copy(update={"employee_id": "EMP-SYNTH-002"})
+    adapter._summaries["EMP-SYNTH-002"] = adapter._summaries["EMP-SYNTH-001"].model_copy(
+        update={"employee_id": "EMP-SYNTH-002", "state": EmployeeState.INACTIVE}
+    )
+    adapter._raw_summaries["EMP-SYNTH-002"] = {
+        **adapter._raw_summaries["EMP-SYNTH-001"],
+        "employee_id": "EMP-SYNTH-002",
+        "state": "inactive",
+    }
+    try:
+        ambiguous = await coordinator.ask(
+            actor(LogicalRole.HR_WRITE),
+            "riattiva Mario Rossi",
+        )
+        selected = await coordinator.ask(
+            actor(LogicalRole.HR_WRITE),
+            "usa il secondo",
+        )
+        pending = await repository.get(selected.action_id or "")
+    finally:
+        await adapter.close()
+
+    assert ambiguous.title == "Risultato non univoco"
+    assert selected.action_id is not None
+    assert pending is not None
+    assert pending.target_employee_id == "EMP-SYNTH-002"
 
 
 @pytest.mark.asyncio
@@ -1599,7 +1712,12 @@ async def test_read_function_matrix_dispatches_deterministically(
         )
     )
     coordinator, adapter, _ = await coordinator_for(router)
-    entitlements = frozenset({"balances:read"}) if function_id == "EMP-BAL-001" else frozenset()
+    entitlement_by_function = {
+        "EMP-BAL-001": frozenset({"balances:read"}),
+        "EMP-PAY-001": frozenset({"payroll:read", "protected_documents:download"}),
+        "EMP-DOC-001": frozenset({"documents:metadata"}),
+    }
+    entitlements = entitlement_by_function.get(function_id)
     try:
         request = (
             "elenco sintetico"

@@ -86,15 +86,20 @@ def _intent(
 def _actor(
     *roles: LogicalRole,
     user_id: int = 1001,
-    entitlements: frozenset[str] = frozenset(),
+    entitlements: frozenset[str] | None = None,
 ) -> DiscordActor:
+    effective_entitlements = set(entitlements or ())
+    if entitlements is None and LogicalRole.HR_READ in roles:
+        effective_entitlements.update({"pii:read", "payroll:read", "protected_documents:download"})
+    if entitlements is None and LogicalRole.DOCUMENT_OPERATOR in roles:
+        effective_entitlements.update({"documents:metadata", "protected_documents:download"})
     return DiscordActor(
         user_id=user_id,
         guild_id=2001,
         channel_id=3001,
         logical_roles=frozenset(role.value for role in roles),
         discord_role_ids=frozenset({4001}),
-        entitlements=entitlements,
+        entitlements=frozenset(effective_entitlements),
     )
 
 

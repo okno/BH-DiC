@@ -221,7 +221,7 @@ def _signed_pdf(value: object) -> SecretStr | None:
 
 
 def _payroll(item: object, employee_id: str, year: int) -> PayrollMetadata:
-    if not isinstance(item, dict) or set(item) != _PAYROLL_KEYS:
+    if not isinstance(item, dict) or not _PAYROLL_KEYS.issubset(item):
         raise _failure("invalid payroll schema")
     employee = item["employee"]
     if (
@@ -239,7 +239,7 @@ def _payroll(item: object, employee_id: str, year: int) -> PayrollMetadata:
     pdf_url: SecretStr | None = None
     pdf_filename: str | None = None
     for attachment in attachments:
-        if not isinstance(attachment, dict) or set(attachment) != _ATTACHMENT_KEYS:
+        if not isinstance(attachment, dict) or not _ATTACHMENT_KEYS.issubset(attachment):
             raise _failure("invalid attachment schema")
         filename = _bounded_text(attachment["filename"], maximum=255)
         if filename is not None and filename.casefold().endswith(".pdf"):
@@ -289,7 +289,7 @@ async def payrolls_from_response(
         document = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise _failure("invalid response document") from None
-    if not isinstance(document, dict) or set(document) != _ROOT_KEYS:
+    if not isinstance(document, dict) or not _ROOT_KEYS.issubset(document):
         raise _failure("invalid response schema")
     if document["current_page"] != 1 or document["per_page"] != 20:
         raise _failure("unexpected pagination metadata")

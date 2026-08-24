@@ -349,6 +349,22 @@ class BHCommandGroup(app_commands.Group):
     async def health_command(self, interaction: discord.Interaction) -> None:
         await self._send(interaction, self._coordinator.health)
 
+    @app_commands.command(name="diagnostics", description="Diagnostica amministrativa redatta")
+    async def diagnostics_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.diagnostics)
+
+    @app_commands.command(name="coverage", description="Copertura read verificata del tenant")
+    async def coverage_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.coverage)
+
+    @app_commands.command(name="route-status", description="Stato redatto delle route DIC")
+    async def route_status_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.route_status)
+
+    @app_commands.command(name="schema-status", description="Stato degli schemi first-party")
+    async def schema_status_command(self, interaction: discord.Interaction) -> None:
+        await self._send(interaction, self._coordinator.schema_status)
+
     @app_commands.command(name="pending", description="Elenca le azioni pending autorizzate")
     async def pending_command(self, interaction: discord.Interaction) -> None:
         await self._send(interaction, self._coordinator.pending)

@@ -149,12 +149,20 @@ con contratto a scadenza nel prossimo mese` richiede invece un ruolo umano dedic
 resta ephemeral perché contiene dettagli individuali. L'ownership Discord non sostituisce questi
 ruoli applicativi.
 
-Con `DISCORD_INTERACTION_MODE=channel`, nel solo canale configurato le richieste HR operative
-riconosciute attraversano lo stesso RBAC e lo stesso coordinator di `/bh`; i messaggi generici non
-HR vengono ignorati. La pubblicazione di dati DIC sensibili richiede anche l'opt-in
-`DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES=true` e un ruolo umano `HR_READ` in un canale privato.
+Con `DISCORD_INTERACTION_MODE=channel`, ogni messaggio umano nel solo canale configurato attraversa
+prima lo stesso coordinator e lo stesso RBAC di `/bh`; soltanto un esito operativo esplicitamente
+`UNSUPPORTED` passa al risponditore HR generale. La pubblicazione di dati DIC sensibili resta
+disabilitata per default. Con `DISCORD_SENSITIVE_DELIVERY_MODE=dm_or_ephemeral`, il bot tenta una
+consegna DM dopo aver riletto dal guild i ruoli correnti, altrimenti invita a usare `/bh ask`.
 Abilitare il **Message Content Intent** e concedere al bot **View Channel**, **Send Messages**,
 **Embed Links**, **Read Message History** e, per gli export, **Attach Files**.
+
+I DM richiedono tutte le seguenti impostazioni: `DISCORD_ALLOW_DMS=true`,
+`DISCORD_DM_AUTH_GUILD_ID` uguale al guild autorizzato e una allowlist esplicita in
+`DISCORD_DM_ALLOWED_ROLE_IDS`. Gli entitlement di campo sono separati: `DISCORD_PII_ROLE_IDS`,
+`DISCORD_PAYROLL_ROLE_IDS`, `DISCORD_DOCUMENT_METADATA_ROLE_IDS`,
+`DISCORD_PROTECTED_DOCUMENT_ROLE_IDS` e `DISCORD_BALANCE_ROLE_IDS`. Lo stesso ruolo Discord può
+essere elencato in più mapping, ma ogni autorizzazione rimane esplicita.
 
 Esempi locali supportati: `dimmi il numero totale dei dipendenti`, `stampa una tabella ASCII con
 tutti i dipendenti`, `quali dipendenti hanno una busta paga a luglio?`, `genera un PDF/Word/Excel

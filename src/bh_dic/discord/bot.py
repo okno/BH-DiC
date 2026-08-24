@@ -15,15 +15,18 @@ from discord.ext import commands
 
 from bh_dic.dic.errors import DicError, DicUiChangedError
 from bh_dic.discord.approvals import PendingViewSource, restore_approval_views
-from bh_dic.discord.checks import DiscordAccessDenied, DiscordGate
+from bh_dic.discord.checks import (
+    AccessDenialReason,
+    DiscordAccessDenied,
+    DiscordActor,
+    DiscordGate,
+)
 from bh_dic.discord.commands import BHCommandGroup
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import InteractionCoordinator
 from bh_dic.errors import ApplicationPolicyDenied
 from bh_dic.hr_assistant import (
     HrRequestInputError,
-    is_general_hr_request,
-    is_operational_hr_request,
 )
 from bh_dic.language import BotLanguageProfile
 from bh_dic.logging import log_context
@@ -73,12 +76,15 @@ class BHDiCBot(commands.Bot):
         public_hr_provider: str = "unconfigured",
         public_hr_model: str = "unconfigured",
         startup_status_probe: Callable[[], Awaitable[StartupStatusSnapshot | bool]] | None = None,
+        sensitive_delivery_mode: Literal["ephemeral_only", "dm_or_ephemeral"] = "ephemeral_only",
     ) -> None:
         intents = discord.Intents.none()
         intents.guilds = True
         if interaction_mode in {"mention", "channel"}:
             intents.guild_messages = True
-            intents.dm_messages = False
+            intents.message_content = True
+        if gate.allow_dms:
+            intents.dm_messages = True
             intents.message_content = True
         super().__init__(
             command_prefix=commands.when_mentioned, intents=intents, application_id=application_id
@@ -106,13 +112,14 @@ class BHDiCBot(commands.Bot):
             language_profile=language_profile,
         )
         self.language_profile = language_profile
-        if interaction_mode == "channel" and public_hr_responder is None:
-            raise ValueError("channel interaction mode requires a public HR responder")
+        if (interaction_mode == "channel" or gate.allow_dms) and public_hr_responder is None:
+            raise ValueError("conversational message mode requires a public HR responder")
         self.public_hr_responder = public_hr_responder
         self.model_usage = model_usage
         self.public_hr_provider = public_hr_provider
         self.public_hr_model = public_hr_model
         self.startup_status_probe = startup_status_probe
+        self.sensitive_delivery_mode = sensitive_delivery_mode
         self._startup_notice_sent = False
         self._startup_notice_lock = asyncio.Lock()
 
@@ -202,9 +209,16 @@ class BHDiCBot(commands.Bot):
             )
 
     async def on_message(self, message: discord.Message) -> None:
-        if self.interaction_mode == "slash":
+        if message.author.bot or message.webhook_id is not None:
             return
-        if message.author.bot or message.webhook_id is not None or message.guild is None:
+        if message.guild is None:
+            if not self.gate.allow_dms:
+                return
+            correlation_id = f"dm-{uuid4().hex}"
+            with log_context(correlation_id=correlation_id, guild_id=self.gate.guild_id):
+                await self._dispatch_dm_message(message, correlation_id)
+            return
+        if self.interaction_mode == "slash":
             return
         if isinstance(message.channel, discord.Thread):
             return
@@ -215,16 +229,9 @@ class BHDiCBot(commands.Bot):
             and isinstance(referenced, discord.Message)
             and referenced.author.id == self.user.id
         )
-        if self.interaction_mode == "mention" and not is_mentioned:
+        if self.interaction_mode == "mention" and not is_mentioned and not is_reply_to_bot:
             return
         if self.interaction_mode == "channel" and message.channel.id != self.gate.channel_id:
-            return
-        if (
-            self.interaction_mode == "channel"
-            and not is_mentioned
-            and not is_reply_to_bot
-            and not is_general_hr_request(message.content)
-        ):
             return
         request = message.content
         if is_mentioned and self.user is not None:
@@ -237,32 +244,87 @@ class BHDiCBot(commands.Bot):
         ):
             await self._dispatch_message(message, request, correlation_id)
 
+    async def _dispatch_dm_message(
+        self,
+        message: discord.Message,
+        correlation_id: str,
+    ) -> None:
+        try:
+            guild = self.get_guild(self.gate.guild_id)
+            if guild is None:
+                raise DiscordAccessDenied(AccessDenialReason.GUILD_NOT_ALLOWED)
+            # Always refresh the member and its current roles; a cached member is not
+            # sufficient for private access to HR data.
+            member = await guild.fetch_member(message.author.id)
+            actor = self.gate.authorize_dm(
+                user_id=member.id,
+                verified_guild_id=guild.id,
+                role_ids=[role.id for role in member.roles],
+                is_bot=member.bot,
+            )
+            await self._dispatch_message(
+                message,
+                message.content,
+                correlation_id,
+                actor=actor,
+                private_transport=True,
+            )
+        except DiscordAccessDenied as exc:
+            logger.warning(
+                "discord_dm_access_denied",
+                extra={"reason": exc.reason.value},
+            )
+            await message.reply(
+                "Messaggio privato non autorizzato.",
+                mention_author=False,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "discord_dm_member_verification_failed",
+                extra={"exception_type": type(exc).__name__},
+            )
+            await message.reply(
+                "Non posso verificare in modo sicuro la tua appartenenza e i ruoli correnti.",
+                mention_author=False,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
     async def _dispatch_message(
         self,
         message: discord.Message,
         request: str,
         correlation_id: str,
+        *,
+        actor: DiscordActor | None = None,
+        private_transport: bool = False,
     ) -> None:
-        guild = message.guild
-        if guild is None:
-            return
         try:
-            actor = self.gate.authorize(
-                user_id=message.author.id,
-                guild_id=guild.id,
-                channel_id=message.channel.id,
-                role_ids=[role.id for role in getattr(message.author, "roles", [])],
-                is_thread=False,
-                is_bot=message.author.bot,
-                is_webhook=message.webhook_id is not None,
-            )
+            if actor is None:
+                guild = message.guild
+                if guild is None:
+                    raise DiscordAccessDenied(AccessDenialReason.DM_NOT_ALLOWED)
+                actor = self.gate.authorize(
+                    user_id=message.author.id,
+                    guild_id=guild.id,
+                    channel_id=message.channel.id,
+                    role_ids=[role.id for role in getattr(message.author, "roles", [])],
+                    is_thread=False,
+                    is_bot=message.author.bot,
+                    is_webhook=message.webhook_id is not None,
+                    allow_mention_channel=self.interaction_mode == "mention",
+                )
+            if not isinstance(actor, DiscordActor):
+                raise TypeError("message actor is invalid")
             limiter = (
                 self.message_rate_limiter
                 if self.interaction_mode == "channel"
                 else self.rate_limiter
             )
             rate_limit = await limiter.check(str(actor.user_id))
-            if rate_limit.allowed and self.interaction_mode == "channel":
+            if rate_limit.allowed and self.interaction_mode == "channel" and not private_transport:
                 rate_limit = await self.global_message_rate_limiter.check(
                     f"{actor.guild_id}:{actor.channel_id}"
                 )
@@ -273,20 +335,25 @@ class BHDiCBot(commands.Bot):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
-            if self.interaction_mode == "channel":
-                if is_operational_hr_request(request):
-                    result = await self.coordinator.ask(actor, request)
-                    await self._reply_with_result(message, result)
+            if self.interaction_mode == "channel" or private_transport:
+                result = await self.coordinator.ask(actor, request)
+                if result.public_hr_fallback:
+                    if self._public_hr_slots.locked():
+                        await message.reply(
+                            "L'assistente HR sta gestendo altre richieste. "
+                            "Riprova tra pochi secondi.",
+                            mention_author=False,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                        return
+                    async with self._public_hr_slots:
+                        await self._reply_as_public_hr(message, request, correlation_id)
                     return
-                if self._public_hr_slots.locked():
-                    await message.reply(
-                        "L'assistente HR sta gestendo altre richieste. Riprova tra pochi secondi.",
-                        mention_author=False,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    return
-                async with self._public_hr_slots:
-                    await self._reply_as_public_hr(message, request, correlation_id)
+                await self._reply_with_result(
+                    message,
+                    result,
+                    private_transport=private_transport,
+                )
                 return
             result = await self.coordinator.ask(actor, request)
             if result.ephemeral:
@@ -408,12 +475,39 @@ class BHDiCBot(commands.Bot):
         self,
         message: discord.Message,
         result: object,
+        *,
+        private_transport: bool = False,
     ) -> None:
         from bh_dic.discord.interactions import InteractionResult
 
         if not isinstance(result, InteractionResult):
             raise TypeError("coordinator returned an invalid interaction result")
-        if result.ephemeral and not self.publish_sensitive_channel_responses:
+        if (
+            result.ephemeral
+            and not private_transport
+            and not self.publish_sensitive_channel_responses
+        ):
+            if self.sensitive_delivery_mode == "dm_or_ephemeral" and hasattr(
+                message.author, "send"
+            ):
+                try:
+                    files = [
+                        discord.File(BytesIO(item.content), filename=item.filename)
+                        for item in result.attachments
+                    ]
+                    await message.author.send(
+                        embed=result_embed(result, self.language_profile),
+                        files=files,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    await message.reply(
+                        "Ti ho inviato il risultato HR sensibile in privato.",
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             await message.reply(
                 "La risposta contiene dati HR sensibili. Usa `/bh ask` oppure abilita "
                 "esplicitamente la pubblicazione nel canale HR protetto.",

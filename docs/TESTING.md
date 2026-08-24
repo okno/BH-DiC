@@ -1,5 +1,16 @@
 # Testing
 
+The conversational gate includes 120 unique Italian requests. Dedicated suites cover the typed
+query plan, TTL context isolation, DM authorization, field entitlements, generic pagination,
+first-party contract projections and per-resource circuits. The live gate is disabled by default:
+
+```bash
+BH_DIC_ENABLE_LIVE_READ_COVERAGE=true ./scripts/run_live_read_coverage_gate.sh
+```
+
+It emits only route states/counts and exits non-zero for any implemented available surface that
+fails. It never executes writes and does not print employee identities.
+
 Tutti i test devono usare fixture sintetiche e risorse locali. Per impostazione predefinita non
 devono inviare messaggi Discord, chiamare provider di modello/DIC o eseguire write live.
 

@@ -490,7 +490,7 @@ def _validate_links(
     active_links = 0
     final_index = len(value) - 1
     for index, item in enumerate(value):
-        if not isinstance(item, dict) or set(item) != {"active", "label", "url"}:
+        if not isinstance(item, dict) or not {"active", "label", "url"}.issubset(item):
             raise _failure("invalid pagination schema")
         active = _strict_bool(item["active"])
         _bounded_text(item["label"], maximum=128)
@@ -536,7 +536,7 @@ def _nested_name(
 ) -> str | None:
     if value is None and allow_none:
         return None
-    if not isinstance(value, dict) or set(value).difference(object_keys):
+    if not isinstance(value, dict):
         raise _failure("invalid response schema")
     if "name" not in value:
         raise _failure("invalid response schema")
@@ -546,7 +546,7 @@ def _nested_name(
 def _main_role_group(value: object) -> str | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value).difference(_MAIN_ROLE_KEYS):
+    if not isinstance(value, dict):
         raise _failure("invalid response schema")
     role = value.get("role")
     team = value.get("team")
@@ -565,16 +565,24 @@ def _contract_projection(value: object) -> tuple[str | None, bool | None, date |
     if not isinstance(value, dict):
         raise _failure("invalid current contract schema")
     contract_keys = value.keys()
-    is_extended = contract_keys == _EXTENDED_CONTRACT_KEYS
-    if contract_keys != _CONTRACT_KEYS and not is_extended:
+    if not _CONTRACT_KEYS.issubset(contract_keys):
         raise _failure("invalid current contract schema")
-    if is_extended:
+    technical_present = _CONTRACT_TECHNICAL_KEYS.intersection(contract_keys)
+    if technical_present and technical_present != _CONTRACT_TECHNICAL_KEYS:
+        raise _failure("invalid current contract schema")
+    if technical_present:
         # These discard-only fields have one exact live-observed shape.  They never leave this
         # validation boundary; booleans are strict (integers are rejected), nullable fields are
         # literal null only, and any future non-null/partial/unknown variant remains fail-closed.
-        _strict_bool(value["flexible_workinghours"])
-        _strict_bool(value["hours_alert"])
-        _strict_bool(value["ongoing"])
+        technical_invalid = False
+        try:
+            _strict_bool(value["flexible_workinghours"])
+            _strict_bool(value["hours_alert"])
+            _strict_bool(value["ongoing"])
+        except DicUiChangedError:
+            technical_invalid = True
+        if technical_invalid:
+            raise _failure("invalid current contract schema")
         if (
             value["note"] is not None
             or value["workinghours"] is not None
@@ -597,11 +605,7 @@ def _contract_projection(value: object) -> tuple[str | None, bool | None, date |
 
 
 def _employee_item(value: object, *, expected_tenant_id: str | None) -> EmployeeListItem:
-    if (
-        not isinstance(value, dict)
-        or set(value).difference(_EMPLOYEE_KEYS)
-        or not _REQUIRED_EMPLOYEE_KEYS.issubset(value)
-    ):
+    if not isinstance(value, dict) or not _REQUIRED_EMPLOYEE_KEYS.issubset(value):
         raise _failure("invalid employee schema")
     employee_id = _strict_int(value["id"], minimum=1)
     company_id = _strict_int(value["company_id"], minimum=1)
@@ -763,7 +767,7 @@ async def employee_list_result_from_response(
         document_failed = True
     if document_failed:
         raise _failure("invalid response document")
-    if not isinstance(document, dict) or set(document) != _ROOT_KEYS:
+    if not isinstance(document, dict) or not _ROOT_KEYS.issubset(document):
         raise _failure("invalid response schema")
 
     current_page, per_page, has_next = _pagination(document, expected)

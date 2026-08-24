@@ -112,3 +112,13 @@ async def test_payroll_capture_projects_net_and_keeps_signed_url_secret() -> Non
 async def test_payroll_capture_rejects_a_different_employee() -> None:
     with pytest.raises(DicUiChangedError, match="does not match requested employee"):
         await payrolls_from_response(_Response(_document()), employee_id="124", year=2026)
+
+
+@pytest.mark.asyncio
+async def test_payroll_capture_accepts_ignored_additive_fields() -> None:
+    document = _document()
+    document["future_root"] = {"ignored": True}
+    document["data"][0]["future_payroll"] = "ignored"
+    document["data"][0]["attachments"][0]["future_attachment"] = 1
+    records = await payrolls_from_response(_Response(document), employee_id="123", year=2026)
+    assert records[0].payroll_id == "77"

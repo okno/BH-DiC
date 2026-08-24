@@ -30,6 +30,7 @@ from bh_dic.files.quarantine import QuarantineStore
 from bh_dic.files.repository import SqlAlchemyUploadRepository
 from bh_dic.files.retention import FileRetentionService
 from bh_dic.health import HealthChecker
+from bh_dic.live_read_coverage import run_live_read_coverage
 from bh_dic.logging import configure_logging
 from bh_dic.openai.factory import build_intent_client
 from bh_dic.openai.intent_router import OpenAIIntentRouter
@@ -581,6 +582,27 @@ def dic_auth_check(
     except Exception as exc:
         _dic_auth_failure(exc)
     _emit(result)
+
+
+@app.command("dic-read-coverage")
+def dic_read_coverage(
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Explicitly execute the sanitized read-only coverage gate.",
+    ),
+) -> None:
+    """Run the bounded DIC read gate; it is disabled unless --live is explicit."""
+
+    if not live:
+        _fail("Il gate live read-only richiede --live esplicito.")
+    try:
+        result = _run(run_live_read_coverage(_settings(report_error=False)))
+    except Exception as exc:
+        _fail(f"Gate live read-only fallito ({type(exc).__name__}).")
+    _emit(result)
+    if not result.get("success"):
+        raise typer.Exit(1)
 
 
 async def _file_repository[T](

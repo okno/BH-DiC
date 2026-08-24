@@ -156,6 +156,22 @@ DISCORD_HR_READ_ROLE_IDS=<ROLE_ID_1>,<ROLE_ID_2>
 DISCORD_APPROVER_ROLE_IDS=<ROLE_ID_3>
 ```
 
+Le autorizzazioni ai campi sensibili sono separate dal ruolo di lettura generale. Un esempio per
+un ruolo HR umano approvato è:
+
+```dotenv
+DISCORD_PII_ROLE_IDS=<HR_ROLE_ID>
+DISCORD_PAYROLL_ROLE_IDS=<HR_ROLE_ID>
+DISCORD_DOCUMENT_METADATA_ROLE_IDS=<HR_ROLE_ID>
+DISCORD_PROTECTED_DOCUMENT_ROLE_IDS=<HR_ROLE_ID>
+DISCORD_BALANCE_ROLE_IDS=<HR_ROLE_ID>
+```
+
+`PII` abilita i campi identificativi previsti dal presenter; `PAYROLL` i valori di cedolino;
+`DOCUMENT_METADATA` i metadati; `PROTECTED_DOCUMENT` l'eventuale consegna del file protetto;
+`BALANCE` ferie/permessi. Nessuna di queste variabili concede scritture, approvazioni o privilegi
+amministrativi.
+
 Mappare soltanto ruoli già approvati. Il catalogo normativo RBAC è
 `src/bh_dic/policies/catalog.py`; [policies.example.yaml](../config/policies.example.yaml) è un
 esempio operativo restrict-only, non viene caricato automaticamente dal runtime e non può
@@ -190,6 +206,21 @@ Read Message History. Per rendere disponibili soltanto gli aggregati a tutti i m
 un canale HR privato dopo aver configurato almeno un ruolo umano dedicato in
 `DISCORD_HR_READ_ROLE_IDS`; la validazione rifiuta combinazioni meno restrittive. I file generati
 sono limitati da `EXPORT_MAX_MB` (default 8 MiB) e richiedono **Attach Files** sul ruolo bot.
+
+I messaggi diretti sono disabilitati per default e non si fidano dei ruoli presenti nel payload
+del messaggio. Per abilitarli il bot risolve ogni volta il membro nel guild configurato e richiede
+un ruolo umano esplicito:
+
+```dotenv
+DISCORD_ALLOW_DMS=true
+DISCORD_DM_AUTH_GUILD_ID=<DISCORD_GUILD_ID>
+DISCORD_DM_ALLOWED_ROLE_IDS=<HR_ROLE_ID>
+DISCORD_SENSITIVE_DELIVERY_MODE=dm_or_ephemeral
+```
+
+`DISCORD_MENTION_CHANNEL_IDS` limita la modalità `mention` a una allowlist di canali. I DM falliscono
+in sicurezza se Discord non conferma guild, membership o ruolo; un DM chiuso non rende mai pubblico
+il risultato sensibile.
 
 Analogamente, [redaction.example.yaml](../config/redaction.example.yaml) documenta il profilo
 atteso: i controlli effettivi sono nel codice di logging, security e provider. Modificare il file
@@ -242,6 +273,8 @@ di rete/autenticazione sono espliciti e separati:
 ```bash
 ./scripts/doctor.sh --online
 .venv/bin/python -m bh_dic model-check --live
+# Copertura DIC live, rigorosamente read-only e senza identità/valori HR in output.
+BH_DIC_ENABLE_LIVE_READ_COVERAGE=true ./scripts/run_live_read_coverage_gate.sh
 ```
 
 Il doctor online verifica DNS/HTTP dell'endpoint selezionato, senza autenticazione. Il doctor non
@@ -249,8 +282,9 @@ contatta mai un database non-SQLite: per PostgreSQL il relativo stato migrazioni
 `UNVERIFIED` e va controllato separatamente in una finestra di manutenzione autorizzata. Il
 model-check live è opt-in anche per il costo e invia una sola richiesta sintetica chiusa, senza
 PII né tool operativi. Non confondere la presenza dei comandi con un esito riuscito; conservare
-exit code e timestamp, non configurazioni. Sul target preparato Groq e il modello selezionato
-hanno esito `LIVE_VERIFIED`; OpenAI/llama, DIC e Discord restano stati separati e non vanno
+exit code e timestamp, non configurazioni. Il gate DIC pagina l'elenco e prova le sole risorse di
+lettura usando un identificativo esclusivamente in memoria; stampa stati e conteggi, mai nomi,
+Employee ID, importi o documenti. Provider, DIC e Discord restano stati separati e non vanno
 promossi senza evidenza propria.
 
 ## Modifica e rotazione

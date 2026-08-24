@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -56,6 +56,10 @@ class FakeUser:
     bot: bool = False
     roles: tuple[FakeRole, ...] = (FakeRole(30),)
     mention: str = "<@10>"
+    sent: list[tuple[tuple[object, ...], dict[str, object]]] = field(default_factory=list)
+
+    async def send(self, *args: object, **kwargs: object) -> None:
+        self.sent.append((args, kwargs))
 
 
 class FakeResponse:
@@ -141,6 +145,19 @@ class FakeStartupChannel:
         self.sent.append((args, kwargs))
 
 
+class FakeGuild:
+    def __init__(self, member: FakeUser, *, guild_id: int = 10) -> None:
+        self.id = guild_id
+        self.member = member
+        self.fetch_count = 0
+
+    async def fetch_member(self, user_id: int) -> FakeUser:
+        self.fetch_count += 1
+        if user_id != self.member.id:
+            raise discord.NotFound(SimpleNamespace(status=404, reason="missing"), "missing")
+        return self.member
+
+
 class FakeAttachment:
     def __init__(self, content: bytes, *, size: int | None = None) -> None:
         self.filename = "synthetic.pdf"
@@ -159,6 +176,16 @@ def _gate() -> DiscordGate:
         guild_id=10,
         channel_id=20,
         role_mapping={"HR_READ": {30}},
+    )
+
+
+def _dm_gate() -> DiscordGate:
+    return DiscordGate(
+        guild_id=10,
+        channel_id=20,
+        role_mapping={"HR_READ": {30}},
+        allow_dms=True,
+        dm_allowed_role_ids={30},
     )
 
 
@@ -191,6 +218,10 @@ def _coordinator(
         capabilities=AsyncMock(return_value=response),
         status=AsyncMock(return_value=response),
         health=AsyncMock(return_value=response),
+        diagnostics=AsyncMock(return_value=response),
+        coverage=AsyncMock(return_value=response),
+        route_status=AsyncMock(return_value=response),
+        schema_status=AsyncMock(return_value=response),
         reconnect_dic=AsyncMock(return_value=response),
         pending=AsyncMock(return_value=response),
         approve=AsyncMock(return_value=response),
@@ -673,6 +704,12 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    fallback = InteractionResult(
+        "Funzione non disponibile",
+        "Nessuna funzione operativa autorizzata.",
+        success=False,
+        public_hr_fallback=True,
+    )
     coordinator, raw_coordinator = _coordinator(
         InteractionResult(
             "Conteggio",
@@ -680,6 +717,7 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
             sensitivity=ResponseSensitivity.PUBLIC_AGGREGATE,
         )
     )
+    raw_coordinator.ask.side_effect = [fallback, fallback]
 
     class PendingSource:
         async def pending_views(self) -> tuple[SimpleNamespace, ...]:
@@ -705,14 +743,15 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     message = FakeMessage(content="Come gestisco le ferie?")
     await bot.on_message(cast(discord.Message, message))
     raw_responder.assert_awaited_once_with("Come gestisco le ferie?")
-    assert raw_coordinator.ask.await_count == 0
+    assert raw_coordinator.ask.await_count == 1
     assert message.replies[0][0] == ("Risposta HR pubblica sintetica.",)
     assert isinstance(message.replies[0][1]["allowed_mentions"], discord.AllowedMentions)
 
     unrelated = FakeMessage(content="Ci vediamo alle 15 per il caffè")
     await bot.on_message(cast(discord.Message, unrelated))
-    assert unrelated.replies == []
-    assert raw_responder.await_count == 1
+    assert unrelated.replies
+    assert raw_responder.await_count == 2
+    assert raw_coordinator.ask.await_count == 2
 
     # Operational messages use the same authorized coordinator as /bh and may publish a
     # sensitive result only after explicit channel-mode opt-in.
@@ -752,7 +791,7 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     closed_responder_raw.assert_not_awaited()
     assert "dati HR sensibili" in cast(str, closed_message.replies[0][0][0])
 
-    failing_coordinator, failing_raw = _coordinator()
+    failing_coordinator, failing_raw = _coordinator(fallback)
     failing_responder, failing_responder_raw = _public_responder()
     private_detail = "EMP-SYNTH-001 Mario Rossi must stay private"
     failing_responder_raw.side_effect = RuntimeError(private_detail)
@@ -767,13 +806,15 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     failed_message = FakeMessage(content="Come gestisco le ferie?")
     await failing_bot.on_message(cast(discord.Message, failed_message))
     assert "non completata" in cast(str, failed_message.replies[0][0][0])
-    failing_raw.ask.assert_not_awaited()
+    failing_raw.ask.assert_awaited_once()
     assert private_detail not in caplog.text
 
     denied = FakeMessage(content="Come gestisco le ferie?", author=FakeUser(roles=(FakeRole(999),)))
     await bot.on_message(cast(discord.Message, denied))
     assert "non autorizzata" in cast(str, denied.replies[0][0][0])
 
+    raw_coordinator.ask.side_effect = None
+    raw_coordinator.ask.return_value = fallback
     limited_responder, _ = _public_responder()
     limited_bot = BHDiCBot(
         application_id=102,
@@ -901,6 +942,61 @@ async def test_startup_notice_is_public_non_sensitive_and_once_per_process(
 
 
 @pytest.mark.asyncio
+async def test_dm_fetches_current_guild_member_and_delivers_sensitive_result_privately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, raw = _coordinator(InteractionResult("Busta paga", "Dato sintetico"))
+    responder, _ = _public_responder()
+    member = FakeUser(id=10, roles=(FakeRole(30),))
+    guild = FakeGuild(member)
+    bot = BHDiCBot(
+        application_id=120,
+        guild_id=10,
+        gate=_dm_gate(),
+        coordinator=coordinator,
+        interaction_mode="slash",
+        public_hr_responder=responder,
+    )
+    monkeypatch.setattr(bot, "get_guild", lambda guild_id: guild if guild_id == 10 else None)
+    message = FakeMessage(content="qual è il netto di employee id EMP-SYNTH-001?")
+    message.guild = None
+
+    await bot.on_message(cast(discord.Message, message))
+
+    assert bot.intents.dm_messages
+    assert bot.intents.message_content
+    assert guild.fetch_count == 1
+    raw.ask.assert_awaited_once()
+    assert "embed" in message.replies[0][1]
+    await bot.close()
+
+
+@pytest.mark.asyncio
+async def test_dm_fails_closed_when_member_cannot_be_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, raw = _coordinator()
+    responder, _ = _public_responder()
+    bot = BHDiCBot(
+        application_id=121,
+        guild_id=10,
+        gate=_dm_gate(),
+        coordinator=coordinator,
+        interaction_mode="slash",
+        public_hr_responder=responder,
+    )
+    monkeypatch.setattr(bot, "get_guild", lambda _guild_id: None)
+    message = FakeMessage(content="conteggio")
+    message.guild = None
+
+    await bot.on_message(cast(discord.Message, message))
+
+    raw.ask.assert_not_awaited()
+    assert "non autorizzato" in cast(str, message.replies[0][0][0])
+    await bot.close()
+
+
+@pytest.mark.asyncio
 async def test_startup_notice_explains_controlled_recovery_when_dic_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -929,7 +1025,13 @@ async def test_startup_notice_explains_controlled_recovery_when_dic_is_unavailab
 
 @pytest.mark.asyncio
 async def test_public_hr_typed_failure_and_unsafe_input_always_receive_public_reply() -> None:
-    coordinator, raw_coordinator = _coordinator()
+    fallback = InteractionResult(
+        "Funzione non disponibile",
+        "Nessuna funzione operativa autorizzata.",
+        success=False,
+        public_hr_fallback=True,
+    )
+    coordinator, raw_coordinator = _coordinator(fallback)
     responder, raw_responder = _public_responder()
     raw_responder.side_effect = PublicHrProviderError(
         "private provider body",
@@ -954,7 +1056,7 @@ async def test_public_hr_typed_failure_and_unsafe_input_always_receive_public_re
     await bot.on_message(cast(discord.Message, unsafe))
     assert "domanda HR generale" in cast(str, unsafe.replies[0][0][0])
     assert raw_responder.await_count == 1
-    raw_coordinator.ask.assert_not_awaited()
+    assert raw_coordinator.ask.await_count == 2
     await bot.close()
 
 
@@ -986,7 +1088,14 @@ async def test_operational_channel_dic_failure_returns_a_typed_safe_reply() -> N
 
 @pytest.mark.asyncio
 async def test_public_hr_cancellation_closes_usage_lifecycle_and_propagates() -> None:
-    coordinator, _ = _coordinator()
+    coordinator, _ = _coordinator(
+        InteractionResult(
+            "Funzione non disponibile",
+            "Nessuna funzione operativa autorizzata.",
+            success=False,
+            public_hr_fallback=True,
+        )
+    )
     responder, raw_responder = _public_responder()
     raw_responder.side_effect = asyncio.CancelledError()
     usage = AsyncMock(spec=ModelUsageService)
@@ -1016,7 +1125,14 @@ async def test_public_hr_cancellation_closes_usage_lifecycle_and_propagates() ->
 
 @pytest.mark.asyncio
 async def test_public_hr_cancellation_is_not_masked_by_usage_completion_failure() -> None:
-    coordinator, _ = _coordinator()
+    coordinator, _ = _coordinator(
+        InteractionResult(
+            "Funzione non disponibile",
+            "Nessuna funzione operativa autorizzata.",
+            success=False,
+            public_hr_fallback=True,
+        )
+    )
     responder, raw_responder = _public_responder()
     raw_responder.side_effect = asyncio.CancelledError()
     usage = AsyncMock(spec=ModelUsageService)

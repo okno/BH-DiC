@@ -77,9 +77,17 @@ class AppSettings(BaseSettings):
     discord_channel_id: int | None = Field(default=None, gt=0, le=2**64 - 1)
     discord_interaction_mode: InteractionMode = "slash"
     discord_allow_dms: bool = False
+    discord_dm_auth_guild_id: int | None = Field(default=None, gt=0, le=2**64 - 1)
+    discord_dm_allowed_role_ids: tuple[int, ...] = ()
+    discord_mention_channel_ids: tuple[int, ...] = ()
+    discord_sensitive_delivery_mode: Literal["ephemeral_only", "dm_or_ephemeral"] = "ephemeral_only"
     discord_publish_sensitive_channel_responses: bool = False
     discord_readonly_role_ids: tuple[int, ...] = ()
     discord_hr_read_role_ids: tuple[int, ...] = ()
+    discord_pii_role_ids: tuple[int, ...] = ()
+    discord_payroll_role_ids: tuple[int, ...] = ()
+    discord_document_metadata_role_ids: tuple[int, ...] = ()
+    discord_protected_document_role_ids: tuple[int, ...] = ()
     discord_balance_role_ids: tuple[int, ...] = ()
     discord_hr_write_role_ids: tuple[int, ...] = ()
     discord_iam_role_ids: tuple[int, ...] = ()
@@ -236,6 +244,10 @@ class AppSettings(BaseSettings):
     @field_validator(
         "discord_readonly_role_ids",
         "discord_hr_read_role_ids",
+        "discord_pii_role_ids",
+        "discord_payroll_role_ids",
+        "discord_document_metadata_role_ids",
+        "discord_protected_document_role_ids",
         "discord_balance_role_ids",
         "discord_hr_write_role_ids",
         "discord_iam_role_ids",
@@ -243,6 +255,8 @@ class AppSettings(BaseSettings):
         "discord_approver_role_ids",
         "discord_security_admin_role_ids",
         "discord_system_admin_role_ids",
+        "discord_dm_allowed_role_ids",
+        "discord_mention_channel_ids",
         mode="before",
     )
     @classmethod
@@ -342,6 +356,16 @@ class AppSettings(BaseSettings):
                 "DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES requires "
                 "DISCORD_INTERACTION_MODE=channel"
             )
+
+        if self.discord_allow_dms:
+            if self.discord_dm_auth_guild_id != self.discord_guild_id:
+                raise ValueError(
+                    "DISCORD_DM_AUTH_GUILD_ID must equal DISCORD_GUILD_ID when DMs are enabled"
+                )
+            if not self.discord_dm_allowed_role_ids:
+                raise ValueError(
+                    "DISCORD_DM_ALLOWED_ROLE_IDS is required when Discord DMs are enabled"
+                )
         if self.discord_publish_sensitive_channel_responses and not self.discord_hr_read_role_ids:
             raise ValueError(
                 "DISCORD_PUBLISH_SENSITIVE_CHANNEL_RESPONSES requires at least one explicit "

@@ -1,5 +1,14 @@
 # Security architecture
 
+## Conversational and private-delivery boundary
+
+The provider receives only minimized semantic categories and opaque placeholders. Real names,
+employee identifiers, DIC results, DOM, document links and payroll values remain local. DM access
+requires a fresh guild member fetch and an explicit DM role allowlist. Field entitlement checks are
+independent for PII, payroll, document metadata, protected document links and balances. Sensitive
+channel output defaults to ephemeral or verified DM delivery; enabling channel mode does not weaken
+this boundary.
+
 ## Purpose and scope
 
 BH-DiC is a single-node assistant for authorized employee workflows in the Dipendenti in Cloud

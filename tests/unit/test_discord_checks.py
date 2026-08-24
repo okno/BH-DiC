@@ -59,3 +59,34 @@ def test_sensitive_result_is_ephemeral() -> None:
         title="x", description="y", sensitivity=ResponseSensitivity.PUBLIC_AGGREGATE
     )
     assert public.ephemeral is False
+
+
+def test_dm_authorization_requires_explicit_role_and_verified_guild() -> None:
+    gate = DiscordGate(
+        guild_id=100,
+        channel_id=200,
+        role_mapping={"HR_READ": {300}},
+        allow_dms=True,
+        dm_allowed_role_ids={300},
+    )
+    actor = gate.authorize_dm(user_id=1, verified_guild_id=100, role_ids={300})
+    assert actor.guild_id == 100
+    assert actor.channel_id == 200
+    assert actor.logical_roles == frozenset({"HR_READ"})
+
+    with pytest.raises(DiscordAccessDenied) as denied:
+        gate.authorize_dm(user_id=1, verified_guild_id=100, role_ids={999})
+    assert denied.value.reason is AccessDenialReason.ROLE_NOT_ALLOWED
+    with pytest.raises(DiscordAccessDenied) as foreign:
+        gate.authorize_dm(user_id=1, verified_guild_id=999, role_ids={300})
+    assert foreign.value.reason is AccessDenialReason.GUILD_NOT_ALLOWED
+
+
+def test_dm_mode_cannot_be_enabled_without_an_explicit_role_allowlist() -> None:
+    with pytest.raises(ValueError, match="explicit allowed-role"):
+        DiscordGate(
+            guild_id=100,
+            channel_id=200,
+            role_mapping={"HR_READ": {300}},
+            allow_dms=True,
+        )

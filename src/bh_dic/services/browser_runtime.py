@@ -204,8 +204,27 @@ class BrowserCoordinator:
         read_retry: ReadRetryPolicy | None = None,
     ) -> None:
         self.queue = queue or BrowserOperationQueue()
+        # An explicitly injected breaker preserves the legacy/test contract.  The
+        # production default creates one breaker per semantic operation name so
+        # schema drift on, for example, contracts cannot disable payroll reads.
         self.circuit_breaker = circuit_breaker or CircuitBreaker()
+        self._fixed_circuit_breaker = circuit_breaker
+        self._circuit_breakers: dict[str, CircuitBreaker] = {}
         self.read_retry = read_retry or ReadRetryPolicy()
+
+    def _breaker(self, scope: str) -> CircuitBreaker:
+        if self._fixed_circuit_breaker is not None:
+            return self._fixed_circuit_breaker
+        if not scope:
+            raise ValueError("circuit scope cannot be empty")
+        return self._circuit_breakers.setdefault(scope, CircuitBreaker())
+
+    def circuit_states(self) -> dict[str, CircuitState]:
+        """Return a non-sensitive snapshot for diagnostics and coverage."""
+
+        if self._fixed_circuit_breaker is not None:
+            return {"shared": self._fixed_circuit_breaker.state}
+        return {scope: breaker.state for scope, breaker in sorted(self._circuit_breakers.items())}
 
     @staticmethod
     def _retryable(exc: Exception) -> bool:
@@ -225,12 +244,12 @@ class BrowserCoordinator:
         )
 
     async def run_read(self, name: str, lock_key: str, operation: Callable[[], Awaitable[T]]) -> T:
-        del name  # Kept for audit integration without exposing payloads here.
+        breaker = self._breaker(name)
 
         async def execute() -> T:
             last_error: Exception | None = None
             for attempt in range(1, self.read_retry.attempts + 1):
-                await self.circuit_breaker.before_call()
+                await breaker.before_call()
                 try:
                     result = await asyncio.wait_for(
                         operation(), timeout=self.read_retry.operation_timeout_seconds
@@ -239,16 +258,16 @@ class BrowserCoordinator:
                     last_error = exc
                     if not self._retryable(exc):
                         if self._circuit_failure(exc):
-                            await self.circuit_breaker.record_failure()
+                            await breaker.record_failure()
                         else:
-                            await self.circuit_breaker.record_success()
+                            await breaker.record_success()
                         raise
-                    await self.circuit_breaker.record_failure()
+                    await breaker.record_failure()
                     if attempt == self.read_retry.attempts:
                         raise
                     await asyncio.sleep(self.read_retry.delay(attempt))
                 else:
-                    await self.circuit_breaker.record_success()
+                    await breaker.record_success()
                     return result
             if last_error is None:
                 raise DicTransientError("read retry loop ended without a result")
@@ -266,7 +285,7 @@ class BrowserCoordinator:
     ) -> T:
         """Run one serialized browser operation without automatic retry."""
 
-        del name
+        breaker = self._breaker(name)
         timeout = (
             self.read_retry.operation_timeout_seconds
             if timeout_seconds is None
@@ -276,36 +295,36 @@ class BrowserCoordinator:
             raise ValueError("operation timeout must be positive")
 
         async def execute_once() -> T:
-            await self.circuit_breaker.before_call()
+            await breaker.before_call()
             try:
                 result = await asyncio.wait_for(operation(), timeout=timeout)
             except Exception as exc:
                 if self._circuit_failure(exc):
-                    await self.circuit_breaker.record_failure()
+                    await breaker.record_failure()
                 else:
-                    await self.circuit_breaker.record_success()
+                    await breaker.record_success()
                 raise
-            await self.circuit_breaker.record_success()
+            await breaker.record_success()
             return result
 
         return await self.queue.submit(lock_key, execute_once)
 
     async def run_write(self, name: str, lock_key: str, operation: Callable[[], Awaitable[T]]) -> T:
-        del name
+        breaker = self._breaker(name)
 
         async def execute_once() -> T:
-            await self.circuit_breaker.before_call()
+            await breaker.before_call()
             try:
                 result = await asyncio.wait_for(
                     operation(), timeout=self.read_retry.operation_timeout_seconds
                 )
             except Exception as exc:
                 if self._circuit_failure(exc):
-                    await self.circuit_breaker.record_failure()
+                    await breaker.record_failure()
                 else:
-                    await self.circuit_breaker.record_success()
+                    await breaker.record_success()
                 raise
-            await self.circuit_breaker.record_success()
+            await breaker.record_success()
             return result
 
         return await self.queue.submit(lock_key, execute_once)
@@ -321,15 +340,17 @@ class BrowserCoordinator:
     async def run_reconciliation(self, lock_key: str, operation: Callable[[], Awaitable[T]]) -> T:
         """Run one post-write read even if the normal browser circuit is open."""
 
+        breaker = self._breaker(f"reconciliation:{lock_key}")
+
         async def execute_once() -> T:
             try:
                 result = await asyncio.wait_for(
                     operation(), timeout=self.read_retry.operation_timeout_seconds
                 )
             except Exception:
-                await self.circuit_breaker.record_failure()
+                await breaker.record_failure()
                 raise
-            await self.circuit_breaker.record_success()
+            await breaker.record_success()
             return result
 
         return await self.queue.submit(lock_key, execute_once)

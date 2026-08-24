@@ -191,6 +191,8 @@ def _discord_gate(settings: AppSettings) -> DiscordGate:
         guild_id=guild_id,
         channel_id=channel_id,
         allow_dms=settings.discord_allow_dms,
+        dm_allowed_role_ids=settings.discord_dm_allowed_role_ids,
+        mention_channel_ids=settings.discord_mention_channel_ids,
         role_mapping={
             LogicalRole.READ_ONLY.value: settings.discord_readonly_role_ids,
             LogicalRole.HR_READ.value: settings.discord_hr_read_role_ids,
@@ -201,7 +203,13 @@ def _discord_gate(settings: AppSettings) -> DiscordGate:
             LogicalRole.SECURITY_ADMIN.value: settings.discord_security_admin_role_ids,
             LogicalRole.SYSTEM_ADMIN.value: settings.discord_system_admin_role_ids,
         },
-        entitlement_mapping={"balances:read": settings.discord_balance_role_ids},
+        entitlement_mapping={
+            "pii:read": settings.discord_pii_role_ids,
+            "payroll:read": settings.discord_payroll_role_ids,
+            "documents:metadata": settings.discord_document_metadata_role_ids,
+            "protected_documents:download": settings.discord_protected_document_role_ids,
+            "balances:read": settings.discord_balance_role_ids,
+        },
     )
 
 
@@ -467,7 +475,9 @@ async def build_runtime(
             dic=dic_service,
             scope=ApplicationScope(
                 allowed_guild_ids=frozenset({str(gate.guild_id)}),
-                allowed_channel_ids=frozenset({str(gate.channel_id)}),
+                allowed_channel_ids=frozenset(
+                    {str(gate.channel_id), *(str(value) for value in gate.mention_channel_ids)}
+                ),
                 current_tenant_id=settings.dic_expected_tenant_id or "TENANT-SYNTHETIC-MOCK",
                 allowed_tenant_ids=frozenset(
                     {settings.dic_expected_tenant_id or "TENANT-SYNTHETIC-MOCK"}
@@ -509,7 +519,7 @@ async def build_runtime(
             name="DISCORD_APPLICATION_ID",
             mock=settings.mock_mode,
         )
-        if settings.discord_interaction_mode == "channel":
+        if settings.discord_interaction_mode == "channel" or settings.discord_allow_dms:
             public_hr_responder = (
                 MockPublicHrResponder()
                 if settings.mock_mode or force_mock_components
@@ -544,6 +554,7 @@ async def build_runtime(
             public_hr_provider=configured_model_provider,
             public_hr_model=configured_model_name,
             startup_status_probe=startup_status_probe,
+            sensitive_delivery_mode=settings.discord_sensitive_delivery_mode,
         )
     except BaseException:
         await _cleanup_failed_runtime_build(

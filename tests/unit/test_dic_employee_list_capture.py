@@ -766,10 +766,11 @@ async def test_response_boundary_rejects_oversize_and_closed_schema_mismatches()
 
     extra_root = _document(query)
     extra_root["unexpected"] = True
-    with pytest.raises(DicUiChangedError, match="schema"):
+    assert (
         await employee_list_result_from_response(
             _Response(url=_url(query), document=extra_root), query
         )
+    ).total == 1
 
     invalid_contract = _document(query)
     invalid_contract["data"][0]["current_contract"]["valid_to"] = "30/09/2026"
@@ -786,11 +787,12 @@ async def test_response_boundary_rejects_oversize_and_closed_schema_mismatches()
         )
 
     extra_employee_field = _document(query)
-    extra_employee_field["data"][0]["unexpected"] = "not accepted"
-    with pytest.raises(DicUiChangedError, match="employee schema"):
+    extra_employee_field["data"][0]["unexpected"] = "ignored additive value"
+    assert (
         await employee_list_result_from_response(
             _Response(url=_url(query), document=extra_employee_field), query
         )
+    ).items[0].employee_id == str(extra_employee_field["data"][0]["id"])
 
     partial_page = _document(query)
     partial_page["total"] = 2
