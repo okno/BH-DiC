@@ -7,7 +7,7 @@ import hashlib
 import re
 from collections.abc import Awaitable, Callable
 from typing import Literal
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from pydantic import JsonValue
 
@@ -68,6 +68,7 @@ from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, PageLike, VerifiedUp
 from bh_dic.dic.paginated_capture import (
     PaginatedResponseCapture,
     collect_complete_pages,
+    fetch_paginated_page,
     page_from_response,
     strict_json_loads,
 )
@@ -1547,16 +1548,31 @@ class NotificationsPage(BaseDicPage):
                 employee_id=None,
             )
             query = dict(parse_qsl(urlsplit(first.request_url).query, strict_parsing=True))
-            if (
-                first.current_page != 1
-                or first.per_page != 20
-                or query.get("page") != "1"
-                or query.get("per_page") != "20"
-                or not query.get("sort")
-                or len(query["sort"]) > 128
-                or any(key.startswith("filter[") for key in query)
-            ):
+            expected_bell_query = {
+                "page": "1",
+                "per_page": "20",
+                "sort": "-created_at",
+                "filter[0][field]": "read",
+                "filter[0][op]": "=",
+                "filter[0][value]": "0",
+            }
+            if first.current_page != 1 or first.per_page != 20 or query != expected_bell_query:
                 raise DicUiChangedError("notification list query did not request the full feed")
+            full_feed_url = f"{self.base_url}{NOTIFICATIONS_ENDPOINT.endpoint_path}?" + urlencode(
+                {
+                    "page": "1",
+                    "per_page": "20",
+                    "sort": "-created_at",
+                }
+            )
+            first = await fetch_paginated_page(
+                self.page,
+                full_feed_url,
+                contract=NOTIFICATIONS_ENDPOINT,
+                employee_id=None,
+                expected_page=1,
+                paginator=False,
+            )
             items = await collect_complete_pages(
                 self.page,
                 first,

@@ -339,6 +339,7 @@ def _page_from_fetch(
     contract: PaginatedEndpointContract,
     employee_id: str | None,
     expected_page: int,
+    paginator: bool = True,
 ) -> PaginatedJsonPage:
     if not isinstance(raw, Mapping):
         raise _failure(contract.resource, "next-page response unavailable")
@@ -362,7 +363,7 @@ def _page_from_fetch(
         contract,
         employee_id,
         expected_page=expected_page,
-        paginator=True,
+        paginator=paginator,
     )
     try:
         document = strict_json_loads(body)
@@ -377,6 +378,32 @@ def _page_from_fetch(
     if page.current_page != expected_page:
         raise _failure(contract.resource, "pagination did not advance")
     return page
+
+
+async def fetch_paginated_page(
+    page: PageEvaluator,
+    url: str,
+    *,
+    contract: PaginatedEndpointContract,
+    employee_id: str | None,
+    expected_page: int,
+    paginator: bool = True,
+) -> PaginatedJsonPage:
+    """Fetch one exact first-party page and validate it before projection."""
+
+    try:
+        raw = await page.evaluate(_FETCH_JSON_PAGE, url)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        raise _failure(contract.resource, "next-page request failed") from None
+    return _page_from_fetch(
+        raw,
+        contract=contract,
+        employee_id=employee_id,
+        expected_page=expected_page,
+        paginator=paginator,
+    )
 
 
 async def collect_complete_pages(
@@ -408,14 +435,9 @@ async def collect_complete_pages(
         next_query.pop("page", None)
         if next_query != base_query:
             raise _failure(contract.resource, "pagination query changed")
-        try:
-            raw = await page.evaluate(_FETCH_JSON_PAGE, current.next_page_url)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            raise _failure(contract.resource, "next-page request failed") from None
-        following = _page_from_fetch(
-            raw,
+        following = await fetch_paginated_page(
+            page,
+            current.next_page_url,
             contract=contract,
             employee_id=employee_id,
             expected_page=current.current_page + 1,
@@ -496,6 +518,7 @@ __all__ = [
     "PaginatedJsonPage",
     "PaginatedResponseCapture",
     "collect_complete_pages",
+    "fetch_paginated_page",
     "page_from_response",
     "strict_json_loads",
 ]

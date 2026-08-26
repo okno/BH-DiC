@@ -71,6 +71,7 @@ def _document(item: dict[str, object] | None = None) -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_notification_endpoint_has_no_employee_scope_and_projects_minimal_fields() -> None:
+    assert NOTIFICATIONS_ENDPOINT.paginator_path == "/notifications"
     first = await page_from_response(
         Response(_document()),
         contract=NOTIFICATIONS_ENDPOINT,
