@@ -495,12 +495,15 @@ async def collect_complete_pages(
         next_query.pop("page", None)
         if next_query != base_query:
             raise _failure(contract.resource, "pagination query changed")
+        next_parts = urlsplit(current.next_page_url)
+        canonical_next_url = f"{DIC_ENDPOINT_ORIGIN}{contract.endpoint_path}?{next_parts.query}"
         following = await fetch_paginated_page(
             page,
-            current.next_page_url,
+            canonical_next_url,
             contract=contract,
             employee_id=employee_id,
             expected_page=current.current_page + 1,
+            paginator=False,
             request_headers=request_headers,
         )
         if following.total != first.total or following.last_page != first.last_page:

@@ -236,7 +236,10 @@ async def test_complete_pagination_accepts_separate_exact_paginator_path() -> No
     )
 
     assert len(items) == 2
-    assert fetch_page.requested_urls == [first_document["next_page_url"]]
+    assert fetch_page.requested_urls == [
+        "https://secure.dipendentincloud.it/backend_apiV2/contracts?"
+        "employee_id=123&page=2&per_page=1"
+    ]
 
 
 @pytest.mark.asyncio
