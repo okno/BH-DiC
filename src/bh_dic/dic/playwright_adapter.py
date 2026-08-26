@@ -50,6 +50,7 @@ from bh_dic.dic.models import (
     FunctionId,
     HealthStatus,
     MaturationRecord,
+    NotificationListResult,
     OpaqueStateDigest,
     OperationStatus,
     PayrollMetadata,
@@ -71,6 +72,7 @@ from bh_dic.dic.pages import (
     EmployeeRolesPage,
     EmployeesListPage,
     EmployeeSummaryPage,
+    NotificationsPage,
     PageLike,
     TimestampEmployeesPage,
     VerifiedUploadPayload,
@@ -172,6 +174,7 @@ class PlaywrightDicAdapter:
         self._maturations = EmployeeMaturationsPage(page, base_url)
         self._balance = EmployeeBalancePage(page, base_url)
         self._payrolls = EmployeePayrollsPage(page, base_url)
+        self._notifications = NotificationsPage(page, base_url)
         self._documents = EmployeeDocumentsPage(page, base_url)
         self._closed = False
 
@@ -322,6 +325,9 @@ class PlaywrightDicAdapter:
             "employees.payrolls", lambda: self._payrolls.read(employee_id, year)
         )
 
+    async def list_notifications(self) -> NotificationListResult:
+        return await self._read("notifications.list", self._notifications.read)
+
     async def get_document_metadata(
         self, employee_id: str, query: DocumentQuery
     ) -> tuple[DocumentMetadata, ...]:
@@ -368,6 +374,26 @@ class PlaywrightDicAdapter:
         scope = self._state_scope(function_id, employee_id, clean_parameters)
         page: BaseDicPage
 
+        if function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = clean_parameters.get("notification_id")
+            read = clean_parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+            ):
+                raise DicValidationError("notification state parameters are invalid")
+            record = await self._notifications.record(notification_id)
+            material = json.dumps(
+                {
+                    "notification_id": record.notification_id,
+                    "read": record.read,
+                    "scope": scope,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            return hmac.new(key, material, hashlib.sha256).hexdigest()
         if function_id is FunctionId.EMP_CREATE_001:
             if set(clean_parameters).difference(_LIVE_CREATE_VERIFIABLE_FIELDS):
                 raise DicWriteDisabledError(
@@ -544,6 +570,19 @@ class PlaywrightDicAdapter:
         """Capture only stable IDs and an optional opaque digest before dispatch."""
 
         employee_id = action.employee_id
+        if action.function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = action.parameters.get("notification_id")
+            read = action.parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+            ):
+                raise DicValidationError("notification state parameters are invalid")
+            record = await self._notifications.record(notification_id)
+            if record.read is read:
+                raise DicValidationError("notification already has the requested read state")
+            return _WriteBaseline(stable_ids=frozenset({str(notification_id)}))
         if action.function_id is FunctionId.EMP_CREATE_001:
             unsupported = set(action.parameters).difference(_LIVE_CREATE_VERIFIABLE_FIELDS)
             if unsupported:
@@ -656,7 +695,17 @@ class PlaywrightDicAdapter:
             raise DicWriteDisabledError(
                 "live write has no exhaustive observable postcondition and is unavailable"
             )
-        if action.function_id is FunctionId.EMP_CREATE_001:
+        if action.function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = action.parameters.get("notification_id")
+            read = action.parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+            ):
+                raise DicValidationError("notification state parameters are invalid")
+            await self._notifications.set_read_state(notification_id, read=read)
+        elif action.function_id is FunctionId.EMP_CREATE_001:
             await self._employees.create_employee(action)
         elif action.function_id in _SUMMARY_STATE_FUNCTIONS | {FunctionId.EMP_DELETE_001}:
             await self._summary.execute(action)
@@ -954,6 +1003,29 @@ class PlaywrightDicAdapter:
         *,
         baseline: _WriteBaseline | None = None,
     ) -> ReconciliationResult:
+        if action.function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = action.parameters.get("notification_id")
+            read = action.parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+                or baseline is None
+                or str(notification_id) not in baseline.stable_ids
+            ):
+                state = ReconciliationState.UNKNOWN
+            else:
+                record = await self._notifications.record(notification_id)
+                state = (
+                    ReconciliationState.CONFIRMED_APPLIED
+                    if record.read is read
+                    else ReconciliationState.CONFIRMED_NOT_APPLIED
+                )
+            return ReconciliationResult(
+                action_id=action.action_id,
+                state=state,
+                detail="notification read state checked by exact stable identifier",
+            )
         if action.function_id is FunctionId.EMP_CREATE_001:
             verified = (
                 None

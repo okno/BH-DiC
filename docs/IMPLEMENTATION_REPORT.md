@@ -148,16 +148,17 @@ Completati nel codice e testati con risorse sintetiche:
 
 Stato funzionale:
 
-- 13 read: `IMPLEMENTED`, `TESTED_WITH_MOCK`; `EMP-READ-001` è `LIVE_READ_VERIFIED` soltanto per
+- 15 read: `IMPLEMENTED`, `TESTED_WITH_MOCK`; include il percorso notifiche top-bar DIC validato
+  con schema e paginazione chiusi; `EMP-READ-001` è `LIVE_READ_VERIFIED` soltanto per
   il conteggio aggregato bounded e `EMP-CONTRACT-001` soltanto per le scadenze bounded del prossimo
   mese di calendario; tutte le altre modalità restano `NEEDS_VALIDATION`;
-- 14 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+- 15 write: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; 5 write sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`: `EMP-CREATE-001` supporta live soltanto il subset
   con postcondizione verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` ed
   `EMP-CONTRACT-003` hanno percorso live `NOT_AVAILABLE`; `EMP-EXPORT-001` genera artifact locali
-  in memoria con dati live ancora `NEEDS_VALIDATION`; i 19 Function ID write
-  sono disabilitati e i 18 gate distinti usati dal catalogo per le write restano `false` per
+  in memoria con dati live ancora `NEEDS_VALIDATION`; i 20 Function ID write
+  sono disabilitati e i 19 gate distinti usati dal catalogo per le write restano `false` per
   default;
 - kill switch `ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false`;
 - bot target aggiornato alla 0.3.0 sullo SHA verificato; servizio `active/running`, zero riavvii

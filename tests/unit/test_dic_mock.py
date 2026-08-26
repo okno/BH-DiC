@@ -178,6 +178,7 @@ async def test_every_catalog_read_function_has_a_mock_execution_path() -> None:
         FunctionId.EMP_PAY_001: lambda: adapter.get_payroll_metadata(employee_id, 2026),
         FunctionId.EMP_PAY_002: lambda: adapter.list_employees(EmployeeListQuery()),
         FunctionId.EMP_DOC_001: lambda: adapter.get_document_metadata(employee_id, DocumentQuery()),
+        FunctionId.EMP_NOTIF_001: adapter.list_notifications,
     }
     assert set(exercised) == set(READ_FUNCTIONS)
     for operation in exercised.values():
@@ -219,6 +220,7 @@ async def test_every_catalog_write_function_has_a_mock_execution_path() -> None:
         FunctionId.EMP_DOC_005: {"document_id": "DOC-SYNTH-001"},
         FunctionId.EMP_DELETE_001: {},
         FunctionId.EMP_EXPORT_001: {},
+        FunctionId.EMP_NOTIF_002: {"notification_id": 1, "read": True},
     }
     assert set(parameters) == set(MUTATING_FUNCTIONS)
     for function_id, action_parameters in parameters.items():
@@ -229,6 +231,7 @@ async def test_every_catalog_write_function_has_a_mock_execution_path() -> None:
             in {
                 FunctionId.EMP_CREATE_001,
                 FunctionId.EMP_EXPORT_001,
+                FunctionId.EMP_NOTIF_002,
             }
             else "EMP-SYNTH-001"
         )

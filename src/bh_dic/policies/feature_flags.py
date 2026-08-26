@@ -25,6 +25,7 @@ DEFAULT_FEATURE_FLAGS: Mapping[str, bool] = MappingProxyType(
         "ENABLE_ACCOUNT_DISCONNECT": False,
         "ENABLE_RBAC_WRITE": False,
         "ENABLE_STATUS_CHANGE": False,
+        "ENABLE_NOTIFICATION_STATE_CHANGE": False,
         "ENABLE_DOCUMENT_UPLOAD": False,
         "ENABLE_DOCUMENT_DOWNLOAD": False,
         "ENABLE_DOCUMENT_UPDATE": False,

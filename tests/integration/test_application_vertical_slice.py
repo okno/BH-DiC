@@ -1060,12 +1060,13 @@ async def test_contract_fallback_rejects_other_errors_roles_and_ambiguous_reques
         model_provider=configured_provider,
     )
     try:
-        with pytest.raises(IntentProviderError):
-            await coordinator.ask(actor(*roles), request_text)
+        result = await coordinator.ask(actor(*roles), request_text)
     finally:
         await adapter.close()
 
     assert router.calls == 1
+    assert result.title == "Interpretazione AI non completata"
+    assert not result.success
     adapter.list_employees.assert_not_awaited()
 
 
@@ -1258,6 +1259,89 @@ async def test_payroll_read_renders_only_useful_minimized_metadata() -> None:
         "Netto a pagare: **—** · emessa: 2026-02-01 · stato: published\nPDF non disponibile"
     )
     assert "PAY-SYNTH-001" not in result.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_latest_paid_net_keeps_pending_question_when_user_replies_with_name() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = MockDicAdapter()
+    item = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = item.model_copy(
+        update={
+            "display_name": SecretStr("Amine Mohamed Abbadi"),
+            "display_name_redacted": "Amine Mohamed Abbadi",
+            "first_name": SecretStr("Amine"),
+            "last_name": SecretStr("Mohamed Abbadi"),
+        }
+    )
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-OLD",
+            employee_id="EMP-SYNTH-001",
+            year=2025,
+            month=12,
+            net_cents=120_000,
+            published_at="2026-01-10",
+        ),
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-LATEST",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            net_cents=145_678,
+            published_at="2026-08-10",
+        ),
+    ]
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 26),
+    )
+    requester = actor(LogicalRole.HR_READ)
+    try:
+        clarification = await coordinator.ask(
+            requester,
+            "qual è il netto dell'ultimo mese pagato?",
+        )
+        result = await coordinator.ask(requester, "Amine Mohamed Abbadi")
+    finally:
+        await adapter.close()
+
+    assert clarification.title == "Chiarimento necessario"
+    assert router.calls == 0
+    assert result.fields[0].name == "07/2026"
+    assert "€ 1.456,78" in result.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_notifications_are_listed_and_read_state_uses_confirmation() -> None:
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(),
+        writes=True,
+        mock_mode=True,
+        write_flags=frozenset({"ENABLE_NOTIFICATION_STATE_CHANGE"}),
+    )
+    requester = actor(LogicalRole.HR_READ, LogicalRole.HR_WRITE)
+    try:
+        listed = await coordinator.ask(requester, "mostra le notifiche non lette di DiC")
+        preview = await coordinator.ask(requester, "segna la notifica 1 come letta")
+        match = re.search(r"Codice monouso: `([^`]+)`", preview.description)
+        assert match is not None and preview.action_id is not None
+        completed = await coordinator.approve(
+            requester,
+            preview.action_id,
+            match.group(1),
+        )
+        stored = await repository.get(preview.action_id)
+        notifications = await adapter.list_notifications()
+    finally:
+        await adapter.close()
+
+    assert listed.title == "Notifiche Dipendenti in Cloud"
+    assert listed.fields[0].name == "#1 · NON LETTA"
+    assert completed.success
+    assert stored is not None and stored.status is ActionStatus.SUCCEEDED
+    assert notifications.items[0].read is True
 
 
 @pytest.mark.asyncio

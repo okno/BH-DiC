@@ -159,6 +159,7 @@ class AppSettings(BaseSettings):
     enable_account_disconnect: bool = False
     enable_rbac_write: bool = False
     enable_status_change: bool = False
+    enable_notification_state_change: bool = False
     enable_document_upload: bool = False
     enable_document_download: bool = False
     enable_document_update: bool = False
@@ -199,6 +200,7 @@ class AppSettings(BaseSettings):
         "enable_account_disconnect",
         "enable_rbac_write",
         "enable_status_change",
+        "enable_notification_state_change",
         "enable_document_upload",
         "enable_document_download",
         "enable_document_update",

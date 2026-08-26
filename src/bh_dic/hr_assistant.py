@@ -91,7 +91,8 @@ _PAYROLL_MONTH = re.compile(
 _PAYROLL_YEAR = re.compile(r"\b(20\d{2})\b")
 _NET_PAY_REQUEST = re.compile(
     r"\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\b|"
-    r"\bnett\w*\s+(?:mensile|da\s+pagare|di\b|del\b|della\b|per\b)",
+    r"\bnett\w*\s+(?:mensile|da\s+pagare|di\b|del\b|della\b|per\b)|"
+    r"\bultim[oa]\s+(?:mese\s+pagat[oa]|busta\s+paga|cedolino)\b",
     re.IGNORECASE,
 )
 _NET_PAY_TARGET = re.compile(
@@ -99,6 +100,12 @@ _NET_PAY_TARGET = re.compile(
     r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
     r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di|per)\s+(?:gennaio|febbraio|marzo|aprile|"
     r"maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b|[?!.]|$)"
+)
+_LATEST_PAY_TARGET = re.compile(
+    r"(?is)\b(?:ultim[oa]\s+(?:mese\s+pagat[oa]|busta\s+paga|cedolino)|"
+    r"nett\w*\s+(?:dell['\u2019]?|del\s+)?ultim[oa]\s+mese(?:\s+pagat[oa])?)\s+"
+    r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
+    r"(.+?)(?=[?!.]|$)"
 )
 _PROFILE_TERM = re.compile(
     r"\b(?:profilo|anagrafica|tutti\s+i\s+dati|dati\s+disponibili)\b",
@@ -206,6 +213,11 @@ _OPERATIONAL_HR_OBJECT = re.compile(
 )
 _TECHNICAL_TARGET = re.compile(
     r"(?i)(?:https?://|www\.|\b(?:token|password|cookie|select|drop|curl|powershell|bash)\b)"
+)
+_NOTIFICATION_TERM = re.compile(r"\bnotifich(?:e|a)\b", re.IGNORECASE)
+_NOTIFICATION_STATE = re.compile(
+    r"(?i)\bsegna\w*\s+(?:la\s+)?notifica\s+(?:#\s*)?([1-9][0-9]{0,15})\s+"
+    r"come\s+(non\s+)?lett[ao]\b"
 )
 _ROUTER_TOKEN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9_/-]+")
 _ISO_DATE_TOKEN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -346,6 +358,8 @@ def is_operational_hr_request(request: str) -> bool:
         return True
     if _NET_PAY_REQUEST.search(request) is not None:
         return True
+    if _NOTIFICATION_TERM.search(request) is not None:
+        return True
     if (
         _ACTIVATE_ACTION.search(request) is not None
         or _DEACTIVATE_ACTION.search(request) is not None
@@ -447,6 +461,32 @@ def parse_local_operational_intent(
 
     deactivate = _DEACTIVATE_ACTION.search(text) is not None
     activate = _ACTIVATE_ACTION.search(text) is not None and not deactivate
+    notification_state = _NOTIFICATION_STATE.search(text)
+    if notification_state is not None:
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-NOTIF-002",
+                action_class=ActionClass.PREPARE_WRITE,
+                sensitivity=Sensitivity.HIGH,
+                parameters={
+                    "notification_id": int(notification_state.group(1)),
+                    "read": notification_state.group(2) is None,
+                },
+            )
+        )
+
+    if _NOTIFICATION_TERM.search(text) is not None:
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-NOTIF-001",
+                action_class=ActionClass.READ,
+                sensitivity=Sensitivity.HIGH,
+                parameters={
+                    "unread_only": re.search(r"\bnon\s+lett[ea]\b", text, re.I) is not None
+                },
+            )
+        )
+
     if activate or deactivate:
         employee_id, target_query = _status_target(text)
         motivation_match = _MOTIVATION.search(text)
@@ -472,9 +512,20 @@ def parse_local_operational_intent(
 
     if _NET_PAY_REQUEST.search(text) is not None:
         employee_id, _ = _status_target(text)
+        latest_paid = (
+            re.search(
+                r"\b(?:ultim[oa]\s+(?:mese\s+pagat[oa]|busta\s+paga|cedolino)|"
+                r"nett[oa]\s+(?:dell['\u2019]?|del\s+)?ultim[oa]\s+mese)\b",
+                text,
+                re.I,
+            )
+            is not None
+        )
         pay_target_query: str | None = None
         if employee_id is None:
-            target = _NET_PAY_TARGET.search(text)
+            target = (
+                _LATEST_PAY_TARGET.search(text) if latest_paid else _NET_PAY_TARGET.search(text)
+            )
             if target is not None:
                 candidate = " ".join(target.group(1).strip(" .,:;!?\"'").split())
                 if (
@@ -483,10 +534,23 @@ def parse_local_operational_intent(
                     and _TECHNICAL_TARGET.search(candidate) is None
                 ):
                     pay_target_query = candidate
-        period = local_payroll_presence_period(text, today=today)
-        if period is None:
+        period = None if latest_paid else local_payroll_presence_period(text, today=today)
+        if period is None and not latest_paid:
             previous = today.replace(day=1) - timedelta(days=1)
             period = (previous.year, previous.month)
+        if not latest_paid and period is None:
+            raise RuntimeError("payroll period normalization failed")
+        payroll_parameters: dict[str, object] = {
+            "latest_paid": True,
+            "include_net": True,
+        }
+        if not latest_paid:
+            assert period is not None
+            payroll_parameters = {
+                "year": period[0],
+                "month": period[1],
+                "include_net": True,
+            }
         clarification = None
         if employee_id is None and pay_target_query is None:
             clarification = "Indica l'Employee ID oppure un nome da cercare."
@@ -496,7 +560,7 @@ def parse_local_operational_intent(
                 action_class=ActionClass.READ,
                 sensitivity=Sensitivity.HIGH,
                 employee_id=employee_id,
-                parameters={"year": period[0], "month": period[1], "include_net": True},
+                parameters=payroll_parameters,
                 clarification=clarification,
             ),
             target_query=pay_target_query,

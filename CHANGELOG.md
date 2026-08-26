@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-26 — payroll latest-paid, conversational target and DIC notifications
+
+- the individual payroll route can select the newest payroll with an exact net amount across a
+  bounded three-year window, using the fixed DIC employee payroll URL;
+- a clarification awaiting an employee now preserves the authorized operation, so a following
+  bare name or Employee ID is resolved locally without another model routing call;
+- zero-call requests report exact zero AI tokens, while public HR model replies show request and
+  cumulative provider counters;
+- top-bar DIC notifications can be listed completely and filtered to unread; read/unread changes
+  use a separate fail-closed Function ID, feature flag, preview, confirmation and verified
+  postcondition.
+
 All notable changes to BH-DiC are documented here. The project follows Semantic Versioning once a
 stable public API is declared.
 

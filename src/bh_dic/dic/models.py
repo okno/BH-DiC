@@ -99,6 +99,8 @@ class FunctionId(StrEnum):
     EMP_DOC_005 = "EMP-DOC-005"
     EMP_DELETE_001 = "EMP-DELETE-001"
     EMP_EXPORT_001 = "EMP-EXPORT-001"
+    EMP_NOTIF_001 = "EMP-NOTIF-001"
+    EMP_NOTIF_002 = "EMP-NOTIF-002"
 
 
 class EmployeeFilter(StrEnum):
@@ -315,6 +317,22 @@ class PayrollMetadata(StrictModel):
     net_cents: int | None = Field(default=None, ge=0, le=1_000_000_000)
     attachment_filename: str | None = Field(default=None, max_length=255)
     attachment_url: SecretStr | None = Field(default=None, repr=False)
+
+
+class NotificationRecord(StrictModel):
+    """Minimal projection of one DIC top-bar notification."""
+
+    notification_id: int = Field(ge=1, le=9_223_372_036_854_775_807)
+    notification_type: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1, max_length=4_096, repr=False)
+    additional_text: str | None = Field(default=None, max_length=4_096, repr=False)
+    created_at: str = Field(min_length=1, max_length=64)
+    read: bool
+
+
+class NotificationListResult(StrictModel):
+    items: tuple[NotificationRecord, ...]
+    total: int = Field(ge=0, le=5_000)
 
 
 class DocumentMetadata(StrictModel):

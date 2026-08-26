@@ -30,7 +30,12 @@ from bh_dic.hr_assistant import (
 )
 from bh_dic.language import BotLanguageProfile
 from bh_dic.logging import log_context
-from bh_dic.model_usage import ModelUsageKey, ModelUsageService, ModelUsageStart
+from bh_dic.model_usage import (
+    ModelUsageKey,
+    ModelUsageService,
+    ModelUsageStart,
+    ModelUsageTotals,
+)
 from bh_dic.openai.client import IntentProviderError, PublicHrProviderError, PublicHrResponder
 from bh_dic.openai.redaction import UnsafePromptError, prepare_public_hr_input
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
@@ -549,7 +554,9 @@ class BHDiCBot(commands.Bot):
             await message.reply(
                 "Formula una domanda HR generale senza dati personali, segreti o istruzioni "
                 "tecniche. Per casi individuali usa `/bh ask` solo se sei autorizzato; "
-                "altrimenti contatta HR.",
+                "altrimenti contatta HR.\n\n"
+                "**Token AI — questa richiesta:** nessuna chiamata AI · input 0 · output 0 · "
+                "totale 0",
                 mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -602,7 +609,8 @@ class BHDiCBot(commands.Bot):
                 },
             )
             await message.reply(
-                "L'assistente HR non è disponibile in questo momento. Riprova tra poco.",
+                "L'assistente HR non è disponibile in questo momento. Riprova tra poco."
+                f"{await self._public_hr_usage_footer(correlation_id)}",
                 mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -630,9 +638,50 @@ class BHDiCBot(commands.Bot):
             },
         )
         await message.reply(
-            response.text,
+            f"{response.text}{await self._public_hr_usage_footer(correlation_id)}",
             mention_author=False,
             allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _public_hr_usage_footer(self, correlation_id: str) -> str:
+        if self.model_usage is None:
+            return ""
+        current = await self.model_usage.totals(correlation_id=correlation_id)
+        cumulative = await self.model_usage.totals()
+        return (
+            f"\n\n**Token AI — questa richiesta:** {self._format_request_usage(current)}\n"
+            f"**Token AI — cumulativo locale:** {self._format_cumulative_usage(cumulative)}"
+        )
+
+    @staticmethod
+    def _format_request_usage(totals: ModelUsageTotals) -> str:
+        if totals.reported_calls:
+            usage = totals.usage
+            return (
+                f"input {usage.input_tokens} · output {usage.output_tokens} · "
+                f"totale {usage.total_tokens}"
+            )
+        if totals.unavailable_calls:
+            return "risposta ricevuta, ma il provider non ha restituito i contatori"
+        if totals.unknown_calls or totals.started_calls:
+            return "esito remoto non determinabile; nessuna stima inventata"
+        return "nessuna chiamata AI · input 0 · output 0 · totale 0"
+
+    @staticmethod
+    def _format_cumulative_usage(totals: ModelUsageTotals) -> str:
+        if totals.total_calls == 0:
+            return "nessuna chiamata registrata"
+        since = (
+            totals.first_recorded_at.date().isoformat()
+            if totals.first_recorded_at is not None
+            else "data non disponibile"
+        )
+        usage = totals.usage
+        gaps = totals.started_calls + totals.unavailable_calls + totals.unknown_calls
+        return (
+            f"dal {since}: {totals.total_calls} chiamate · input {usage.input_tokens} · "
+            f"output {usage.output_tokens} · totale {usage.total_tokens} · "
+            f"contatori mancanti/incerti {gaps}"
         )
 
     async def close(self) -> None:

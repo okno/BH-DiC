@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -32,13 +33,14 @@ from bh_dic.discord.views import (
     RejectReasonModal,
 )
 from bh_dic.language import BotLanguageProfile
-from bh_dic.model_usage import ModelUsageService
+from bh_dic.model_usage import ModelUsageService, ModelUsageTotals
 from bh_dic.openai.client import (
     IntentProviderError,
     PublicHrProviderError,
     PublicHrResponder,
     PublicHrResponse,
 )
+from bh_dic.openai.schemas import ProviderTokenUsage
 from bh_dic.policies.decisions import DecisionCode, PolicyDecision
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
 
@@ -1058,6 +1060,94 @@ async def test_public_hr_typed_failure_and_unsafe_input_always_receive_public_re
     assert raw_responder.await_count == 1
     assert raw_coordinator.ask.await_count == 2
     await bot.close()
+
+
+@pytest.mark.asyncio
+async def test_public_hr_reply_displays_exact_request_and_cumulative_token_usage() -> None:
+    fallback = InteractionResult(
+        "Funzione non disponibile",
+        "Nessuna funzione operativa autorizzata.",
+        success=False,
+        public_hr_fallback=True,
+    )
+    coordinator, _ = _coordinator(fallback)
+    exact = ProviderTokenUsage(input_tokens=41, output_tokens=19, total_tokens=60)
+    responder_call = AsyncMock(
+        return_value=PublicHrResponse(
+            text="Risposta HR pubblica sintetica.",
+            provider="groq",
+            model="synthetic-model",
+            usage=exact,
+        )
+    )
+    responder = cast(
+        PublicHrResponder,
+        SimpleNamespace(respond=responder_call, close=AsyncMock()),
+    )
+    usage = AsyncMock(spec=ModelUsageService)
+    observed_at = datetime(2026, 8, 26, tzinfo=UTC)
+    usage.totals.side_effect = [
+        ModelUsageTotals(
+            total_calls=1,
+            started_calls=0,
+            reported_calls=1,
+            unavailable_calls=0,
+            unknown_calls=0,
+            usage=exact,
+            first_recorded_at=observed_at,
+            last_completed_at=observed_at,
+        ),
+        ModelUsageTotals(
+            total_calls=4,
+            started_calls=0,
+            reported_calls=3,
+            unavailable_calls=1,
+            unknown_calls=0,
+            usage=ProviderTokenUsage(
+                input_tokens=100,
+                output_tokens=30,
+                total_tokens=130,
+            ),
+            first_recorded_at=observed_at,
+            last_completed_at=observed_at,
+        ),
+    ]
+    bot = BHDiCBot(
+        application_id=115,
+        guild_id=10,
+        gate=_gate(),
+        coordinator=coordinator,
+        interaction_mode="channel",
+        public_hr_responder=responder,
+        model_usage=usage,
+        public_hr_provider="groq",
+        public_hr_model="synthetic-model",
+    )
+    message = FakeMessage(content="Come preparo un colloquio di feedback?")
+
+    await bot.on_message(cast(discord.Message, message))
+
+    rendered = cast(str, message.replies[0][0][0])
+    assert "input 41 · output 19 · totale 60" in rendered
+    assert "4 chiamate · input 100 · output 30 · totale 130" in rendered
+    assert "contatori mancanti/incerti 1" in rendered
+    usage.complete.assert_awaited_once()
+    await bot.close()
+
+
+def test_zero_model_calls_are_reported_as_exact_zero_not_unavailable() -> None:
+    totals = ModelUsageTotals(
+        total_calls=0,
+        started_calls=0,
+        reported_calls=0,
+        unavailable_calls=0,
+        unknown_calls=0,
+        usage=ProviderTokenUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+    )
+
+    assert BHDiCBot._format_request_usage(totals) == (
+        "nessuna chiamata AI · input 0 · output 0 · totale 0"
+    )
 
 
 @pytest.mark.asyncio

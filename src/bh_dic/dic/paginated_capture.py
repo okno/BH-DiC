@@ -78,7 +78,7 @@ class PaginatedEndpointContract:
     resource: str
     endpoint_path: str
     allowed_query_keys: frozenset[str]
-    employee_query_key: str
+    employee_query_key: str | None
     required_item_keys: frozenset[str]
 
     def __post_init__(self) -> None:
@@ -86,7 +86,10 @@ class PaginatedEndpointContract:
             raise ValueError("invalid paginated resource name")
         if not self.endpoint_path.startswith("/backend_apiV2/"):
             raise ValueError("invalid paginated endpoint path")
-        if self.employee_query_key not in self.allowed_query_keys:
+        if (
+            self.employee_query_key is not None
+            and self.employee_query_key not in self.allowed_query_keys
+        ):
             raise ValueError("employee query key must be allowed")
         if not self.required_item_keys:
             raise ValueError("paginated resource requires item keys")
@@ -164,7 +167,7 @@ def _employee_query_matches(raw: str, employee_id: str) -> bool:
 def _validate_url(
     url: str,
     contract: PaginatedEndpointContract,
-    employee_id: str,
+    employee_id: str | None,
     *,
     expected_page: int | None = None,
 ) -> dict[str, str]:
@@ -192,9 +195,14 @@ def _validate_url(
         values[key] = value
     if not set(values).issubset(contract.allowed_query_keys):
         raise _failure(contract.resource, "unexpected query metadata")
-    employee_value = values.get(contract.employee_query_key)
-    if employee_value is None or not _employee_query_matches(employee_value, employee_id):
-        raise _ResponseMismatch("response does not match requested employee")
+    if contract.employee_query_key is not None:
+        if employee_id is None:
+            raise _failure(contract.resource, "employee metadata is required")
+        employee_value = values.get(contract.employee_query_key)
+        if employee_value is None or not _employee_query_matches(employee_value, employee_id):
+            raise _ResponseMismatch("response does not match requested employee")
+    elif employee_id is not None:
+        raise _failure(contract.resource, "unexpected employee metadata")
     if expected_page is not None:
         page_value = values.get("page")
         if page_value is None or page_value != str(expected_page):
@@ -205,7 +213,7 @@ def _validate_url(
 async def _validate_response_metadata(
     response: ResponseLike,
     contract: PaginatedEndpointContract,
-    employee_id: str,
+    employee_id: str | None,
 ) -> None:
     _validate_url(response.url, contract, employee_id)
     try:
@@ -234,7 +242,7 @@ def _page_from_document(
     *,
     request_url: str,
     contract: PaginatedEndpointContract,
-    employee_id: str,
+    employee_id: str | None,
 ) -> PaginatedJsonPage:
     required_root = {
         "current_page",
@@ -289,7 +297,7 @@ async def page_from_response(
     response: ResponseLike,
     *,
     contract: PaginatedEndpointContract,
-    employee_id: str,
+    employee_id: str | None,
 ) -> PaginatedJsonPage:
     await _validate_response_metadata(response, contract, employee_id)
     try:
@@ -314,7 +322,7 @@ def _page_from_fetch(
     raw: object,
     *,
     contract: PaginatedEndpointContract,
-    employee_id: str,
+    employee_id: str | None,
     expected_page: int,
 ) -> PaginatedJsonPage:
     if not isinstance(raw, Mapping):
@@ -355,13 +363,29 @@ async def collect_complete_pages(
     first: PaginatedJsonPage,
     *,
     contract: PaginatedEndpointContract,
-    employee_id: str,
+    employee_id: str | None,
 ) -> tuple[dict[str, object], ...]:
     pages = [first]
+    base_query = _validate_url(
+        first.request_url,
+        contract,
+        employee_id,
+        expected_page=first.current_page,
+    )
+    base_query.pop("page", None)
     while pages[-1].current_page < pages[-1].last_page:
         current = pages[-1]
         if current.next_page_url is None:
             raise _failure(contract.resource, "missing next page")
+        next_query = _validate_url(
+            current.next_page_url,
+            contract,
+            employee_id,
+            expected_page=current.current_page + 1,
+        )
+        next_query.pop("page", None)
+        if next_query != base_query:
+            raise _failure(contract.resource, "pagination query changed")
         try:
             raw = await page.evaluate(_FETCH_JSON_PAGE, current.next_page_url)
         except asyncio.CancelledError:
@@ -420,7 +444,7 @@ class PaginatedResponseCapture:
 
     async def wait_for(
         self,
-        employee_id: str,
+        employee_id: str | None,
         *,
         after_sequence: int,
         timeout_ms: float,

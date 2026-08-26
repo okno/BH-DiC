@@ -29,6 +29,31 @@ _ORDINAL = re.compile(
     r"(?i)\b(?:il|la|l['\u2019])?\s*(primo|prima|secondo|seconda|terzo|terza|"
     r"quarto|quarta|quinto|quinta)\b"
 )
+_BARE_EMPLOYEE_REFERENCE = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9_-]{0,63}|"
+    r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'\u2019-]*"
+    r"(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'\u2019-]*){0,5})$"
+)
+_NEW_REQUEST_MARKERS = frozenset(
+    {
+        "apri",
+        "capacita",
+        "capacità",
+        "cerca",
+        "come",
+        "dimmi",
+        "elenca",
+        "mostra",
+        "quale",
+        "quali",
+        "quanti",
+        "segna",
+        "stampa",
+        "status",
+        "trova",
+        "visualizza",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +70,13 @@ class ConversationKey:
 @dataclass(frozen=True, slots=True)
 class ConversationContext:
     candidate_employee_ids: tuple[str, ...]
+    function_id: str
+    parameters: tuple[tuple[str, int | bool | str], ...]
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class PendingEmployeeTarget:
     function_id: str
     parameters: tuple[tuple[str, int | bool | str], ...]
     expires_at: float
@@ -72,6 +104,22 @@ class ConversationContextStore:
         self._max_candidates = max_candidates
         self._clock = clock
         self._items: OrderedDict[ConversationKey, ConversationContext] = OrderedDict()
+        self._pending_targets: OrderedDict[ConversationKey, PendingEmployeeTarget] = OrderedDict()
+
+    @staticmethod
+    def _validated_context_parameters(
+        parameters: Mapping[str, object] | None,
+    ) -> tuple[tuple[str, int | bool | str], ...]:
+        safe_parameters: list[tuple[str, int | bool | str]] = []
+        for name, value in (parameters or {}).items():
+            if _SAFE_PARAMETER.fullmatch(name) is None:
+                raise ValueError("invalid context parameter name")
+            if type(value) not in {str, int, bool}:
+                raise ValueError("context parameters must be scalar")
+            if isinstance(value, str) and (not value or len(value) > 64):
+                raise ValueError("context parameter string is invalid")
+            safe_parameters.append((name, cast(int | bool | str, value)))
+        return tuple(sorted(safe_parameters))
 
     def remember_candidates(
         self,
@@ -88,26 +136,67 @@ class ConversationContextStore:
             raise ValueError("candidate result set contains duplicate identifiers")
         if _FUNCTION_ID.fullmatch(function_id) is None:
             raise ValueError("invalid context function identifier")
-        safe_parameters: list[tuple[str, int | bool | str]] = []
-        for name, value in (parameters or {}).items():
-            if _SAFE_PARAMETER.fullmatch(name) is None:
-                raise ValueError("invalid context parameter name")
-            if type(value) not in {str, int, bool}:
-                raise ValueError("context parameters must be scalar")
-            if isinstance(value, str) and (not value or len(value) > 64):
-                raise ValueError("context parameter string is invalid")
-            safe_parameters.append((name, cast(int | bool | str, value)))
+        safe_parameters = self._validated_context_parameters(parameters)
         now = self._clock()
         self._purge_expired(now)
         self._items[key] = ConversationContext(
             candidate_employee_ids=validated_ids,
             function_id=function_id,
-            parameters=tuple(sorted(safe_parameters)),
+            parameters=safe_parameters,
             expires_at=now + self._ttl_seconds,
         )
+        self._pending_targets.pop(key, None)
         self._items.move_to_end(key)
         while len(self._items) > self._max_conversations:
             self._items.popitem(last=False)
+
+    def remember_pending_target(
+        self,
+        key: ConversationKey,
+        *,
+        function_id: str,
+        parameters: Mapping[str, object] | None = None,
+    ) -> None:
+        """Remember an operation while waiting for one employee name or opaque ID."""
+
+        if _FUNCTION_ID.fullmatch(function_id) is None:
+            raise ValueError("invalid context function identifier")
+        now = self._clock()
+        self._purge_expired(now)
+        self._pending_targets[key] = PendingEmployeeTarget(
+            function_id=function_id,
+            parameters=self._validated_context_parameters(parameters),
+            expires_at=now + self._ttl_seconds,
+        )
+        self._pending_targets.move_to_end(key)
+        while len(self._pending_targets) > self._max_conversations:
+            self._pending_targets.popitem(last=False)
+
+    def pending_target(
+        self,
+        key: ConversationKey,
+        request: str,
+    ) -> PendingEmployeeTarget | None:
+        """Consume a bounded bare name/ID only when an operation is awaiting that target."""
+
+        normalized = " ".join(request.strip().split())
+        first_word = normalized.split(maxsplit=1)[0].casefold() if normalized else ""
+        if (
+            not normalized
+            or len(normalized) > 128
+            or _BARE_EMPLOYEE_REFERENCE.fullmatch(normalized) is None
+            or first_word in _NEW_REQUEST_MARKERS
+        ):
+            return None
+        now = self._clock()
+        self._purge_expired(now)
+        context = self._pending_targets.get(key)
+        if context is not None:
+            self._pending_targets.move_to_end(key)
+        return context
+
+    def clear_pending_target(self, key: ConversationKey) -> bool:
+        return self._pending_targets.pop(key, None) is not None
 
     def selection(
         self, key: ConversationKey, request: str
@@ -127,12 +216,24 @@ class ConversationContextStore:
         return context.candidate_employee_ids[ordinal - 1], context
 
     def clear(self, key: ConversationKey) -> bool:
-        return self._items.pop(key, None) is not None
+        candidate_removed = self._items.pop(key, None) is not None
+        pending_removed = self._pending_targets.pop(key, None) is not None
+        return candidate_removed or pending_removed
 
     def _purge_expired(self, now: float) -> None:
         expired = [key for key, value in self._items.items() if value.expires_at <= now]
         for key in expired:
             self._items.pop(key, None)
+        pending_expired = [
+            key for key, value in self._pending_targets.items() if value.expires_at <= now
+        ]
+        for key in pending_expired:
+            self._pending_targets.pop(key, None)
 
 
-__all__ = ["ConversationContext", "ConversationContextStore", "ConversationKey"]
+__all__ = [
+    "ConversationContext",
+    "ConversationContextStore",
+    "ConversationKey",
+    "PendingEmployeeTarget",
+]

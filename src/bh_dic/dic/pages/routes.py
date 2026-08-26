@@ -7,7 +7,7 @@ import hashlib
 import re
 from collections.abc import Awaitable, Callable
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import JsonValue
 
@@ -54,6 +54,8 @@ from bh_dic.dic.models import (
     EmployeeSummary,
     FunctionId,
     MaturationRecord,
+    NotificationListResult,
+    NotificationRecord,
     PayrollMetadata,
     PreparedAction,
     RoleAssignment,
@@ -61,11 +63,13 @@ from bh_dic.dic.models import (
     SortDirection,
     TimeAccessResult,
 )
+from bh_dic.dic.notification_capture import NOTIFICATIONS_ENDPOINT, notifications_from_items
 from bh_dic.dic.pages.base import BaseDicPage, LocatorLike, PageLike, VerifiedUploadPayload
 from bh_dic.dic.paginated_capture import (
     PaginatedResponseCapture,
     collect_complete_pages,
     page_from_response,
+    strict_json_loads,
 )
 from bh_dic.dic.payroll_capture import PayrollResponseCapture, payrolls_from_response
 from bh_dic.dic.selectors import DEFAULT_SELECTORS, SelectorRegistry
@@ -1475,6 +1479,147 @@ class EmployeePayrollsPage(BaseDicPage):
                 employee_id=employee_id,
                 year=expected_year,
             )
+
+
+class NotificationsPage(BaseDicPage):
+    """Top-bar notifications reached from one fixed authenticated DIC route."""
+
+    route_template = "/it/app/employees/list"
+
+    _SET_READ_STATE = """
+    async ({notificationId, read}) => {
+      if (!Number.isSafeInteger(notificationId)
+          || notificationId <= 0
+          || typeof read !== "boolean") {
+        return {ok: false, reason: "invalid-input"};
+      }
+      const endpoint = read
+        ? "/backend_apiV2/notifications/read"
+        : "/backend_apiV2/notifications/unread";
+      const response = await fetch(endpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        redirect: "error",
+        headers: {Accept: "application/json", "Content-Type": "application/json"},
+        body: JSON.stringify({items: [notificationId]})
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const body = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        url: response.url,
+        contentType,
+        oversized: body.length > 2097152,
+        body: body.length > 2097152 ? null : body
+      };
+    }
+    """
+
+    async def read(self) -> NotificationListResult:
+        with PaginatedResponseCapture(self.page, NOTIFICATIONS_ENDPOINT) as capture:
+            mark = capture.mark()
+            await self.open()
+            bell = self.page.locator("dic-icon.fa-bell")
+            if await bell.count() != 1:
+                raise DicUiChangedError("DIC notification bell is unavailable or ambiguous")
+            await bell.click()
+            response = await capture.wait_for(
+                None,
+                after_sequence=mark,
+                timeout_ms=self.timeout_ms,
+            )
+            first = await page_from_response(
+                response,
+                contract=NOTIFICATIONS_ENDPOINT,
+                employee_id=None,
+            )
+            query = dict(parse_qsl(urlsplit(first.request_url).query, strict_parsing=True))
+            if (
+                first.current_page != 1
+                or first.per_page != 20
+                or query.get("page") != "1"
+                or query.get("per_page") != "20"
+                or not query.get("sort")
+                or len(query["sort"]) > 128
+                or any(key.startswith("filter[") for key in query)
+            ):
+                raise DicUiChangedError("notification list query did not request the full feed")
+            items = await collect_complete_pages(
+                self.page,
+                first,
+                contract=NOTIFICATIONS_ENDPOINT,
+                employee_id=None,
+            )
+        return NotificationListResult(
+            items=notifications_from_items(items),
+            total=first.total,
+        )
+
+    async def record(self, notification_id: int) -> NotificationRecord:
+        matches = [
+            item for item in (await self.read()).items if item.notification_id == notification_id
+        ]
+        if len(matches) != 1:
+            raise DicNotFoundError("notification target is not uniquely present")
+        return matches[0]
+
+    async def set_read_state(self, notification_id: int, *, read: bool) -> None:
+        if isinstance(notification_id, bool) or not 1 <= notification_id <= 9_007_199_254_740_991:
+            raise DicValidationError("invalid notification identifier")
+        try:
+            raw = await self.page.evaluate(
+                self._SET_READ_STATE,
+                {"notificationId": notification_id, "read": read},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise DicUiChangedError("notification state request failed") from exc
+        if not isinstance(raw, dict):
+            raise DicUiChangedError("notification state response is unavailable")
+        url = raw.get("url")
+        expected_path = (
+            "/backend_apiV2/notifications/read" if read else "/backend_apiV2/notifications/unread"
+        )
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if (
+            raw.get("ok") is not True
+            or raw.get("status") != 200
+            or raw.get("oversized") is True
+            or parsed is None
+            or parsed.scheme != "https"
+            or parsed.netloc != "secure.dipendentincloud.it"
+            or parsed.path != expected_path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise DicUiChangedError("notification state response failed validation")
+        content_type = raw.get("contentType")
+        body = raw.get("body")
+        if (
+            not isinstance(content_type, str)
+            or content_type.split(";", 1)[0].strip().casefold() != "application/json"
+            or not isinstance(body, str)
+            or len(body.encode("utf-8")) > 2 * 1024 * 1024
+        ):
+            raise DicUiChangedError("notification state response has an invalid document")
+        try:
+            document = strict_json_loads(body)
+        except (UnicodeDecodeError, ValueError):
+            raise DicUiChangedError("notification state response has invalid JSON") from None
+        data = document.get("data") if isinstance(document, dict) else None
+        if not isinstance(data, list) or len(data) > 20:
+            raise DicUiChangedError("notification state response has an invalid schema")
+        matches = [
+            item
+            for item in data
+            if isinstance(item, dict)
+            and item.get("id") == notification_id
+            and item.get("read") is read
+        ]
+        if len(matches) != 1:
+            raise DicUiChangedError("notification state response did not confirm the target")
 
 
 class EmployeeDocumentsPage(BaseDicPage):

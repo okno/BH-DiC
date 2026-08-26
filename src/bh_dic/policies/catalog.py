@@ -77,6 +77,7 @@ class ResourceSnapshotKind(StrEnum):
     DOCUMENT = "DOCUMENT"
     DOCUMENT_COLLECTION = "DOCUMENT_COLLECTION"
     EXPORT_SOURCE = "EXPORT_SOURCE"
+    NOTIFICATION = "NOTIFICATION"
 
 
 class WriteParameterValidationError(ValueError):
@@ -358,6 +359,12 @@ _SPECS = (
         sensitivity=Sensitivity.HIGH,
     ),
     _read(
+        "EMP-NOTIF-001",
+        "Notifiche Dipendenti in Cloud",
+        HR_READ,
+        sensitivity=Sensitivity.HIGH,
+    ),
+    _read(
         "EMP-DOC-001",
         "Metadati documenti",
         DOCS_READ,
@@ -565,6 +572,25 @@ _SPECS = (
         write_parameters=(OPTIONAL_MOTIVATION,),
         resource_snapshot=ResourceSnapshotKind.ACCOUNT,
         fixed_preview_after=(("employee_state", "active"),),
+    ),
+    _write(
+        "EMP-NOTIF-002",
+        "Modifica stato lettura notifica DIC",
+        "ENABLE_NOTIFICATION_STATE_CHANGE",
+        HR_WRITE,
+        target=False,
+        expose=False,
+        write_parameters=(
+            WriteParameterSpec(
+                "notification_id",
+                WriteParameterKind.INTEGER,
+                min_value=1,
+                max_value=9_007_199_254_740_991,
+            ),
+            WriteParameterSpec("read", WriteParameterKind.BOOLEAN),
+        ),
+        write_selectors=frozenset({"notification_id"}),
+        resource_snapshot=ResourceSnapshotKind.NOTIFICATION,
     ),
     _write(
         "EMP-DOC-002",

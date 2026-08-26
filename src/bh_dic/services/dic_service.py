@@ -35,6 +35,7 @@ from bh_dic.dic.models import (
     FunctionId,
     HealthStatus,
     MaturationRecord,
+    NotificationListResult,
     PayrollMetadata,
     PreparedAction,
     PreviewChange,
@@ -396,6 +397,9 @@ class DicService:
         self, employee_id: str, year: int | None = None
     ) -> tuple[PayrollMetadata, ...]:
         return await self.adapter.get_payroll_metadata(employee_id, year)
+
+    async def list_notifications(self) -> NotificationListResult:
+        return await self.adapter.list_notifications()
 
     async def find_employees_with_payroll(
         self,

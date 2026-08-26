@@ -5,20 +5,21 @@ non deve essere mantenuta come secondo catalogo runtime.
 
 ## Stato verificato
 
-- **32/32** Function ID hanno specifica policy e percorso mock sintetico testato.
-- **14 read**: tutte hanno policy e test sintetici. Il gate read-only del 2026-08-24 sullo SHA
+- **35/35** Function ID hanno specifica policy e percorso mock sintetico testato.
+- **15 read**: tutte hanno policy e test sintetici. Il gate read-only del 2026-08-24 sullo SHA
   `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha verificato live elenco completo, riepilogo,
   ruoli, target timbratura, contratti, maturazioni, bilanci, payroll e documenti. Un empty state
   valido non viene confuso con un errore; per contratti, bilanci e documenti è stato verificato
-  separatamente anche uno schema non vuoto, senza stampare contenuti personali.
-- **14 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
+  separatamente anche uno schema non vuoto, senza stampare contenuti personali. Il 2026-08-26 è
+  stato inoltre osservato e validato il contratto JSON paginato delle notifiche top-bar.
+- **15 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; **5 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
   limitato al subset verificabile, mentre `EMP-INVITE-001`, `EMP-DOC-005`, `EMP-DOC-003` e
   `EMP-CONTRACT-003` hanno adapter live `NOT_AVAILABLE`. `EMP-EXPORT-001` genera artifact locali
   in memoria; le sorgenti read sono verificate, mentre l'artifact resta `CONTRACT_VERIFIED` con
-  dati sintetici. I 19 Function ID write
-  sono tutti disabilitati dalla policy; i 18 gate distinti usati dal catalogo per le write
+  dati sintetici. I 20 Function ID write
+  sono tutti disabilitati dalla policy; i 19 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
 - Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato sul target Debian il gate
   applicativo live autorizzato in sola lettura sulle superfici sopra. L'invio outbound del
@@ -56,6 +57,7 @@ catalogo esclude anche dalla tool exposure ordinaria.
 | `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read + `payroll:read`; link con `protected_documents:download` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_VERIFIED 2026-08-24 |
 | `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read + `payroll:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED con traversata collettiva completa |
 | `EMP-DOC-001` | metadati documenti | document operator + `documents:metadata` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
+| `EMP-NOTIF-001` | notifiche top-bar DIC, incluse non lette | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED sul contratto JSON osservato |
 
 ## Write, file ed export
 
@@ -77,6 +79,7 @@ richiedente. Il numero `0` non elimina preview, conferma, RBAC, idempotenza o po
 | `EMP-RBAC-002` | modifica ruoli | `ENABLE_RBAC_WRITE` | A2 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-STATUS-001` | disattiva dipendente | `ENABLE_STATUS_CHANGE` | A2 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-STATUS-002` | riattiva dipendente | `ENABLE_STATUS_CHANGE` | A1 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
+| `EMP-NOTIF-002` | segna notifica letta/non letta | `ENABLE_NOTIFICATION_STATE_CHANGE` | 0 | mai | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-002` | upload documento | `ENABLE_DOCUMENT_UPLOAD` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-004` | metadati documento | `ENABLE_DOCUMENT_UPDATE` | 0 | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY |
 | `EMP-DOC-005` | elimina documento | `ENABLE_DOCUMENT_DELETE` | A2 | eligible | PARTIALLY_COMPLETED — TESTED_WITH_MOCK — LIVE_WRITE_UNVERIFIED — DISABLED_BY_POLICY; live NOT_AVAILABLE |

@@ -43,6 +43,7 @@ from bh_dic.dic.models import (
     EmployeeSummary,
     FunctionId,
     MaturationRecord,
+    NotificationRecord,
     PayrollMetadata,
     PreparedAction,
     ReconciliationResult,
@@ -848,6 +849,15 @@ async def test_state_digest_routes_every_write_to_raw_pom_state() -> None:
         ),
         verify_expected_metadata=False,
     )
+    adapter._notifications = pom(
+        record=NotificationRecord(
+            notification_id=1,
+            notification_type="synthetic",
+            text="Synthetic notification",
+            created_at="2026-08-26T10:00:00+00:00",
+            read=False,
+        )
+    )
     cases: dict[FunctionId, tuple[str | None, dict[str, JsonValue]]] = {
         FunctionId.EMP_UPDATE_001: (employee_id, {"job_title": "Changed"}),
         FunctionId.EMP_CREATE_001: (
@@ -892,10 +902,16 @@ async def test_state_digest_routes_every_write_to_raw_pom_state() -> None:
         FunctionId.EMP_DOC_005: (employee_id, {"document_id": "DOC-SYNTH-001"}),
         FunctionId.EMP_DELETE_001: (employee_id, {}),
         FunctionId.EMP_EXPORT_001: (None, {}),
+        FunctionId.EMP_NOTIF_002: (None, {"notification_id": 1, "read": True}),
     }
     assert frozenset(cases) == MUTATING_FUNCTIONS
     for function_id, (target, parameters) in cases.items():
-        assert await adapter.get_state_digest(function_id, target, parameters) == digest
+        observed = await adapter.get_state_digest(function_id, target, parameters)
+        if function_id is FunctionId.EMP_NOTIF_002:
+            assert len(observed) == 64
+            assert observed != digest
+        else:
+            assert observed == digest
 
     with pytest.raises(DicWriteDisabledError, match="cannot verify every requested field"):
         await adapter.get_state_digest(

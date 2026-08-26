@@ -137,6 +137,11 @@ conferma, approvazioni e precondizioni runtime. Un override runtime può soltant
 baseline, mai abilitare un flag spento nella configurazione. Le azioni critiche richiedono A2
 distinto dal richiedente e da A1.
 
+`ENABLE_NOTIFICATION_STATE_CHANGE=true` abilita esclusivamente la modifica reversibile
+letta/non letta delle notifiche DIC tramite ID stabile. Richiede anche il kill switch globale,
+ruolo `HR_WRITE`, anteprima e conferma monouso; la lettura delle notifiche richiede `HR_READ` ma
+non il flag write.
+
 `ENABLE_LIVE_WRITE_TESTS=true` è rifiutato senza kill switch globale, employee sintetico dedicato
 e `DIC_TEST_TENANT_CONFIRMED=true`. Queste condizioni non costituiscono comunque autorizzazione;
 nel rilascio corrente le write live sono vietate.

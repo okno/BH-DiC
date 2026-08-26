@@ -52,6 +52,8 @@ EXPECTED_IDS = frozenset(
         "EMP-EXPORT-001",
         "EMP-DELETE-001",
         "EMP-CONTRACT-003",
+        "EMP-NOTIF-001",
+        "EMP-NOTIF-002",
     }
 )
 
@@ -103,6 +105,7 @@ VALID_WRITE_PARAMETERS: dict[str, dict[str, object]] = {
         "contract_id": "CON-1",
         "motivation": "Eliminazione autorizzata",
     },
+    "EMP-NOTIF-002": {"notification_id": 1, "read": True},
 }
 
 

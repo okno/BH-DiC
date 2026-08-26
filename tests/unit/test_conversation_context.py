@@ -43,3 +43,32 @@ def test_context_is_bounded_validated_and_can_be_cleared() -> None:
             ("EMP-SYNTH-001", "EMP-SYNTH-001"),
             function_id="EMP-READ-002",
         )
+
+
+def test_pending_employee_target_accepts_one_bounded_name_or_id_and_is_consumed() -> None:
+    store = ConversationContextStore()
+    key = ConversationKey(1, 10, 20)
+    store.remember_pending_target(
+        key,
+        function_id="EMP-PAY-001",
+        parameters={"latest_paid": True, "include_net": True},
+    )
+
+    pending = store.pending_target(key, "Amine Mohamed Abbadi")
+
+    assert pending is not None
+    assert pending.function_id == "EMP-PAY-001"
+    assert dict(pending.parameters) == {"include_net": True, "latest_paid": True}
+    assert store.pending_target(key, "Amine Mohamed Abbadi") is not None
+    assert store.clear_pending_target(key)
+    assert store.pending_target(key, "Amine Mohamed Abbadi") is None
+
+
+def test_pending_employee_target_does_not_consume_a_new_sentence() -> None:
+    store = ConversationContextStore()
+    key = ConversationKey(1, 10, 20)
+    store.remember_pending_target(key, function_id="EMP-PAY-001")
+
+    assert store.pending_target(key, "qual è lo stipendio di Amine?") is None
+    assert store.pending_target(key, "mostra notifiche") is None
+    assert store.pending_target(key, "EMP-SYNTH-001") is not None

@@ -16,6 +16,7 @@ from bh_dic.dic.pages.routes import (
     EmployeesListPage,
     EmployeeSummaryPage,
     LoginPage,
+    NotificationsPage,
     TimestampEmployeesPage,
 )
 
@@ -31,6 +32,7 @@ __all__ = [
     "EmployeesListPage",
     "LocatorLike",
     "LoginPage",
+    "NotificationsPage",
     "PageLike",
     "TimestampEmployeesPage",
     "VerifiedUploadPayload",

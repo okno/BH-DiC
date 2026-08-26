@@ -31,6 +31,8 @@ from bh_dic.dic.models import (
     FunctionId,
     HealthStatus,
     MaturationRecord,
+    NotificationListResult,
+    NotificationRecord,
     OpaqueStateDigest,
     OperationStatus,
     PayrollMetadata,
@@ -116,6 +118,7 @@ class MockDicAdapter:
         self._balance_corrections: dict[tuple[str, int, int, str], str] = {}
         self._payrolls: dict[str, list[PayrollMetadata]] = {}
         self._documents: dict[str, list[DocumentMetadata]] = {}
+        self._notifications: dict[int, NotificationRecord] = {}
         self._executions: dict[str, ExecutionResult] = {}
         self._effect_targets: dict[str, str] = {}
         self._effect_events: set[str] = set()
@@ -249,6 +252,13 @@ class MockDicAdapter:
                 state="uploaded",
             )
         ]
+        self._notifications[1] = NotificationRecord(
+            notification_id=1,
+            notification_type="synthetic",
+            text="Notifica DIC sintetica",
+            created_at="2026-08-20T10:00:00+00:00",
+            read=False,
+        )
 
     def _require_open(self) -> None:
         if self._closed:
@@ -377,6 +387,17 @@ class MockDicAdapter:
         records = self._payrolls.get(employee_id, ())
         return tuple(record for record in records if year is None or record.year == year)
 
+    async def list_notifications(self) -> NotificationListResult:
+        self._require_open()
+        items = tuple(
+            sorted(
+                self._notifications.values(),
+                key=lambda item: (item.created_at, item.notification_id),
+                reverse=True,
+            )
+        )
+        return NotificationListResult(items=items, total=len(items))
+
     async def get_document_metadata(
         self, employee_id: str, query: DocumentQuery
     ) -> tuple[DocumentMetadata, ...]:
@@ -410,11 +431,21 @@ class MockDicAdapter:
         clean_parameters = {
             key: value for key, value in parameters.items() if key not in execution_only
         }
+        material: object
 
-        if function_id in {FunctionId.EMP_CREATE_001, FunctionId.EMP_EXPORT_001}:
-            material: object = [
-                self._items[key].model_dump(mode="json") for key in sorted(self._items)
-            ]
+        if function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = clean_parameters.get("notification_id")
+            read = clean_parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+                or notification_id not in self._notifications
+            ):
+                raise DicValidationError("notification state parameters are invalid")
+            material = self._notifications[notification_id].model_dump(mode="json")
+        elif function_id in {FunctionId.EMP_CREATE_001, FunctionId.EMP_EXPORT_001}:
+            material = [self._items[key].model_dump(mode="json") for key in sorted(self._items)]
         else:
             if employee_id is None:
                 raise DicValidationError("mutation state digest requires employee_id")
@@ -924,6 +955,16 @@ class MockDicAdapter:
 
     def _postcondition_applied(self, action: PreparedAction) -> bool:
         employee_id = action.employee_id
+        if action.function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = action.parameters.get("notification_id")
+            read = action.parameters.get("read")
+            return (
+                isinstance(notification_id, int)
+                and not isinstance(notification_id, bool)
+                and isinstance(read, bool)
+                and notification_id in self._notifications
+                and self._notifications[notification_id].read is read
+            )
         if action.function_id is FunctionId.EMP_CREATE_001:
             target = self._effect_targets.get(action.idempotency_key)
             if target is None or target not in self._raw_summaries:
@@ -1087,6 +1128,10 @@ class MockDicAdapter:
                     key: [record.model_dump(mode="json") for record in value]
                     for key, value in sorted(self._documents.items())
                 },
+                "notifications": {
+                    str(key): value.model_dump(mode="json")
+                    for key, value in sorted(self._notifications.items())
+                },
                 "corrections": [
                     [list(key), value] for key, value in sorted(self._balance_corrections.items())
                 ],
@@ -1115,6 +1160,20 @@ class MockDicAdapter:
                 raise DicValidationError("export contains unsupported parameters")
             self._effect_events.add(action.idempotency_key)
             details["artifact_id"] = f"EXPORT-{action.request_fingerprint[:12].upper()}"
+        elif action.function_id is FunctionId.EMP_NOTIF_002:
+            notification_id = action.parameters.get("notification_id")
+            read = action.parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+                or notification_id not in self._notifications
+            ):
+                raise DicValidationError("notification state parameters are invalid")
+            current = self._notifications[notification_id]
+            if current.read is read:
+                raise DicValidationError("notification already has the requested read state")
+            self._notifications[notification_id] = current.model_copy(update={"read": read})
         else:
             if employee_id is None:
                 raise DicValidationError("employee_id is required")

@@ -191,6 +191,9 @@ class BHApplicationCoordinator(InteractionCoordinator):
         context_selection = self._conversation_context.selection(
             conversation_key, normalized_request
         )
+        pending_target = self._conversation_context.pending_target(
+            conversation_key, normalized_request
+        )
         context_intent: IntentEnvelope | None = None
         if context_selection is not None:
             selected_employee_id, remembered = context_selection
@@ -210,7 +213,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
         visible = self.policy.visible_function_ids(exposure_context)
         planned = (
             None
-            if context_intent is not None
+            if context_intent is not None or pending_target is not None
             else build_local_hr_query_plan(normalized_request, today=request_today)
         )
         if planned is not None and len(planned.plan.steps) > 1:
@@ -238,6 +241,20 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     provider="local",
                     model="deterministic",
                     tool_name="conversation_context",
+                ),
+            )
+        elif pending_target is not None:
+            intent = self._direct_intent(
+                pending_target.function_id,
+                parameters=dict(pending_target.parameters),
+            )
+            target_query = normalized_request
+            routed = RoutedIntent(
+                envelope=intent,
+                metadata=RouteMetadata(
+                    provider="local",
+                    model="deterministic",
+                    tool_name="pending_employee_target",
                 ),
             )
         elif local is not None:
@@ -297,7 +314,16 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     or not exc.response_received
                     or contract_expiry_fallback_interval is None
                 ):
-                    raise
+                    result = InteractionResult(
+                        title="Interpretazione AI non completata",
+                        description=(
+                            "Il provider non ha prodotto un routing valido. Nessuna operazione "
+                            "Dipendenti in Cloud è stata eseguita; riprova tra poco."
+                        ),
+                        correlation_id=correlation_id,
+                        success=False,
+                    )
+                    return await self._with_request_usage(result, correlation_id)
                 routed = RoutedIntent(
                     envelope=self._direct_intent(
                         "EMP-CONTRACT-001",
@@ -351,6 +377,13 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 today=request_today,
             )
         if intent.requires_clarification:
+            spec = get_function_spec(intent.function_id)
+            if spec is not None and spec.requires_target and intent.employee_id is None:
+                self._conversation_context.remember_pending_target(
+                    conversation_key,
+                    function_id=intent.function_id,
+                    parameters=intent.parameters,
+                )
             await self._audit(
                 actor,
                 correlation_id,
@@ -389,6 +422,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
             if isinstance(resolved, InteractionResult):
                 return await self._with_request_usage(resolved, correlation_id)
             resolved_item = resolved
+            self._conversation_context.clear_pending_target(conversation_key)
             intent = intent.model_copy(update={"employee_id": resolved.employee_id})
 
         scope = self._operation_scope(intent, normalized_request)
@@ -739,7 +773,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
             return "Il provider ha completato la risposta senza contatori disponibili."
         if totals.unknown_calls:
             return "Esito remoto non determinabile; nessuna stima locale applicata."
-        return "Contatori non disponibili."
+        return "nessuna chiamata AI · input 0 · output 0 · totale 0"
 
     @staticmethod
     def _format_cumulative_usage(totals: ModelUsageTotals) -> str:
@@ -1675,19 +1709,56 @@ class BHApplicationCoordinator(InteractionCoordinator):
             employee_id = self._require_employee(intent)
             payroll_year_raw = intent.parameters.get("year")
             payroll_month_raw = intent.parameters.get("month")
-            payroll_records = await self.dic.get_payroll_metadata(
-                employee_id,
-                int(payroll_year_raw) if payroll_year_raw is not None else None,
-            )
+            latest_paid = intent.parameters.get("latest_paid") is True
+            payroll_records: tuple[PayrollMetadata, ...]
+            if latest_paid:
+                payroll_records = ()
+                current_year = self._today().year
+                for candidate_year in range(current_year, current_year - 3, -1):
+                    candidate_records = await self.dic.get_payroll_metadata(
+                        employee_id,
+                        candidate_year,
+                    )
+                    payroll_records = (*payroll_records, *candidate_records)
+                    if any(record.net_cents is not None for record in candidate_records):
+                        break
+                paid_records = tuple(
+                    record
+                    for record in payroll_records
+                    if record.month is not None and record.net_cents is not None
+                )
+                payroll_records = (
+                    (
+                        max(
+                            paid_records,
+                            key=lambda record: (
+                                record.year,
+                                record.month or 0,
+                                record.published_at or "",
+                            ),
+                        ),
+                    )
+                    if paid_records
+                    else ()
+                )
+            else:
+                payroll_records = await self.dic.get_payroll_metadata(
+                    employee_id,
+                    int(payroll_year_raw) if payroll_year_raw is not None else None,
+                )
             if isinstance(payroll_month_raw, int) and not isinstance(payroll_month_raw, bool):
                 payroll_records = tuple(
                     record for record in payroll_records if record.month == payroll_month_raw
                 )
             if not payroll_records:
                 period = (
-                    f"{payroll_month_raw:02d}/{payroll_year_raw}"
-                    if isinstance(payroll_month_raw, int) and isinstance(payroll_year_raw, int)
-                    else str(payroll_year_raw or "richiesto")
+                    "ultimo mese pagato"
+                    if latest_paid
+                    else (
+                        f"{payroll_month_raw:02d}/{payroll_year_raw}"
+                        if isinstance(payroll_month_raw, int) and isinstance(payroll_year_raw, int)
+                        else str(payroll_year_raw or "richiesto")
+                    )
                 )
                 return InteractionResult(
                     title=f"Busta paga non trovata — {employee_id}",
@@ -1811,6 +1882,70 @@ class BHApplicationCoordinator(InteractionCoordinator):
                         content=attachment_content,
                     ),
                 ),
+                correlation_id=correlation_id,
+            )
+        if function_id == "EMP-NOTIF-001":
+            notifications = await self.dic.list_notifications()
+            unread_only = intent.parameters.get("unread_only") is True
+            selected_notifications = tuple(
+                item for item in notifications.items if not unread_only or not item.read
+            )
+            shown_notifications = selected_notifications[:25]
+            notification_attachment: tuple[ResponseAttachment, ...] = ()
+            if len(selected_notifications) > len(shown_notifications):
+                lines = ["id\tstato\tdata\ttipo\ttesto"]
+                lines.extend(
+                    "\t".join(
+                        (
+                            str(item.notification_id),
+                            "letta" if item.read else "non letta",
+                            item.created_at.replace("\t", " ").replace("\n", " "),
+                            item.notification_type.replace("\t", " ").replace("\n", " "),
+                            " ".join(
+                                filter(
+                                    None,
+                                    (item.text, item.additional_text),
+                                )
+                            )
+                            .replace("\t", " ")
+                            .replace("\n", " "),
+                        )
+                    )
+                    for item in selected_notifications
+                )
+                content = ("\n".join(lines) + "\n").encode("utf-8")
+                if len(content) > self._response_attachment_max_bytes:
+                    raise ApplicationError(
+                        "notification result exceeds the configured attachment limit"
+                    )
+                notification_attachment = (
+                    ResponseAttachment(
+                        filename="notifiche_dic.tsv",
+                        content_type="text/tab-separated-values; charset=utf-8",
+                        content=content,
+                    ),
+                )
+            unread_total = sum(not item.read for item in notifications.items)
+            return InteractionResult(
+                title="Notifiche Dipendenti in Cloud",
+                description=(
+                    f"Totali: {notifications.total} · non lette: {unread_total} · "
+                    f"mostrate: {len(shown_notifications)}. Per cambiare stato scrivi, ad "
+                    "esempio, "
+                    "`segna la notifica 123 come letta`."
+                ),
+                fields=tuple(
+                    ResultField(
+                        f"#{item.notification_id} · {'LETTA' if item.read else 'NON LETTA'}",
+                        (
+                            f"{item.created_at} · tipo {item.notification_type}\n"
+                            f"{item.text}"
+                            f"{f' — {item.additional_text}' if item.additional_text else ''}"
+                        )[:1_024],
+                    )
+                    for item in shown_notifications
+                ),
+                attachments=notification_attachment,
                 correlation_id=correlation_id,
             )
         if function_id == "EMP-DOC-001":
@@ -2551,6 +2686,28 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 )
                 export_before["record_count"] = result.total
             return export_before, {}, f"Export protetto - ambito {scope}"
+
+        if kind is ResourceSnapshotKind.NOTIFICATION:
+            notification_id = parameters.get("notification_id")
+            read = parameters.get("read")
+            if (
+                not isinstance(notification_id, int)
+                or isinstance(notification_id, bool)
+                or not isinstance(read, bool)
+            ):
+                raise ApplicationError("notification state parameters are invalid")
+            matches = [
+                item
+                for item in (await self.dic.list_notifications()).items
+                if item.notification_id == notification_id
+            ]
+            if len(matches) != 1:
+                raise ApplicationError("notification target must identify one current record")
+            return (
+                {"notification_id": notification_id, "read": matches[0].read},
+                {"notification_id": notification_id, "read": matches[0].read},
+                f"Notifica DIC #{notification_id}",
+            )
 
         if employee_id is None:
             raise ApplicationError("write resource requires employee_id")

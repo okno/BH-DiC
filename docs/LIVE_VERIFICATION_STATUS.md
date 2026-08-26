@@ -83,7 +83,7 @@ Soltanto i subset bounded di `EMP-READ-001` e `EMP-CONTRACT-001` sono quindi cla
 controllo era visibile nella baseline. `TESTED_WITH_MOCK` indica test sintetici
 del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 
-## Matrice dei 32 Function ID
+## Matrice dei 35 Function ID
 
 | Function ID | Funzione | Implementazione e test | Evidenza live | Stato predefinito |
 | --- | --- | --- | --- | --- |
@@ -101,6 +101,7 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 | `EMP-PAY-001` | Busta paga individuale, netto e link PDF temporaneo | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
 | `EMP-PAY-002` | Ricerca collettiva buste paga per mese | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED con traversata collettiva completa | ENABLED_BY_DEFAULT |
 | `EMP-DOC-001` | Metadati documenti | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED | ENABLED_BY_DEFAULT |
+| `EMP-NOTIF-001` | Notifiche top-bar DIC | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_READ_VERIFIED sul contratto JSON `/backend_apiV2/notifications` | ENABLED_BY_DEFAULT |
 | `EMP-UPDATE-001` | Modifica dati dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-CREATE-001` | Creazione dipendente | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — subset verificabile: `first_name`, `last_name`, `payroll_number`, `tax_code`, `job_title`, `business_email`, `workplace`; rifiuto pre-pending: `birth_date`, `iban`, `phone`, `address`, `notes` | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-CONTRACT-002` | Creazione o modifica contratto | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
@@ -113,6 +114,7 @@ del catalogo e del percorso prepare/execute, non un collaudo del DOM reale.
 | `EMP-RBAC-002` | Modifica permessi e ruoli | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-STATUS-001` | Disattivazione dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-STATUS-002` | Riattivazione dipendente | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
+| `EMP-NOTIF-002` | Segna notifica letta/non letta | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-002` | Upload documento | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-004` | Modifica metadati documento | IMPLEMENTED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |
 | `EMP-DOC-005` | Eliminazione documento | PARTIALLY_COMPLETED — TESTED_WITH_MOCK | LIVE_WRITE_UNVERIFIED — NOT_AVAILABLE nell'adapter live | DISABLED_BY_POLICY — DISABLED_BY_DEFAULT |

@@ -133,6 +133,22 @@ def test_individual_net_pay_keeps_name_local_and_defaults_to_previous_month() ->
     assert previous.envelope.parameters == {"year": 2026, "month": 7, "include_net": True}
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "qual è il netto dell'ultimo mese pagato di Amin?",
+        "mostra l'ultima busta paga di Amin",
+        "qual è l'ultimo cedolino di Amin?",
+    ],
+)
+def test_latest_paid_payroll_is_not_rewritten_to_previous_calendar_month(message: str) -> None:
+    parsed = parse_local_operational_intent(message, today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-PAY-001"
+    assert parsed.envelope.parameters == {"latest_paid": True, "include_net": True}
+
+
 def test_doc_is_an_alias_for_a_real_docx_export() -> None:
     parsed = parse_local_operational_intent(
         "genera un doc con tutti i dipendenti",

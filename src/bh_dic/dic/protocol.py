@@ -21,6 +21,7 @@ from bh_dic.dic.models import (
     FunctionId,
     HealthStatus,
     MaturationRecord,
+    NotificationListResult,
     OpaqueStateDigest,
     PayrollMetadata,
     PreparedAction,
@@ -64,6 +65,8 @@ class DipendentiInCloudAdapter(Protocol):
     async def get_payroll_metadata(
         self, employee_id: str, year: int | None = None
     ) -> tuple[PayrollMetadata, ...]: ...
+
+    async def list_notifications(self) -> NotificationListResult: ...
 
     async def get_document_metadata(
         self, employee_id: str, query: DocumentQuery
