@@ -571,9 +571,10 @@ def _contract_projection(value: object) -> tuple[str | None, bool | None, date |
     if technical_present and technical_present != _CONTRACT_TECHNICAL_KEYS:
         raise _failure("invalid current contract schema")
     if technical_present:
-        # These discard-only fields have one exact live-observed shape.  They never leave this
-        # validation boundary; booleans are strict (integers are rejected), nullable fields are
-        # literal null only, and any future non-null/partial/unknown variant remains fail-closed.
+        # These discard-only fields have one bounded live-observed shape.  They never leave this
+        # validation boundary; booleans are strict (integers are rejected), the optional note is
+        # validated only as bounded text, and working-hours structures remain literal null.  Any
+        # future partial or unknown variant remains fail-closed.
         technical_invalid = False
         try:
             _strict_bool(value["flexible_workinghours"])
@@ -583,11 +584,14 @@ def _contract_projection(value: object) -> tuple[str | None, bool | None, date |
             technical_invalid = True
         if technical_invalid:
             raise _failure("invalid current contract schema")
-        if (
-            value["note"] is not None
-            or value["workinghours"] is not None
-            or value["workinghours_list"] is not None
-        ):
+        note_invalid = False
+        try:
+            _nullable_text(value["note"], maximum=4096)
+        except DicUiChangedError:
+            note_invalid = True
+        if note_invalid:
+            raise _failure("invalid current contract schema")
+        if value["workinghours"] is not None or value["workinghours_list"] is not None:
             raise _failure("invalid current contract schema")
     _strict_int(value["id"], minimum=1)
     hours_type = _bounded_text(value["hours_type"], maximum=128)

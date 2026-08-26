@@ -313,6 +313,24 @@ async def test_current_contract_accepts_complete_technical_variant_without_proje
 
 
 @pytest.mark.asyncio
+async def test_current_contract_accepts_bounded_note_without_projection() -> None:
+    query = _query()
+    document = _document(query)
+    document["data"][0]["current_contract"].update(_technical_contract_values())
+    document["data"][0]["current_contract"]["note"] = "PRIVATE_CONTRACT_NOTE_MARKER"
+
+    result = await employee_list_result_from_response(
+        _Response(url=_url(query), document=document), query
+    )
+
+    assert result.total == 1
+    serialized = result.model_dump_json()
+    assert "PRIVATE_CONTRACT_NOTE_MARKER" not in serialized
+    for technical_key in _CONTRACT_TECHNICAL_KEYS:
+        assert technical_key not in serialized
+
+
+@pytest.mark.asyncio
 async def test_current_contract_validates_base_and_extended_shapes_per_employee_record() -> None:
     query = _query()
     base_employee = _employee(101)
@@ -340,7 +358,8 @@ async def test_current_contract_validates_base_and_extended_shapes_per_employee_
         ("hours_alert", None),
         ("ongoing", 1.0),
         ("ongoing", "false"),
-        ("note", "PRIVATE_TECHNICAL_VALUE_MARKER"),
+        ("note", False),
+        ("note", "x" * 4097),
         ("workinghours", False),
         ("workinghours_list", []),
     ],
