@@ -1516,13 +1516,25 @@ class NotificationsPage(BaseDicPage):
     }
     """
 
+    async def _wait_for_bell(self) -> LocatorLike:
+        deadline = asyncio.get_running_loop().time() + self.timeout_ms / 1_000
+        while True:
+            bell = self.page.locator("dic-icon.fa-bell")
+            count = await bell.count()
+            if count == 1:
+                return bell
+            if count > 1:
+                raise DicUiChangedError("DIC notification bell is unavailable or ambiguous")
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DicUiChangedError("DIC notification bell is unavailable or ambiguous")
+            await asyncio.sleep(min(EmployeesListPage._HYDRATION_POLL_SECONDS, remaining))
+
     async def read(self) -> NotificationListResult:
         with PaginatedResponseCapture(self.page, NOTIFICATIONS_ENDPOINT) as capture:
             mark = capture.mark()
             await self.open()
-            bell = self.page.locator("dic-icon.fa-bell")
-            if await bell.count() != 1:
-                raise DicUiChangedError("DIC notification bell is unavailable or ambiguous")
+            bell = await self._wait_for_bell()
             await bell.click()
             response = await capture.wait_for(
                 None,

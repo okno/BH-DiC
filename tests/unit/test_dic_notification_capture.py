@@ -8,6 +8,7 @@ import pytest
 
 from bh_dic.dic.errors import DicUiChangedError
 from bh_dic.dic.notification_capture import NOTIFICATIONS_ENDPOINT, notifications_from_items
+from bh_dic.dic.pages import NotificationsPage
 from bh_dic.dic.paginated_capture import page_from_response
 
 
@@ -114,3 +115,34 @@ def test_notification_projection_rejects_duplicate_ids_and_bad_timestamps() -> N
     invalid["created_at"] = "not-a-date"
     with pytest.raises(DicUiChangedError, match="timestamp"):
         notifications_from_items((invalid,))
+
+
+class _HydratingBell:
+    def __init__(self, counts: list[int]) -> None:
+        self._counts = iter(counts)
+        self._last = counts[-1]
+
+    async def count(self) -> int:
+        self._last = next(self._counts, self._last)
+        return self._last
+
+
+class _HydratingNotificationPage:
+    def __init__(self, bell: _HydratingBell) -> None:
+        self.bell = bell
+
+    def locator(self, selector: str) -> _HydratingBell:
+        assert selector == "dic-icon.fa-bell"
+        return self.bell
+
+
+@pytest.mark.asyncio
+async def test_notification_bell_waits_for_top_bar_hydration() -> None:
+    bell = _HydratingBell([0, 0, 1])
+    page = NotificationsPage(
+        _HydratingNotificationPage(bell),  # type: ignore[arg-type]
+        "https://secure.dipendentincloud.it",
+        timeout_ms=500,
+    )
+
+    assert await page._wait_for_bell() is bell
