@@ -42,10 +42,40 @@ async url => {
 }
 """
 
+_FETCH_JSON_PAGE_WITH_SESSION_HEADERS = """
+async ({url, authorization, deviceId}) => {
+  const response = await fetch(url, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      Authorization: authorization,
+      "X-Device-Id": deviceId
+    },
+    redirect: "error"
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && Number(contentLength) > 2097152) {
+    return {url: response.url, status: response.status, contentType, oversized: true};
+  }
+  const body = await response.text();
+  return {
+    url: response.url,
+    status: response.status,
+    contentType,
+    oversized: body.length > 2097152,
+    body: body.length > 2097152 ? null : body
+  };
+}
+"""
+
 
 class RequestLike(Protocol):
     @property
     def method(self) -> str: ...
+
+    async def header_value(self, name: str) -> str | None: ...
 
 
 class ResponseLike(Protocol):
@@ -388,11 +418,40 @@ async def fetch_paginated_page(
     employee_id: str | None,
     expected_page: int,
     paginator: bool = True,
+    request_headers: Mapping[str, str] | None = None,
 ) -> PaginatedJsonPage:
     """Fetch one exact first-party page and validate it before projection."""
 
+    _validate_url(
+        url,
+        contract,
+        employee_id,
+        expected_page=expected_page,
+        paginator=paginator,
+    )
+    expression = _FETCH_JSON_PAGE
+    argument: object = url
+    if request_headers is not None:
+        if set(request_headers) != {"authorization", "x-device-id"}:
+            raise _failure(contract.resource, "invalid session header capability")
+        authorization = request_headers["authorization"]
+        device_id = request_headers["x-device-id"]
+        if (
+            not authorization
+            or len(authorization) > 8_192
+            or not device_id
+            or len(device_id) > 512
+            or any(character in authorization or character in device_id for character in "\r\n\0")
+        ):
+            raise _failure(contract.resource, "invalid session header capability")
+        expression = _FETCH_JSON_PAGE_WITH_SESSION_HEADERS
+        argument = {
+            "url": url,
+            "authorization": authorization,
+            "deviceId": device_id,
+        }
     try:
-        raw = await page.evaluate(_FETCH_JSON_PAGE, url)
+        raw = await page.evaluate(expression, argument)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -412,6 +471,7 @@ async def collect_complete_pages(
     *,
     contract: PaginatedEndpointContract,
     employee_id: str | None,
+    request_headers: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, object], ...]:
     pages = [first]
     base_query = _validate_url(
@@ -441,6 +501,7 @@ async def collect_complete_pages(
             contract=contract,
             employee_id=employee_id,
             expected_page=current.current_page + 1,
+            request_headers=request_headers,
         )
         if following.total != first.total or following.last_page != first.last_page:
             raise _failure(contract.resource, "pagination metadata changed")

@@ -10,6 +10,7 @@ from bh_dic.dic.errors import DicUiChangedError
 from bh_dic.dic.paginated_capture import (
     PaginatedEndpointContract,
     collect_complete_pages,
+    fetch_paginated_page,
     page_from_response,
 )
 
@@ -75,11 +76,17 @@ class FetchPage:
 
     async def evaluate(self, expression: str, argument: object = None) -> object:
         assert 'credentials: "same-origin"' in expression
-        assert isinstance(argument, str)
-        self.requested_urls.append(argument)
+        if isinstance(argument, dict):
+            assert set(argument) == {"url", "authorization", "deviceId"}
+            assert "Authorization: authorization" in expression
+            url = argument["url"]
+        else:
+            url = argument
+        assert isinstance(url, str)
+        self.requested_urls.append(url)
         document = self.documents.pop(0)
         return {
-            "url": argument,
+            "url": url,
             "status": 200,
             "contentType": "application/json",
             "oversized": False,
@@ -230,3 +237,50 @@ async def test_complete_pagination_accepts_separate_exact_paginator_path() -> No
 
     assert len(items) == 2
     assert fetch_page.requested_urls == [first_document["next_page_url"]]
+
+
+@pytest.mark.asyncio
+async def test_exact_session_headers_can_be_replayed_only_to_validated_page() -> None:
+    document = _document()
+    fetch_page = FetchPage([document])
+
+    page = await fetch_paginated_page(
+        fetch_page,
+        Response(document).url,
+        contract=CONTRACT,
+        employee_id="123",
+        expected_page=1,
+        paginator=False,
+        request_headers={
+            "authorization": "Bearer SYNTHETIC_PRIVATE_TOKEN",
+            "x-device-id": "SYNTHETIC_DEVICE",
+        },
+    )
+
+    assert page.total == 1
+    assert fetch_page.requested_urls == [Response(document).url]
+
+    with pytest.raises(DicUiChangedError, match="session header"):
+        await fetch_paginated_page(
+            FetchPage([document]),
+            Response(document).url,
+            contract=CONTRACT,
+            employee_id="123",
+            expected_page=1,
+            paginator=False,
+            request_headers={"authorization": "Bearer SYNTHETIC_PRIVATE_TOKEN"},
+        )
+
+    with pytest.raises(DicUiChangedError, match="endpoint metadata"):
+        await fetch_paginated_page(
+            FetchPage([document]),
+            "https://attacker.invalid/backend_apiV2/contracts?employee_id=123&page=1",
+            contract=CONTRACT,
+            employee_id="123",
+            expected_page=1,
+            paginator=False,
+            request_headers={
+                "authorization": "Bearer SYNTHETIC_PRIVATE_TOKEN",
+                "x-device-id": "SYNTHETIC_DEVICE",
+            },
+        )

@@ -1558,30 +1558,54 @@ class NotificationsPage(BaseDicPage):
             }
             if first.current_page != 1 or first.per_page != 20 or query != expected_bell_query:
                 raise DicUiChangedError("notification list query did not request the full feed")
-            full_feed_url = f"{self.base_url}{NOTIFICATIONS_ENDPOINT.endpoint_path}?" + urlencode(
-                {
-                    "page": "1",
-                    "per_page": "20",
-                    "sort": "-created_at",
-                }
-            )
-            first = await fetch_paginated_page(
-                self.page,
-                full_feed_url,
-                contract=NOTIFICATIONS_ENDPOINT,
-                employee_id=None,
-                expected_page=1,
-                paginator=False,
-            )
-            items = await collect_complete_pages(
+            try:
+                authorization = await response.request.header_value("authorization")
+                device_id = await response.request.header_value("x-device-id")
+            except Exception:
+                raise DicUiChangedError("notification session capability is unavailable") from None
+            if authorization is None or device_id is None:
+                raise DicUiChangedError("notification session capability is unavailable")
+            request_headers = {
+                "authorization": authorization,
+                "x-device-id": device_id,
+            }
+            unread_items = await collect_complete_pages(
                 self.page,
                 first,
                 contract=NOTIFICATIONS_ENDPOINT,
                 employee_id=None,
+                request_headers=request_headers,
             )
+            read_feed_url = f"{self.base_url}{NOTIFICATIONS_ENDPOINT.endpoint_path}?" + urlencode(
+                {
+                    "page": "1",
+                    "per_page": "20",
+                    "sort": "-created_at",
+                    "filter[0][field]": "read",
+                    "filter[0][op]": "=",
+                    "filter[0][value]": "1",
+                }
+            )
+            read_first = await fetch_paginated_page(
+                self.page,
+                read_feed_url,
+                contract=NOTIFICATIONS_ENDPOINT,
+                employee_id=None,
+                expected_page=1,
+                paginator=False,
+                request_headers=request_headers,
+            )
+            read_items = await collect_complete_pages(
+                self.page,
+                read_first,
+                contract=NOTIFICATIONS_ENDPOINT,
+                employee_id=None,
+                request_headers=request_headers,
+            )
+            items = unread_items + read_items
         return NotificationListResult(
             items=notifications_from_items(items),
-            total=first.total,
+            total=first.total + read_first.total,
         )
 
     async def record(self, notification_id: int) -> NotificationRecord:
