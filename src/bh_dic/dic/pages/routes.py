@@ -1487,11 +1487,26 @@ class NotificationsPage(BaseDicPage):
 
     route_template = "/it/app/employees/list"
 
+    def __init__(
+        self,
+        page: PageLike,
+        base_url: str,
+        *,
+        selectors: SelectorRegistry = DEFAULT_SELECTORS,
+        timeout_ms: float = 15_000,
+    ) -> None:
+        super().__init__(page, base_url, selectors=selectors, timeout_ms=timeout_ms)
+        self._session_headers: dict[str, str] | None = None
+
     _SET_READ_STATE = """
-    async ({notificationId, read}) => {
+    async ({notificationId, read, authorization, deviceId}) => {
       if (!Number.isSafeInteger(notificationId)
           || notificationId <= 0
-          || typeof read !== "boolean") {
+          || typeof read !== "boolean"
+          || typeof authorization !== "string"
+          || !authorization
+          || typeof deviceId !== "string"
+          || !deviceId) {
         return {ok: false, reason: "invalid-input"};
       }
       const endpoint = read
@@ -1501,7 +1516,12 @@ class NotificationsPage(BaseDicPage):
         method: "POST",
         credentials: "same-origin",
         redirect: "error",
-        headers: {Accept: "application/json", "Content-Type": "application/json"},
+        headers: {
+          Accept: "application/json",
+          Authorization: authorization,
+          "Content-Type": "application/json",
+          "X-Device-Id": deviceId
+        },
         body: JSON.stringify({items: [notificationId]})
       });
       const contentType = response.headers.get("content-type") || "";
@@ -1532,6 +1552,7 @@ class NotificationsPage(BaseDicPage):
             await asyncio.sleep(min(EmployeesListPage._HYDRATION_POLL_SECONDS, remaining))
 
     async def read(self) -> NotificationListResult:
+        self._session_headers = None
         with PaginatedResponseCapture(self.page, NOTIFICATIONS_ENDPOINT) as capture:
             mark = capture.mark()
             await self.open()
@@ -1603,6 +1624,7 @@ class NotificationsPage(BaseDicPage):
                 request_headers=request_headers,
             )
             items = unread_items + read_items
+            self._session_headers = dict(request_headers)
         return NotificationListResult(
             items=notifications_from_items(items),
             total=first.total + read_first.total,
@@ -1619,10 +1641,30 @@ class NotificationsPage(BaseDicPage):
     async def set_read_state(self, notification_id: int, *, read: bool) -> None:
         if isinstance(notification_id, bool) or not 1 <= notification_id <= 9_007_199_254_740_991:
             raise DicValidationError("invalid notification identifier")
+        request_headers = self._session_headers
+        if request_headers is None:
+            raise DicUiChangedError("notification session capability is unavailable")
+        authorization = request_headers.get("authorization")
+        device_id = request_headers.get("x-device-id")
+        if (
+            not isinstance(authorization, str)
+            or not authorization
+            or len(authorization) > 8_192
+            or not isinstance(device_id, str)
+            or not device_id
+            or len(device_id) > 512
+            or any(character in authorization or character in device_id for character in "\r\n\0")
+        ):
+            raise DicUiChangedError("notification session capability is unavailable")
         try:
             raw = await self.page.evaluate(
                 self._SET_READ_STATE,
-                {"notificationId": notification_id, "read": read},
+                {
+                    "notificationId": notification_id,
+                    "read": read,
+                    "authorization": authorization,
+                    "deviceId": device_id,
+                },
             )
         except asyncio.CancelledError:
             raise

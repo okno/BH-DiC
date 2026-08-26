@@ -167,3 +167,53 @@ async def test_notification_bell_waits_for_top_bar_hydration() -> None:
     )
 
     assert await page._wait_for_bell() is bell
+
+
+class _NotificationStatePage:
+    def __init__(self) -> None:
+        self.argument: object = None
+
+    async def evaluate(self, expression: str, argument: object = None) -> object:
+        assert "Authorization: authorization" in expression
+        self.argument = argument
+        return {
+            "ok": True,
+            "status": 200,
+            "url": "https://secure.dipendentincloud.it/backend_apiV2/notifications/read",
+            "contentType": "application/json",
+            "oversized": False,
+            "body": json.dumps({"data": [{"id": 7, "read": True}]}),
+        }
+
+
+@pytest.mark.asyncio
+async def test_notification_state_reuses_only_in_memory_session_capability() -> None:
+    synthetic_page = _NotificationStatePage()
+    page = NotificationsPage(
+        synthetic_page,  # type: ignore[arg-type]
+        "https://secure.dipendentincloud.it",
+    )
+    page._session_headers = {
+        "authorization": "Bearer SYNTHETIC_PRIVATE_TOKEN",
+        "x-device-id": "SYNTHETIC_DEVICE",
+    }
+
+    await page.set_read_state(7, read=True)
+
+    assert synthetic_page.argument == {
+        "notificationId": 7,
+        "read": True,
+        "authorization": "Bearer SYNTHETIC_PRIVATE_TOKEN",
+        "deviceId": "SYNTHETIC_DEVICE",
+    }
+
+
+@pytest.mark.asyncio
+async def test_notification_state_fails_closed_without_session_capability() -> None:
+    page = NotificationsPage(
+        _NotificationStatePage(),  # type: ignore[arg-type]
+        "https://secure.dipendentincloud.it",
+    )
+
+    with pytest.raises(DicUiChangedError, match="session capability"):
+        await page.set_read_state(7, read=True)
