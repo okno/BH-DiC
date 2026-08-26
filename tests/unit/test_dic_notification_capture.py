@@ -87,6 +87,26 @@ async def test_notification_endpoint_has_no_employee_scope_and_projects_minimal_
     assert "sender" not in records[0].model_dump()
 
 
+def test_notification_projection_accepts_bounded_parameter_object_without_projection() -> None:
+    item = _item()
+    item["parameters"] = {"private_parameter": {"nested": "PRIVATE_VALUE_MARKER"}}
+
+    record = notifications_from_items((item,))[0]
+
+    serialized = record.model_dump_json()
+    assert "parameters" not in serialized
+    assert "PRIVATE_VALUE_MARKER" not in serialized
+
+
+@pytest.mark.parametrize("parameters", [False, {str(index): index for index in range(101)}])
+def test_notification_projection_rejects_invalid_parameter_shapes(parameters: object) -> None:
+    item = _item()
+    item["parameters"] = parameters
+
+    with pytest.raises(DicUiChangedError, match="notification schema"):
+        notifications_from_items((item,))
+
+
 @pytest.mark.asyncio
 async def test_notification_endpoint_rejects_wrong_scope_and_invalid_schema() -> None:
     response = Response(_document())

@@ -63,6 +63,16 @@ def _bounded_text(value: object, *, optional: bool = False) -> str | None:
     return normalized
 
 
+def _valid_discarded_parameters(value: object) -> bool:
+    if isinstance(value, list):
+        return len(value) <= 100
+    if isinstance(value, dict):
+        return len(value) <= 100 and all(
+            isinstance(key, str) and 0 < len(key) <= 128 for key in value
+        )
+    return False
+
+
 def notifications_from_items(
     items: tuple[dict[str, object], ...],
 ) -> tuple[NotificationRecord, ...]:
@@ -82,8 +92,7 @@ def notifications_from_items(
             or not isinstance(created_at, str)
             or len(created_at) > 64
             or not isinstance(notification_type, dict)
-            or not isinstance(item["parameters"], list)
-            or len(item["parameters"]) > 100
+            or not _valid_discarded_parameters(item["parameters"])
             or not (item["employee"] is None or isinstance(item["employee"], dict))
             or not (item["sender"] is None or isinstance(item["sender"], dict))
             or not isinstance(item["received"], bool)
