@@ -195,3 +195,38 @@ def test_contract_rejects_unsafe_endpoint_and_missing_employee_query_key() -> No
             endpoint_path="/backend_apiV2/synthetic",
             **{**kwargs, "allowed_query_keys": frozenset({"page"})},
         )
+    with pytest.raises(ValueError, match="paginator endpoint"):
+        PaginatedEndpointContract(
+            endpoint_path="/backend_apiV2/synthetic",
+            paginator_path="//attacker.invalid/synthetic",
+            **kwargs,
+        )
+
+
+@pytest.mark.asyncio
+async def test_complete_pagination_accepts_separate_exact_paginator_path() -> None:
+    contract = PaginatedEndpointContract(
+        resource="employees.contracts",
+        endpoint_path="/backend_apiV2/contracts",
+        paginator_path="/contracts",
+        allowed_query_keys=CONTRACT.allowed_query_keys,
+        employee_query_key="employee_id",
+        required_item_keys=CONTRACT.required_item_keys,
+    )
+    first_document = _document(page=1, last_page=2, total=2)
+    first_document["next_page_url"] = (
+        "https://secure.dipendentincloud.it/contracts?employee_id=123&page=2&per_page=1"
+    )
+    last_document = _document(page=2, last_page=2, total=2)
+    first = await page_from_response(Response(first_document), contract=contract, employee_id="123")
+    fetch_page = FetchPage([last_document])
+
+    items = await collect_complete_pages(
+        fetch_page,
+        first,
+        contract=contract,
+        employee_id="123",
+    )
+
+    assert len(items) == 2
+    assert fetch_page.requested_urls == [first_document["next_page_url"]]

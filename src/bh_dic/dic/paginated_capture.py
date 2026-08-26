@@ -80,6 +80,7 @@ class PaginatedEndpointContract:
     allowed_query_keys: frozenset[str]
     employee_query_key: str | None
     required_item_keys: frozenset[str]
+    paginator_path: str | None = None
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[a-z][a-z0-9_.]{1,79}", self.resource) is None:
@@ -91,6 +92,13 @@ class PaginatedEndpointContract:
             and self.employee_query_key not in self.allowed_query_keys
         ):
             raise ValueError("employee query key must be allowed")
+        if self.paginator_path is not None and (
+            not self.paginator_path.startswith("/")
+            or self.paginator_path.startswith("//")
+            or any(character in self.paginator_path for character in ("?", "#", "\\"))
+            or len(self.paginator_path) > 256
+        ):
+            raise ValueError("invalid paginator endpoint path")
         if not self.required_item_keys:
             raise ValueError("paginated resource requires item keys")
 
@@ -170,6 +178,7 @@ def _validate_url(
     employee_id: str | None,
     *,
     expected_page: int | None = None,
+    paginator: bool = False,
 ) -> dict[str, str]:
     try:
         parsed = urlsplit(url)
@@ -181,10 +190,15 @@ def _validate_url(
         )
     except (TypeError, ValueError):
         raise _failure(contract.resource, "invalid endpoint metadata") from None
+    expected_path = (
+        contract.paginator_path
+        if paginator and contract.paginator_path is not None
+        else contract.endpoint_path
+    )
     if (
         parsed.scheme != "https"
         or parsed.netloc != "secure.dipendentincloud.it"
-        or parsed.path != contract.endpoint_path
+        or parsed.path != expected_path
         or parsed.fragment
     ):
         raise _failure(contract.resource, "unexpected endpoint metadata")
@@ -281,6 +295,7 @@ def _page_from_document(
             contract,
             employee_id,
             expected_page=current_page + 1,
+            paginator=True,
         )
     return PaginatedJsonPage(
         items=tuple(items),
@@ -342,7 +357,13 @@ def _page_from_fetch(
         or len(body.encode("utf-8")) > MAX_RESPONSE_BYTES
     ):
         raise _failure(contract.resource, "unexpected next-page response")
-    _validate_url(url, contract, employee_id, expected_page=expected_page)
+    _validate_url(
+        url,
+        contract,
+        employee_id,
+        expected_page=expected_page,
+        paginator=True,
+    )
     try:
         document = strict_json_loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
@@ -382,6 +403,7 @@ async def collect_complete_pages(
             contract,
             employee_id,
             expected_page=current.current_page + 1,
+            paginator=True,
         )
         next_query.pop("page", None)
         if next_query != base_query:

@@ -13,6 +13,7 @@ from bh_dic.dic.paginated_capture import PaginatedEndpointContract
 NOTIFICATIONS_ENDPOINT = PaginatedEndpointContract(
     resource="notifications",
     endpoint_path="/backend_apiV2/notifications",
+    paginator_path="/notifications",
     allowed_query_keys=frozenset(
         {
             "page",
