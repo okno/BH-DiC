@@ -39,9 +39,12 @@ riavvio.
 - Dopo la rotazione di password/account/tenant, il vault precedente deve essere invalidato una
   volta deliberatamente prima di un unico check live. Questa procedura non autorizza retry dopo
   `CREDENTIAL_SUBMIT` o un altro esito post-submit incerto.
-- Il gateway 0.2.7 non invia credenziali DIC all'avvio. Un vault mancante, scaduto o illeggibile
-  lascia Discord disponibile in stato `DEGRADED`; il check esplicito resta fail-closed e non
-  sovrascrive automaticamente un vault illeggibile.
+- Per default il gateway non invia credenziali DIC all'avvio. Un vault mancante, scaduto o
+  illeggibile lascia Discord disponibile in stato `DEGRADED`; il check esplicito resta fail-closed
+  e non sovrascrive automaticamente un vault illeggibile. L'opt-in
+  `DIC_RECONNECT_ON_STARTUP=true` consente un solo recovery serializzato quando anche
+  `ENABLE_DIC_RECONNECT=true`; MFA, CAPTCHA, password scaduta o un esito incerto non sono aggirati
+  né ritentati.
 - L'identificatore aziendale non è disponibile in un marker DOM stabile. L'adapter richiede quindi
   la risposta first-party prevista durante la navigazione controllata; risposta assente, ambigua,
   malformata o difforme fallisce chiuso.

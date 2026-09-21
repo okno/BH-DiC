@@ -750,6 +750,127 @@ async def test_runtime_dic_reconnect_submits_once_and_persists_attested_session(
 
 
 @pytest.mark.asyncio
+async def test_startup_probe_reconnects_once_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnected = HealthStatus(
+        ready=False,
+        authenticated=False,
+        browser_available=True,
+        detail="synthetic disconnected session",
+    )
+    authenticated = HealthStatus(
+        ready=True,
+        authenticated=True,
+        browser_available=True,
+        detail="synthetic authenticated session",
+    )
+    adapter = SimpleNamespace(
+        health=AsyncMock(side_effect=(disconnected, disconnected, authenticated, authenticated)),
+        ensure_authenticated=AsyncMock(
+            return_value=SessionStatus(state=SessionState.AUTHENTICATED)
+        ),
+        session_status=AsyncMock(return_value=SessionStatus(state=SessionState.AUTHENTICATED)),
+        close=AsyncMock(),
+    )
+    browser = SimpleNamespace(close=AsyncMock())
+    manager = SimpleNamespace(persist=AsyncMock())
+
+    async def fake_adapter(
+        _settings: AppSettings,
+        *,
+        force_mock_components: bool,
+        state_digest_key: bytes,
+        authenticate_dic: bool,
+    ) -> tuple[DipendentiInCloudAdapter, AsyncChromiumSession, DicSessionManager]:
+        assert not force_mock_components
+        assert not authenticate_dic
+        assert len(state_digest_key) == 32
+        return (
+            cast(DipendentiInCloudAdapter, adapter),
+            cast(AsyncChromiumSession, browser),
+            cast(DicSessionManager, manager),
+        )
+
+    monkeypatch.setattr(runtime_module, "_adapter", fake_adapter)
+    monkeypatch.setattr(
+        runtime_module,
+        "_router",
+        lambda _settings, *, force_mock_components: MockIntentRouter(),
+    )
+    settings = _live_settings().model_copy(
+        update={"enable_dic_reconnect": True, "dic_reconnect_on_startup": True}
+    )
+    runtime = await runtime_module.build_runtime(settings)
+
+    first = await runtime.bot.startup_status_probe()
+    second = await runtime.bot.startup_status_probe()
+
+    assert first.adapter_ready is first.dic_authenticated is True
+    assert second.adapter_ready is second.dic_authenticated is True
+    adapter.ensure_authenticated.assert_awaited_once()
+    manager.persist.assert_awaited_once_with(browser)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_never_retries_an_unknown_credential_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnected = HealthStatus(
+        ready=False,
+        authenticated=False,
+        browser_available=True,
+        detail="synthetic disconnected session",
+    )
+    adapter = SimpleNamespace(
+        health=AsyncMock(return_value=disconnected),
+        ensure_authenticated=AsyncMock(
+            side_effect=DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+        ),
+        session_status=AsyncMock(),
+        close=AsyncMock(),
+    )
+    browser = SimpleNamespace(close=AsyncMock())
+    manager = SimpleNamespace(persist=AsyncMock())
+
+    async def fake_adapter(
+        _settings: AppSettings,
+        *,
+        force_mock_components: bool,
+        state_digest_key: bytes,
+        authenticate_dic: bool,
+    ) -> tuple[DipendentiInCloudAdapter, AsyncChromiumSession, DicSessionManager]:
+        return (
+            cast(DipendentiInCloudAdapter, adapter),
+            cast(AsyncChromiumSession, browser),
+            cast(DicSessionManager, manager),
+        )
+
+    monkeypatch.setattr(runtime_module, "_adapter", fake_adapter)
+    monkeypatch.setattr(
+        runtime_module,
+        "_router",
+        lambda _settings, *, force_mock_components: MockIntentRouter(),
+    )
+    settings = _live_settings().model_copy(
+        update={"enable_dic_reconnect": True, "dic_reconnect_on_startup": True}
+    )
+    runtime = await runtime_module.build_runtime(settings)
+
+    snapshot = await runtime.bot.startup_status_probe()
+    reconnect = runtime.coordinator._dic_reconnect_handler
+    assert reconnect is not None
+    with pytest.raises(DicAuthOutcomeUnknownError):
+        await reconnect()
+
+    assert snapshot.adapter_ready is snapshot.dic_authenticated is False
+    adapter.ensure_authenticated.assert_awaited_once()
+    manager.persist.assert_not_awaited()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_application_runtime_close_attempts_every_boundary_after_failure() -> None:
     marker = RuntimeError("synthetic close failure")
     bot = SimpleNamespace(is_closed=lambda: False, close=AsyncMock(side_effect=marker))

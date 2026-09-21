@@ -1122,7 +1122,7 @@ async def test_startup_notice_explains_controlled_recovery_when_dic_is_unavailab
     message = cast(str, channel.sent[0][0][0])
     assert "NON DISPONIBILE" in message
     assert "/bh dic reconnect" in message
-    assert "non reinvia automaticamente" in message
+    assert "nessun tentativo viene ripetuto" in message
     await bot.close()
 
 

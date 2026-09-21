@@ -328,8 +328,10 @@ la root e-mail TeamSystem esatta corrente e soltanto le transizioni pending
 bounded `/connect/authorize`/`/connect/authorize/callback`; prima del segreto verifica che
 l'account del form coincida con
 `DIC_USERNAME`. Il vault cifra cookie/localStorage e lo snapshot bounded `sessionStorage` della
-sola origine DIC. Il normale gateway non invia credenziali: se la sessione è mancante, scaduta o
-non utilizzabile, Discord resta online `DEGRADED` e le funzioni DIC falliscono chiuso.
+sola origine DIC. Per default il normale gateway non invia credenziali: se la sessione è mancante,
+scaduta o non utilizzabile, Discord resta online `DEGRADED` e le funzioni DIC falliscono chiuso.
+`DIC_RECONNECT_ON_STARTUP=true`, insieme a `ENABLE_DIC_RECONNECT=true`, abilita soltanto un recovery
+serializzato e tenant-attestato; non introduce retry su un esito incerto.
 
 Dalla 0.3.0 una sessione già autenticata può essere ripersistita, sotto lock, dopo attestazione
 tenant o lettura riuscita. Questo conserva le rotazioni valide osservate nel browser senza
@@ -365,10 +367,11 @@ sudo systemd-analyze verify /etc/systemd/system/bh-dic.service
 sudo systemctl daemon-reload
 ```
 
-`RestartPreventExitStatus=78` resta una difesa aggiuntiva insieme a `Restart=on-failure`. Dalla
-0.2.7 il comando `run` non invia credenziali DIC; il codice 78 identifica soprattutto il check
-esplicito post-submit con esito incerto. Dopo ogni aggiornamento del template, ricopiare e
-rivalidare l'unit a servizio fermo prima di abilitarla.
+`RestartPreventExitStatus=78` resta una difesa aggiuntiva insieme a `Restart=on-failure`. Per
+default il comando `run` non invia credenziali DIC; l'eventuale recovery di startup è singolo e
+fail-closed. Il codice 78 identifica soprattutto il check esplicito post-submit con esito incerto.
+Dopo ogni aggiornamento del template, ricopiare e rivalidare l'unit a servizio fermo prima di
+abilitarla.
 
 Su Debian 12 `ConditionPathIsRegularFile` non è una direttiva systemd supportata. L'unit dalla
 0.2.4 usa quindi `ConditionPathExists` come condizione di unit e `/usr/bin/test -f` come

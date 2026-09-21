@@ -174,6 +174,8 @@ Quando `/bh status` segnala una sessione DIC non disponibile, un utente del cana
 applicativo `SECURITY_ADMIN` o `SYSTEM_ADMIN` può usare `/bh dic reconnect`, se
 `ENABLE_DIC_RECONNECT=true`. Il comando usa le credenziali configurate sul server, risponde in
 ephemeral, esegue un solo login e persiste la sessione soltanto dopo attestazione del tenant.
+L'opt-in separato `DIC_RECONNECT_ON_STARTUP=true` usa lo stesso percorso per un solo tentativo
+serializzato prima dello status iniziale; è rifiutato se il reconnect amministrativo è spento.
 
 `model-check` è offline per default. Solo con autorizzazione esplicita a rete/costo usare
 `model-check --live`: esegue una singola richiesta sintetica chiusa al provider, senza DIC,
@@ -203,9 +205,10 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.
 - Gli esempi YAML non sostituiscono il catalogo e i controlli nel codice.
-- Dalla 0.2.7 il gateway Discord non invia credenziali DIC durante l'avvio: se la sessione cifrata
+- Per default il gateway Discord non invia credenziali DIC durante l'avvio: se la sessione cifrata
   è assente, scaduta o illeggibile resta online in modalità `DEGRADED`, mentre le funzioni DIC
-  falliscono chiuso e il vault non viene sovrascritto.
+  falliscono chiuso e il vault non viene sovrascritto. Il recovery di startup è disponibile solo
+  con i due opt-in espliciti e non ritenta un esito post-submit incerto.
 - La 0.2.8 limita le transizioni federate alla root e-mail TeamSystem e alle route OIDC esatte. Un
   SSO silenzioso non tocca controlli credenziali ed è valido soltanto dopo marker DIC e tenant
   attestato. Dopo una rotazione credenziale il vecchio vault va invalidato deliberatamente una

@@ -46,7 +46,7 @@ _STARTUP_ONLINE_MESSAGE = "BOT HR Bitcoin Hotel Online!"
 _STARTUP_DIC_READY_MESSAGE = "Stato Dipendenti in Cloud: ATTIVO."
 _STARTUP_DIC_UNAVAILABLE_MESSAGE = (
     "Stato Dipendenti in Cloud: NON DISPONIBILE. Un amministratore autorizzato può eseguire "
-    "`/bh dic reconnect`; il bot non reinvia automaticamente le credenziali."
+    "`/bh dic reconnect`; nessun tentativo viene ripetuto dopo un esito incerto."
 )
 
 

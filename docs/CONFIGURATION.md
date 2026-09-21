@@ -148,11 +148,14 @@ non il flag write.
 e `DIC_TEST_TENANT_CONFIRMED=true`. Queste condizioni non costituiscono comunque autorizzazione;
 nel rilascio corrente le write live sono vietate.
 
-`ENABLE_DIC_RECONNECT=true` abilita il solo comando amministrativo `/bh dic reconnect`. Non è una
-write sui dati HR e non dipende dal kill switch globale, ma richiede un ruolo Discord mappato a
-`SECURITY_ADMIN` o `SYSTEM_ADMIN`. Il comando usa esclusivamente le credenziali già presenti nel
-file `.env` protetto, esegue al massimo un submit, attesta il tenant e salva il nuovo stato nel
-vault cifrato. Credenziali, cookie e stato browser non transitano mai su Discord o nei log.
+`ENABLE_DIC_RECONNECT=true` abilita il comando amministrativo `/bh dic reconnect`. Non è una write
+sui dati HR e non dipende dal kill switch globale, ma richiede un ruolo Discord mappato a
+`SECURITY_ADMIN` o `SYSTEM_ADMIN`. `DIC_RECONNECT_ON_STARTUP=true` è un opt-in separato, rifiutato
+se il flag precedente è spento: quando il vault ripristinato non produce una sessione autenticata,
+il processo esegue un solo tentativo prima di pubblicare lo stato iniziale. Comando e recovery usano
+esclusivamente le credenziali già presenti nel file `.env` protetto, attestano il tenant e salvano
+il nuovo stato nel vault cifrato. Non esistono loop o retry dopo un esito post-submit incerto;
+credenziali, cookie e stato browser non transitano mai su Discord o nei log.
 
 ## Ruoli Discord
 

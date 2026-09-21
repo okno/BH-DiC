@@ -472,36 +472,47 @@ async def build_runtime(
         else (settings.selected_model or "unconfigured")
     )
 
+    dic_reconnect_lock = asyncio.Lock()
+    dic_reconnect_outcome_unknown = False
+
     async def reconnect_dic_session() -> SessionStatus:
         """Perform one credential submit and persist only an attested session."""
 
-        current_health = await adapter.health()
-        if current_health.ready and current_health.authenticated:
-            return await adapter.session_status()
-        if settings.mock_mode or force_mock_components:
-            return await adapter.ensure_authenticated()
-        if browser_session is None or session_manager is None:
-            raise DicConfigurationError("DIC browser session persistence is unavailable")
-        username = settings.dic_username
-        password = settings.dic_password
-        if username is None or password is None:
-            raise DicConfigurationError("DIC credentials are not configured")
-        authenticated = await adapter.ensure_authenticated(
-            DicCredentials(
-                username=username,
-                password=password,
-                totp=settings.dic_totp_secret,
-            )
-        )
-        if authenticated.state is not SessionState.AUTHENTICATED:
-            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
-        try:
-            await session_manager.persist(browser_session)
-        except asyncio.CancelledError:
-            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT) from None
-        except Exception:
-            raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT) from None
-        return authenticated
+        nonlocal dic_reconnect_outcome_unknown
+        async with dic_reconnect_lock:
+            current_health = await adapter.health()
+            if current_health.ready and current_health.authenticated:
+                return await adapter.session_status()
+            if dic_reconnect_outcome_unknown:
+                raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+            if settings.mock_mode or force_mock_components:
+                return await adapter.ensure_authenticated()
+            if browser_session is None or session_manager is None:
+                raise DicConfigurationError("DIC browser session persistence is unavailable")
+            username = settings.dic_username
+            password = settings.dic_password
+            if username is None or password is None:
+                raise DicConfigurationError("DIC credentials are not configured")
+            try:
+                authenticated = await adapter.ensure_authenticated(
+                    DicCredentials(
+                        username=username,
+                        password=password,
+                        totp=settings.dic_totp_secret,
+                    )
+                )
+                if authenticated.state is not SessionState.AUTHENTICATED:
+                    raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
+                try:
+                    await session_manager.persist(browser_session)
+                except asyncio.CancelledError:
+                    raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT) from None
+                except Exception:
+                    raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT) from None
+            except DicAuthOutcomeUnknownError:
+                dic_reconnect_outcome_unknown = True
+                raise
+            return authenticated
 
     try:
         intent_router = _router(settings, force_mock_components=force_mock_components)
@@ -577,6 +588,30 @@ async def build_runtime(
 
         async def startup_status_probe() -> StartupStatusSnapshot:
             health = await adapter.health()
+            if (
+                settings.dic_reconnect_on_startup
+                and not settings.mock_mode
+                and not force_mock_components
+                and not (health.ready and health.authenticated)
+            ):
+                logger.warning("dic_startup_reconnect_started")
+                try:
+                    await reconnect_dic_session()
+                except asyncio.CancelledError:
+                    raise
+                except DicAuthOutcomeUnknownError as exc:
+                    logger.error(
+                        "dic_startup_reconnect_outcome_unknown",
+                        extra={"stage": exc.stage.value},
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "dic_startup_reconnect_failed",
+                        extra={"exception_type": type(exc).__name__},
+                    )
+                else:
+                    logger.info("dic_startup_reconnect_completed")
+                health = await adapter.health()
             return StartupStatusSnapshot(
                 adapter_ready=health.ready and health.authenticated,
                 browser_available=health.browser_available,

@@ -38,6 +38,9 @@ stable public API is declared.
 - Comandi `/bh capabilities` e `/bh funzioni` con matrice runtime di disponibilità/policy/RBAC.
 - Comando guild-scoped `/bh dic reconnect` per SECURITY_ADMIN/SYSTEM_ADMIN: un solo submit
   credenziali, attestazione tenant, persistenza cifrata e stop sugli esiti ambigui.
+- Recovery DIC di startup opt-in, serializzato con il comando manuale: verifica prima lo stato,
+  esegue al massimo un submit tenant-attestato e non ritenta un esito post-submit incerto nello
+  stesso processo.
 - Funzione read-only `EMP-PAY-002` per trovare i dipendenti con metadati di busta paga nel mese
   richiesto: attraversa serialmente e con bound l'elenco Dipendenti e le route payroll già
   registrate, senza URL o selettori forniti dal modello.

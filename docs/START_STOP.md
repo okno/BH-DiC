@@ -27,10 +27,11 @@ Scegliere **systemd** oppure gli script PID. L'unit di esempio usa
 Questa pagina descrive sotto la modalità script PID; per l'installazione systemd vedere la
 [guida end-to-end](INSTALLATION.md#9-scegliere-un-solo-gestore-di-processo).
 
-L'unit systemd abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Dalla 0.2.7 il comando
+L'unit systemd abbina `Restart=on-failure` a `RestartPreventExitStatus=78`. Per default il comando
 `run` non invia credenziali DIC: una sessione mancante lascia il gateway online e degradato.
-L'exit 78 resta una protezione per gli esiti di autenticazione esplicita non dimostrabili e non
-deve mai trasformarsi in nuovi tentativi di login. Su Debian 12 l'unit usa inoltre
+Con i due opt-in di reconnect il recovery di startup resta limitato a un solo submit. L'exit 78
+resta una protezione per gli esiti di autenticazione non dimostrabili e non deve mai trasformarsi
+in nuovi tentativi di login. Su Debian 12 l'unit usa inoltre
 `ConditionPathExists` e un `ExecCondition` con
 `/usr/bin/test -f`, perché `ConditionPathIsRegularFile` non è supportata. Questi controlli non
 sostituiscono `doctor.sh`, che verifica modalità `0600` di `.env` e configurazione valida.

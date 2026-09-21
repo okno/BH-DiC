@@ -145,6 +145,7 @@ class AppSettings(BaseSettings):
 
     enable_read_actions: bool = True
     enable_dic_reconnect: bool = False
+    dic_reconnect_on_startup: bool = False
     enable_write_actions: bool = False
     enable_live_write_tests: bool = False
     enable_employee_create: bool = False
@@ -390,6 +391,8 @@ class AppSettings(BaseSettings):
                 "Specific write flags require ENABLE_WRITE_ACTIONS=true: "
                 + ", ".join(sorted(enabled_write_flags))
             )
+        if self.dic_reconnect_on_startup and not self.enable_dic_reconnect:
+            raise ValueError("DIC_RECONNECT_ON_STARTUP=true requires ENABLE_DIC_RECONNECT=true")
 
         critical_flags = (
             self.enable_employee_delete,
@@ -555,6 +558,8 @@ class AppSettings(BaseSettings):
             "openai_model_configured": bool(self.openai_model),
             "openai_store": self.openai_store,
             "dic_expected_tenant_configured": bool(self.dic_expected_tenant_id),
+            "dic_reconnect_enabled": self.enable_dic_reconnect,
+            "dic_reconnect_on_startup": self.dic_reconnect_on_startup,
             "read_actions": self.enable_read_actions,
             "write_actions": self.enable_write_actions,
             "enabled_write_flags": sorted(

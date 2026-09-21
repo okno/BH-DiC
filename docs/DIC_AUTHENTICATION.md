@@ -34,7 +34,8 @@ Il flusso usa l'unico input nativo sotto `data-testid="login-email"`, tratta la 
 stato transitorio bounded e ammette `login_hint` soltanto attraverso le route esatte elencate.
 Prima del segreto, il form password deve riferirsi all'account configurato. Il vault cifrato
 include cookie/localStorage e uno snapshot bounded di `sessionStorage` della sola origine DIC.
-Il gateway normale non invia credenziali e resta `DEGRADED` quando il restore manca. Una sessione
+Per default il gateway non invia credenziali e resta `DEGRADED` quando il restore manca. Il
+recovery singolo richiede i due opt-in espliciti descritti sotto. Una sessione
 IdP già valida può completare SSO senza form soltanto dopo route applicativa, marker autenticato e
 attestazione tenant esatta, senza azioni sui controlli e-mail/password. Questi contratti devono
 essere verificati privatamente sulla revisione distribuita; il repository non conserva esiti live.
@@ -246,14 +247,16 @@ destinazione va verificata con `stat` prima di considerarla operativa.
 `DicSessionManager` applica una durata predefinita di otto ore e può caricare, salvare o
 invalidare lo stato. Il bootstrap non-mock collega settings, vault e browser context: carica
 cookie/localStorage e ripristina una volta lo snapshot `sessionStorage` cifrato prima degli script
-applicativi. Soltanto i percorsi operatore espliciti `dic-auth-check --live` e, quando abilitato,
-`/bh dic reconnect` possono inviare credenziali e creare una nuova sessione. Entrambi lo fanno una
-sola volta e accettano il risultato solo dopo autenticazione, attestazione tenant e persistenza
-cifrata. Il normale avvio del gateway Discord non invia mai credenziali. La 0.3.0 può però ripersistire,
-con lock serializzato, lo stato già autenticato dopo una verifica tenant-attestata o una lettura
-DIC riuscita: questo conserva le normali rotazioni di cookie e `sessionStorage` senza effettuare
-un nuovo login. Stati non autenticati, tenant non attestati, errori e letture fallite non
-sovrascrivono il vault.
+applicativi. I percorsi `dic-auth-check --live` e `/bh dic reconnect` possono inviare credenziali e
+creare una nuova sessione. Con `ENABLE_DIC_RECONNECT=true` e `DIC_RECONNECT_ON_STARTUP=true`, anche
+l'avvio del gateway può effettuare un singolo recovery se il vault ripristinato non risulta
+autenticato. Tutti i percorsi accettano il risultato solo dopo autenticazione, attestazione tenant
+e persistenza cifrata. Il recovery di startup è serializzato con il comando manuale e non viene
+ripetuto nello stesso processo dopo un esito `CREDENTIAL_SUBMIT` incerto. Senza l'opt-in, il normale
+avvio non invia credenziali. La 0.3.0 può inoltre ripersistire, con lock serializzato, lo stato già
+autenticato dopo una verifica tenant-attestata o una lettura DIC riuscita: questo conserva le
+normali rotazioni di cookie e `sessionStorage` senza effettuare un nuovo login. Stati non
+autenticati, tenant non attestati, errori e letture fallite non sovrascrivono il vault.
 
 Se la sessione manca, scade o il vault è illeggibile, il gateway resta online in stato `DEGRADED`,
 preserva il file e le funzioni DIC falliscono chiuso. Il check esplicito continua invece a
@@ -268,6 +271,11 @@ invia credenziali. Un tentativo concorrente viene rifiutato; dopo un esito ambig
 blocca ulteriori submit finché una verifica di stato non dimostra che la sessione è attiva o il
 solo servizio bot viene riavviato dopo verifica amministrativa. MFA, CAPTCHA e rinnovo password
 restano passaggi umani e non vengono aggirati.
+
+`DIC_RECONNECT_ON_STARTUP=true` riusa esattamente lo stesso handler e lo stesso lock. Il probe
+controlla prima la sessione: se è già valida non invia nulla; altrimenti consuma al massimo un
+submit e ricontrolla lo stato prima del messaggio `BOT HR Bitcoin Hotel Online!`. Errori sono
+registrati solo per tipo/stadio, senza URL, DOM, account o segreti.
 
 ## Comando di verifica autenticazione
 
@@ -364,9 +372,10 @@ screenshot sul tenant live senza un'autorizzazione separata.
 
 `CREDENTIAL_SUBMIT` significa che l'invio della credenziale può avere raggiunto l'IdP, ma il
 risultato finale non è dimostrabile. `dic-auth-check --live` termina allora con exit code 78.
-Dalla 0.2.7 il normale comando di servizio `run` non invia credenziali DIC e può restare online
-`DEGRADED`; `RestartPreventExitStatus=78` rimane una difesa aggiuntiva. Fermare il check esplicito,
-non rilanciarlo in loop e verificare lo stato dell'account con una procedura umana autorizzata.
+Per default il normale comando di servizio `run` non invia credenziali DIC e può restare online
+`DEGRADED`; con il recovery di startup abilitato consuma al massimo un submit per processo.
+`RestartPreventExitStatus=78` rimane una difesa aggiuntiva. Fermare il check esplicito, non
+rilanciarlo in loop e verificare lo stato dell'account con una procedura umana autorizzata.
 La 0.2.8 non cambia questa regola: il percorso SSO senza credenziali è accettato solo
 dopo marker e tenant e non autorizza un retry quando l'esito del submit è incerto.
 

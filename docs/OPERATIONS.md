@@ -137,10 +137,13 @@ accetta solo origini/route TeamSystem esatte e vincola l'account osservato all'u
 prima di compilare il segreto. Qualunque mismatch, risposta mancante, password scaduta,
 MFA/CAPTCHA o redirect inatteso fallisce chiuso.
 
-Un fallimento DIC non richiede più di lasciare Discord offline: il normale `run` non invia
-credenziali e può avviare il gateway in stato `DEGRADED`. In tale stato `/bh status`, `/bh health`
-e l'aiuto restano disponibili, mentre ogni operazione DIC fallisce chiuso. Non ripetere il check
-live dopo un submit dall'esito incerto.
+Un fallimento DIC non richiede più di lasciare Discord offline: per default il normale `run` non
+invia credenziali e può avviare il gateway in stato `DEGRADED`. Con entrambi
+`ENABLE_DIC_RECONNECT=true` e `DIC_RECONNECT_ON_STARTUP=true`, prima dello status iniziale viene
+eseguito un solo recovery, serializzato con il comando manuale e seguito da attestazione tenant e
+persistenza cifrata. In stato `DEGRADED`, `/bh status`, `/bh health` e l'aiuto restano disponibili,
+mentre ogni operazione DIC fallisce chiuso. Non ripetere il check live dopo un submit dall'esito
+incerto.
 
 Nella 0.2.3 i controlli di login attendono l'hydration entro un budget condiviso, soltanto sulle
 route esatte e con un solo controllo visibile. La 0.2.4 restringe il campo e-mail DIC all'unico
@@ -224,8 +227,9 @@ Soltanto per il gestore PID alternativo:
 gestore PID.
 
 In modalità systemd l'unit installata mantiene `RestartPreventExitStatus=78` come difesa
-aggiuntiva. Dalla 0.2.7 il normale `run` non invia credenziali DIC: il codice 78 è soprattutto il
-contratto dell'operazione esplicita di autenticazione con esito post-submit incerto. Su
+aggiuntiva. Per default il normale `run` non invia credenziali DIC; l'eventuale recovery di startup
+resta limitato a un submit. Il codice 78 è soprattutto il contratto dell'operazione esplicita di
+autenticazione con esito post-submit incerto. Su
 Debian 12 l'unit dalla 0.2.4 usa `ConditionPathExists=/opt/bh-dic/.env` più
 `ExecCondition=/usr/bin/test -f /opt/bh-dic/.env`, non la direttiva non supportata
 `ConditionPathIsRegularFile`. `doctor.sh` resta il controllo che impone modalità `0600` di `.env`

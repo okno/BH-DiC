@@ -33,7 +33,7 @@ dell'ambiente corrente. La repository non pubblica la cronologia dei tentativi d
 | llama locale non raggiungibile | servizio locale, `LLAMA_BASE_URL`, modello | usare loopback e verificare il modello; non esporre la porta per aggirare il problema |
 | Function ID non esposto | ruolo, scope, flag, catalogo | comportamento fail-closed previsto |
 | login DIC fallisce | JSON `error_type`/`stage`, route DIC/TeamSystem, sessione, MFA/CAPTCHA | usare solo lo stage chiuso; invalidare il vault quando pertinente; mai stampare l'errore interno né usare passwordless o ampliare l'allowlist |
-| sessione DIC scaduta con bot online | `/bh status`; ruolo `SECURITY_ADMIN`/`SYSTEM_ADMIN`; `ENABLE_DIC_RECONNECT` | eseguire una volta `/bh dic reconnect`; se l'esito è incerto non ripetere, verificare sessione web e status |
+| sessione DIC scaduta con bot online | `/bh status`; ruolo `SECURITY_ADMIN`/`SYSTEM_ADMIN`; `ENABLE_DIC_RECONNECT`; eventuale `DIC_RECONNECT_ON_STARTUP` | eseguire una volta `/bh dic reconnect`; se il recovery di startup o il comando hanno esito incerto non ripetere, verificare sessione web e status |
 | `DicAuthUiChangedError` a `TEAMSYSTEM_EMAIL` | release installata, rotazione credenziale e transizione IdP | il fallimento storico è stato osservato sulla 0.2.7; dalla 0.2.8 sono ammesse la root e-mail TeamSystem esatta, la legacy `/Account/LoginEmail`, la password esatta e soltanto le transizioni bounded `/connect/authorize`/`callback`; dopo una rotazione invalidare deliberatamente il vecchio vault una volta, senza cambio User-Agent o fallback generici |
 | `DicAuthOutcomeUnknownError`, exit 78 | stage `CREDENTIAL_SUBMIT`; invio forse partito ma completamento/tenant/vault non dimostrabili | non ritentare; mantenere DIC degradato e fare escalation, lasciando il gateway privo di credenziali online se necessario |
 | attestazione tenant fallisce | route fissa, risposta first-party, schema/ID configurato | mantenere DIC degradato; nessun fallback su nome o DOM, patchare solo con nuova evidenza redatta |
@@ -75,11 +75,12 @@ viene atteso entro lo stesso budget e `/data/company/id` resta obbligatorio. Non
 errore aumentando indiscriminatamente i timeout o lanciando il comando in loop. Lo user agent
 Chromium nativo non è risultato la causa e non va sostituito per aggirare controlli del sito.
 
-Dalla 0.2.7 il gateway non esegue un login implicito: ripristina il vault se disponibile e resta
+Per default il gateway non esegue un login implicito: ripristina il vault se disponibile e resta
 online anche quando DIC è `DEGRADED`. `/bh status` e `/bh health` continuano a rispondere, mentre
 le funzioni DIC falliscono chiuso. Un nuovo invio di credenziali è consentito tramite un singolo
-`dic-auth-check --live` esplicito con servizio fermo oppure, nelle release che lo includono,
-tramite `/bh dic reconnect` con flag e ruolo amministrativo dedicati. Il vault include lo snapshot
+`dic-auth-check --live` esplicito con servizio fermo, tramite `/bh dic reconnect` con flag e ruolo
+amministrativo dedicati oppure tramite il singolo recovery di startup, se l'opt-in separato è
+abilitato. Il vault include lo snapshot
 `sessionStorage` bounded della sola origine DIC; una release precedente perdeva i token federati
 al riavvio pur conservando cookie e `localStorage`.
 
@@ -94,8 +95,9 @@ automatico.
 Eseguire ciascun comando una volta. Se il check restituisce `CREDENTIAL_SUBMIT`/exit 78, non
 ritentare e non invalidare nuovamente per forzare un altro login.
 
-L'unit systemd distribuita deve contenere `RestartPreventExitStatus=78`. Il normale comando `run`
-non invia più credenziali; `dic-auth-check --live` usa 78 per l'esito ambiguo post-submit. Se la
+L'unit systemd distribuita deve contenere `RestartPreventExitStatus=78`. Per default il comando
+`run` non invia credenziali; il recovery opt-in resta singolo e `dic-auth-check --live` usa 78 per
+l'esito ambiguo post-submit. Se la
 direttiva manca nell'unit installata, mantenere il servizio disabled/stopped,
 aggiornare l'unit dalla release approvata, verificare con `systemd-analyze verify` ed eseguire
 `systemctl daemon-reload`; non avviare per provare la correzione.

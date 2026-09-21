@@ -53,6 +53,27 @@ def test_explicit_mock_mode_allows_isolated_tests() -> None:
     assert not any(settings.write_flags.values())
 
 
+def test_startup_dic_reconnect_requires_explicit_reconnect_capability() -> None:
+    with pytest.raises(ValidationError, match="requires ENABLE_DIC_RECONNECT=true"):
+        AppSettings(
+            app_env="test",
+            mock_mode=True,
+            dic_reconnect_on_startup=True,
+            _env_file=None,
+        )
+
+    settings = AppSettings(
+        app_env="test",
+        mock_mode=True,
+        enable_dic_reconnect=True,
+        dic_reconnect_on_startup=True,
+        _env_file=None,
+    )
+
+    assert settings.safe_summary()["dic_reconnect_enabled"] is True
+    assert settings.safe_summary()["dic_reconnect_on_startup"] is True
+
+
 def test_mock_mode_is_forbidden_in_production_environment() -> None:
     with pytest.raises(ValidationError, match="MOCK_MODE may only be used"):
         AppSettings(app_env="production", mock_mode=True, _env_file=None)
