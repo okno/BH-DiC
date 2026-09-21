@@ -49,9 +49,35 @@ if venv_python >/dev/null 2>&1; then
       ;;
     *) info "non-SQLite database migration state is UNVERIFIED; doctor performs no database network I/O" ;;
   esac
-  if "${python_bin}" -c 'from pathlib import Path; from playwright.sync_api import sync_playwright; p=sync_playwright().start(); path=Path(p.chromium.executable_path); p.stop(); raise SystemExit(not path.is_file())' >/dev/null 2>&1; then
+  playwright_browsers_path="$(read_env_value PLAYWRIGHT_BROWSERS_PATH '')"
+  playwright_environment=()
+  playwright_path_safe=true
+  if [[ -n "${playwright_browsers_path}" ]]; then
+    if ! playwright_browsers_path="$(absolute_project_path "${playwright_browsers_path}" 2>/dev/null)"; then
+      playwright_path_safe=false
+      fail "Playwright browser path escapes the project workspace"
+    fi
+  fi
+  if [[ "${playwright_path_safe}" == "true" && -n "${playwright_browsers_path}" ]]; then
+    case "${playwright_browsers_path}" in
+      "$(runtime_data_dir)"/*)
+        if [[ ! -d "${playwright_browsers_path}" || -L "${playwright_browsers_path}" ]]; then
+          playwright_path_safe=false
+          fail "Playwright browser path is missing or unsafe"
+        else
+          playwright_environment=(env "PLAYWRIGHT_BROWSERS_PATH=${playwright_browsers_path}")
+        fi
+        ;;
+      *)
+        playwright_path_safe=false
+        fail "Playwright browser path must remain under the runtime data directory"
+        ;;
+    esac
+  fi
+  if [[ "${playwright_path_safe}" == "true" ]] && \
+    "${playwright_environment[@]}" "${python_bin}" -c 'from pathlib import Path; from playwright.sync_api import sync_playwright; p=sync_playwright().start(); path=Path(p.chromium.executable_path); p.stop(); raise SystemExit(not path.is_file())' >/dev/null 2>&1; then
     pass "Playwright Chromium installed"
-  else
+  elif [[ "${playwright_path_safe}" == "true" ]]; then
     fail "Playwright Chromium unavailable"
   fi
 else

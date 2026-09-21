@@ -142,6 +142,15 @@ def test_doctor_checks_only_the_selected_model_endpoint() -> None:
     assert "OPENAI_API_KEY" not in doctor
 
 
+def test_doctor_uses_only_a_runtime_local_playwright_browser_path() -> None:
+    doctor = _read("doctor.sh")
+
+    assert "read_env_value PLAYWRIGHT_BROWSERS_PATH" in doctor
+    assert '"$(runtime_data_dir)"/*)' in doctor
+    assert "PLAYWRIGHT_BROWSERS_PATH=${playwright_browsers_path}" in doctor
+    assert "browser path must remain under the runtime data directory" in doctor
+
+
 def test_doctor_never_contacts_a_non_sqlite_database() -> None:
     doctor = _read("doctor.sh")
     assert 'case "${database_url}" in' in doctor

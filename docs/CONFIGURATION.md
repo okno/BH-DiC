@@ -21,7 +21,7 @@ sessione DIC. Usare un secret manager o un canale amministrativo sicuro.
 
 | Gruppo | Variabili principali | Regola |
 |---|---|---|
-| Applicazione | `APP_ENV`, `APP_TIMEZONE`, `MOCK_MODE`, `DATA_DIR` | mock solo in `test`, `development` o `mock` |
+| Applicazione | `APP_ENV`, `APP_TIMEZONE`, `MOCK_MODE`, `DATA_DIR`, `PLAYWRIGHT_BROWSERS_PATH` | mock solo in `test`, `development` o `mock`; browser confinato sotto `DATA_DIR` |
 | Persistenza | `DATABASE_URL`, `AUDIT_HMAC_KEY`, `ENCRYPTION_KEY` | solo `sqlite+aiosqlite` o `postgresql+asyncpg` |
 | Discord | token, application/guild/channel ID, role ID | DM false; guild e canale obbligatori |
 | Modello | `MODEL_PROVIDER`, tuning `MODEL_*` | provider unico; storage sempre false |
