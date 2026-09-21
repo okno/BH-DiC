@@ -2,10 +2,13 @@
 
 The executable corpus in `tests/unit/test_hr_query_plan.py` contains 120 unique Italian requests
 covering counts, targeted payroll, payroll presence, compound contract/payroll joins, documents,
-roles, timestamps, balances, maturations and contracts. Every request in the corpus must produce a
-local typed plan/Function ID: names and Employee IDs therefore stay outside the model provider. The
-tests also assert local entity resolution, date normalization, ordered dependencies, sensitivity,
-private delivery and a deterministic clarification when the target employee is missing.
+roles, timestamps, balances, maturations and contracts. `tests/unit/test_local_hr_intents.py` adds
+realistic daily variants for short searches, profiles, salaries, contract deadlines, groups,
+timestamp access, leave balances, documents, sorting, department filters and pagination. Every
+request in these corpora must produce a local typed plan/Function ID: names and Employee IDs
+therefore stay outside the model provider. The tests also assert local entity resolution, date
+normalization, ordered dependencies, sensitivity, private delivery and a deterministic
+clarification when the target employee is missing.
 
 Additional integration scenarios verify:
 

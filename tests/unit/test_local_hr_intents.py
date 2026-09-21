@@ -152,6 +152,116 @@ def test_employee_existence_and_search_keep_the_name_out_of_the_router(message: 
     assert is_operational_hr_request(message)
 
 
+@pytest.mark.parametrize(
+    ("message", "function_id", "target_query"),
+    [
+        ("Dimmi tutto su Nora", "EMP-READ-002", "Nora"),
+        ("Quali sono i dati anagrafici di Nora?", "EMP-READ-002", "Nora"),
+        ("Che contratto ha Nora?", "EMP-CONTRACT-001", "Nora"),
+        ("Qual è lo stipendio di Nora a giugno?", "EMP-PAY-001", "Nora"),
+        ("Saldo ferie e permessi di Nora", "EMP-BAL-001", "Nora"),
+        ("Bilancio 2026 di Nora", "EMP-BAL-001", "Nora"),
+        ("Cosa ha maturato Nora?", "EMP-MAT-001", "Nora"),
+        ("Ratei maturati da Nora", "EMP-MAT-001", "Nora"),
+        ("Nora è abilitata alle timbrature?", "EMP-TIME-001", "Nora"),
+        ("A quali gruppi appartiene Nora?", "EMP-RBAC-001", "Nora"),
+        ("Che permessi ha Nora?", "EMP-RBAC-001", "Nora"),
+        ("Quali documenti di Nora sono in scadenza?", "EMP-DOC-001", "Nora"),
+        ("Ci sono documenti da firmare per Nora?", "EMP-DOC-001", "Nora"),
+    ],
+)
+def test_realistic_targeted_hr_phrasings_remain_local(
+    message: str,
+    function_id: str,
+    target_query: str,
+) -> None:
+    parsed = parse_local_operational_intent(message, today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == function_id
+    assert parsed.target_query == target_query
+    assert is_operational_hr_request(message)
+
+
+def test_bare_employee_search_and_status_only_count_are_closed_local_requests() -> None:
+    search = parse_local_operational_intent("Trova Nora", today=TODAY)
+    count = parse_local_operational_intent("Quanti sono inattivi?", today=TODAY)
+
+    assert search is not None
+    assert search.envelope.function_id == "EMP-SEARCH-001"
+    assert search.envelope.query == "Nora"
+    assert count is not None
+    assert count.envelope.function_id == "EMP-READ-001"
+    assert count.envelope.parameters == {"status": "inactive", "view": "count"}
+
+
+def test_bare_search_does_not_mistake_a_resource_for_an_employee_target() -> None:
+    parsed = parse_local_operational_intent("Trova il contratto", today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-CONTRACT-001"
+    assert parsed.target_query is None
+    assert parsed.envelope.requires_clarification
+
+
+def test_employee_sort_group_filter_and_page_are_normalized_locally() -> None:
+    sort = parse_local_operational_intent(
+        "Ordina i dipendenti per matricola decrescente",
+        today=TODAY,
+    )
+    group_filter = parse_local_operational_intent(
+        "Filtra i dipendenti attivi del reparto Sala",
+        today=TODAY,
+    )
+    page = parse_local_operational_intent(
+        "Mostra la seconda pagina dei dipendenti",
+        today=TODAY,
+    )
+
+    assert sort is not None
+    assert sort.envelope.function_id == "EMP-SORT-001"
+    assert sort.envelope.parameters == {
+        "status": "all",
+        "sort_by": "payroll_number",
+        "sort_direction": "desc",
+        "view": "ascii",
+        "include_all": True,
+    }
+    assert group_filter is not None
+    assert group_filter.envelope.function_id == "EMP-FILTER-001"
+    assert group_filter.envelope.parameters == {
+        "status": "active",
+        "group": "Sala",
+        "view": "ascii",
+        "include_all": True,
+    }
+    assert page is not None
+    assert page.envelope.function_id == "EMP-PAGE-001"
+    assert page.envelope.parameters == {"status": "all", "page": 2, "page_size": 25}
+
+
+def test_collective_payroll_question_is_not_mistaken_for_employee_named_month() -> None:
+    parsed = parse_local_operational_intent("Chi ha la busta paga di luglio?", today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-PAY-002"
+    assert parsed.target_query is None
+    assert parsed.envelope.parameters == {"year": 2026, "month": 7}
+
+
+def test_contract_deadline_accepts_bounded_within_days_phrase() -> None:
+    parsed = parse_local_operational_intent(
+        "Chi ha il contratto in scadenza entro 30 giorni?",
+        today=TODAY,
+    )
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-CONTRACT-001"
+    assert parsed.envelope.date_from == TODAY
+    assert parsed.envelope.date_to == date(2026, 9, 19)
+    assert not parsed.envelope.requires_clarification
+
+
 def test_collective_payroll_presence_resolves_month_and_year_locally() -> None:
     parsed = parse_local_operational_intent(
         "quali dipendenti hanno una busta paga a luglio?",

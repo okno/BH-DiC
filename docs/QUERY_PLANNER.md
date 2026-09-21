@@ -34,6 +34,12 @@ di Nora` — sono normalizzate localmente. Nome e domanda non vengono inviati al
 ambigui come `permessi` vengono distinti fra saldo ferie/permessi e autorizzazioni del portale dal
 contesto chiuso della frase.
 
+La stessa boundary locale gestisce domande di esistenza (`c'è una dipendente di nome …?`), ricerca
+breve (`trova …`), profilo/anagrafica, stipendio colloquiale, contratto del singolo, ruoli/gruppi,
+timbratura, ratei, saldo ferie e documenti con stato. Ordinamento dell'organico, filtro bounded per
+reparto e paginazione vengono convertiti in parametri tipizzati; parole di stato come `in scadenza`
+o `da firmare` non possono diventare accidentalmente parte del nome cercato.
+
 ## Routing del provider
 
 Le richieste già riconosciute localmente non chiamano il provider. Per le restanti, il provider

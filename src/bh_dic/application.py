@@ -39,6 +39,7 @@ from bh_dic.dic.models import (
     EmployeeFilter,
     EmployeeListItem,
     EmployeeListQuery,
+    EmployeeListResult,
     FunctionId,
     PayrollMetadata,
     ReconciliationState,
@@ -2401,11 +2402,39 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 page_size=min(int(intent.parameters.get("page_size", 25)), 100),
             )
             include_all = intent.parameters.get("include_all") is True
+            group_filter: str | None = None
+            group_filter_raw = intent.parameters.get("group")
+            if group_filter_raw is not None:
+                if not isinstance(group_filter_raw, str):
+                    raise ApplicationError("employee group filter must be a supported string")
+                try:
+                    group_filter = normalize_text(
+                        group_filter_raw,
+                        max_length=64,
+                        allow_newlines=False,
+                    ).casefold()
+                except InputValidationError as exc:
+                    raise ApplicationError("employee group filter is invalid") from exc
+                if not group_filter:
+                    raise ApplicationError("employee group filter is invalid")
             result = (
                 await self.dic.list_all_employees(employee_query)
-                if include_all
+                if include_all or group_filter is not None
                 else await self.dic.list_employees(employee_query)
             )
+            if group_filter is not None:
+                filtered_items = tuple(
+                    item
+                    for item in result.items
+                    if group_filter in (item.group_name or "").strip().casefold()
+                )
+                result = EmployeeListResult(
+                    items=filtered_items,
+                    page=1,
+                    page_size=max(1, len(filtered_items)),
+                    total=len(filtered_items),
+                    has_next=False,
+                )
             if operation_scope == "aggregate":
                 title, description = self._presenter.employee_count(
                     result.total, employee_filter.value

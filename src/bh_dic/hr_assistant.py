@@ -31,7 +31,10 @@ _THIS_MONTH = re.compile(
     re.IGNORECASE,
 )
 _NEGATED_REQUEST = re.compile(r"\b(?:no|non|senza)\b", re.IGNORECASE)
-_NEXT_DAYS = re.compile(r"\bprossim[ioe]?\s+(\d{1,3})\s+giorn[io]\b", re.IGNORECASE)
+_NEXT_DAYS = re.compile(
+    r"\b(?:prossim[ioe]?\s+|nei\s+prossim[ei]\s+|entro(?:\s+i)?\s+)(\d{1,3})\s+giorn[io]\b",
+    re.IGNORECASE,
+)
 _NEXT_MONTHS = re.compile(
     r"\bprossim[ei]\s+(uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|"
     r"dodici|\d{1,2})\s+mes[ei]\b",
@@ -51,6 +54,18 @@ _MONTH_COUNT = {
     "undici": 11,
     "dodici": 12,
 }
+_PAGE_NUMBER_BY_WORD = {
+    "prima": 1,
+    "seconda": 2,
+    "terza": 3,
+    "quarta": 4,
+    "quinta": 5,
+    "sesta": 6,
+    "settima": 7,
+    "ottava": 8,
+    "nona": 9,
+    "decima": 10,
+}
 _EXPLICIT_EMPLOYEE_ID = re.compile(
     r"(?i)\b(?:employee\s*id|dipendente\s+id|id\s+dipendente|id)\s*[:#]?\s*"
     r"(?!(?:dei|del|della|delle|di|dipendente|dipendenti)\b)"
@@ -66,10 +81,14 @@ _DIRECT_EMPLOYEE_SEARCH = re.compile(
     r"(?is)^\s*(?:cerca|trova|trovami|search)\s+"
     r"(?:(?:il|la|un|una)\s+)?(?:dipendente|employee)\s+(.+?)[?!.]*\s*$"
 )
+_BARE_EMPLOYEE_SEARCH = re.compile(
+    r"(?is)^\s*(?:cerca|trova|trovami|search)\s+"
+    r"([\wÀ-ÿ'-]{2,64}(?:\s+[\wÀ-ÿ'-]{2,64}){0,3})[?!.]*\s*$"
+)
 _EMPLOYEE_EXISTENCE_SEARCH = re.compile(
     r"(?is)^\s*(?:c[\x27\u2019]\s*[èe]|esiste)\s+(?:un(?:a|o)?\s+)?"
     r"(?:dipendente|employee)\s+"
-    r"(?:che\s+)?(?:si\s+chiama|chiamat[oa])\s+(.+?)[?!.]*\s*$"
+    r"(?:(?:che\s+)?(?:si\s+chiama|chiamat[oa])|di\s+nome)\s+(.+?)[?!.]*\s*$"
 )
 _EMPLOYEE_STATUS_LIST_FOLLOWUP = re.compile(
     r"(?i)^\s*(?:dimmi|mostrami|elencami|fammi\s+vedere)\s+(?:quelli|quelle)\s+"
@@ -81,8 +100,32 @@ _EMPLOYEE_TERM = re.compile(
     re.IGNORECASE,
 )
 _LIST_MARKER = re.compile(
-    r"\b(?:dimmi|elenc\w*|lista|mostra\w*|stampa\w*|tabella|visualizza\w*)\b",
+    r"\b(?:dimmi|elenc\w*|lista|mostra\w*|stampa\w*|tabella|visualizza\w*|"
+    r"fammi\s+vedere)\b",
     re.IGNORECASE,
+)
+_STATUS_ONLY_COUNT = re.compile(
+    r"(?i)^\s*(?:quanti|quante|numero|totale|conteggio)\s+"
+    r"(?:(?:dipendenti|persone|collaboratori)\s+)?(?:sono|risultano)?\s*"
+    r"(?:attiv[ei]|inattiv[ei]|disattivat[ei]|cessat[ei])\s*[?!.]*\s*$"
+)
+_EMPLOYEE_SORT_REQUEST = re.compile(
+    r"(?i)^\s*(?:ordina|riordina|metti\s+in\s+ordine)\s+"
+    r"(?:(?:i|le|gli)\s+)?(?:dipendenti|employee|organico)?\s*"
+    r"(?:per|in\s+base\s+a)\s+"
+    r"(?P<field>nome|cognome|matricola|stato|contratto|scadenza)\b"
+    r"(?P<tail>.*)$"
+)
+_EMPLOYEE_GROUP_FILTER = re.compile(
+    r"(?i)^\s*(?:filtra|mostra|mostrami|elenca|elencami|fammi\s+vedere|dimmi)\s+"
+    r"(?:(?:i|le|gli)\s+)?(?:dipendenti|employee|collaboratori|personale)\b"
+    r".*?\b(?:reparto|gruppo|team)\s+(?P<group>[\wÀ-ÿ'-]{2,64})\b"
+)
+_EMPLOYEE_PAGE_REQUEST = re.compile(
+    r"(?i)\b(?:(?P<leading>prima|seconda|terza|quarta|quinta|sesta|settima|ottava|nona|"
+    r"decima|[1-9][0-9]{0,3})\s+pagina|(?:pagina|pag\.)\s*(?:numero\s+)?"
+    r"(?P<trailing>prima|seconda|terza|quarta|quinta|sesta|settima|ottava|nona|decima|"
+    r"[1-9][0-9]{0,3}))\b"
 )
 _CAPABILITIES_MARKER = re.compile(
     r"\b(?:funzioni|funzionalit[aà]|capabilit(?:y|ies)|cosa\s+(?:puoi|sa)\s+fare)\b",
@@ -104,7 +147,8 @@ _PAYROLL_MONTH = re.compile(
 )
 _PAYROLL_YEAR = re.compile(r"\b(20\d{2})\b")
 _NET_PAY_REQUEST = re.compile(
-    r"\b(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*\b|"
+    r"\b(?:stipendi\w*|retribuzion\w*)(?:\s+nett\w*)?\s+(?:di|del|della|per)\b|"
+    r"\bpaga\s+nett\w*\s+(?:di|del|della|per)\b|"
     r"\bnett\w*\s+(?:mensile|da\s+pagare|di\b|del\b|della\b|per\b)|"
     r"\bultim[oa]\s+(?:mese\s+pagat[oa]|busta\s+paga|cedolino)\b",
     re.IGNORECASE,
@@ -126,7 +170,8 @@ _COLLOQUIAL_PAY_TARGET = re.compile(
     r"agosto|settembre|ottobre|novembre|dicembre)\b|\s+(?:nel|del)\s+20\d{2}\b|[?!.]|$)"
 )
 _NET_PAY_TARGET = re.compile(
-    r"(?is)\b(?:(?:stipendi\w*|retribuzion\w*|paga)\s+nett\w*|nett\w*)\s+"
+    r"(?is)\b(?:(?:stipendi\w*|retribuzion\w*)(?:\s+nett\w*)?|"
+    r"paga\s+nett\w*|nett\w*)\s+"
     r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
     r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di|per)\s+(?:gennaio|febbraio|marzo|aprile|"
     r"maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b|[?!.]|$)"
@@ -139,13 +184,14 @@ _LATEST_PAY_TARGET = re.compile(
 )
 _PROFILE_TERM = re.compile(
     r"\b(?:profilo|anagrafica|dossier(?:\s+hr)?|tutti\s+i\s+dati|dati\s+disponibili|"
+    r"dati\s+anagrafic\w*|tutto\s+su|"
     r"tutte\s+le\s+informazioni(?:\s+disponibili)?|tutto\s+quello\s+che\s+sai)\b",
     re.IGNORECASE,
 )
 _LOCAL_RESOURCE_TERMS: tuple[tuple[re.Pattern[str], str, Sensitivity], ...] = (
     (re.compile(r"\b(?:document[oi]|documents?)\b", re.I), "EMP-DOC-001", Sensitivity.HIGH),
     (
-        re.compile(r"\b(?:ruol[oi]|roles?|permess[oi])\b", re.I),
+        re.compile(r"\b(?:ruol[oi]|roles?|permess[oi]|grupp[oi])\b", re.I),
         "EMP-RBAC-001",
         Sensitivity.HIGH,
     ),
@@ -168,7 +214,7 @@ _LOCAL_RESOURCE_TERMS: tuple[tuple[re.Pattern[str], str, Sensitivity], ...] = (
         Sensitivity.HIGH,
     ),
     (
-        re.compile(r"\b(?:maturazion[ei]|maturations?)\b", re.I),
+        re.compile(r"\b(?:maturazion[ei]|maturations?|rate[oi]|maturat\w*)\b", re.I),
         "EMP-MAT-001",
         Sensitivity.HIGH,
     ),
@@ -190,29 +236,50 @@ _RESOURCE_OF_TARGET = re.compile(
 )
 _PROFILE_TARGET = re.compile(
     r"(?is)\b(?:profilo|anagrafica|dossier(?:\s+hr)?|tutti\s+i\s+dati|"
-    r"dati\s+disponibili|tutte\s+le\s+informazioni(?:\s+disponibili)?|"
-    r"tutto\s+quello\s+che\s+sai)(?:\s+complet[oa])?\s+"
+    r"dati\s+disponibili|dati\s+anagrafic\w*|tutte\s+le\s+informazioni(?:\s+disponibili)?|"
+    r"tutto(?:\s+quello\s+che\s+sai)?)(?:\s+complet[oa])?\s+"
     r"(?:di|del|della|su|per)\s+"
     r"(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+)?"
     r"(.+?)(?=[?!.]|$)"
 )
 _RESOURCE_FOR_TARGET = re.compile(
     r"(?is)\b(?:document[oi](?:\s+in\s+scadenza)?|ferie|permess\w*|"
-    r"bilanc(?:io|i)|sald[oi]|contator[ei]|maturazion[ei]|contratt[oi])\b"
+    r"bilanc(?:io|i)|sald[oi]|contator[ei]|maturazion[ei]|rate[oi]|maturat\w*|"
+    r"contratt[oi])\b"
     r".{0,48}?\b(?:per|da)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+|"
     r"dipendente\s+)?(.+?)(?=[?!.]|$)"
+)
+_DOCUMENT_CONTEXT_TARGET = re.compile(
+    r"(?is)(?:\bdocument[oi]\s+(?:di|del|della)\s+(.+?)\s+"
+    r"(?:sono|risultano|che\s+sono)\s+(?:in\s+scadenza|scadut[oi]|da\s+firmare|"
+    r"da\s+leggere)(?=[?!.]|$)|\bdocument[oi]\s+(?:in\s+scadenza|scadut[oi]|"
+    r"da\s+firmare|da\s+leggere)\s+(?:per|di|del|della)\s+(.+?)(?=[?!.]|$))"
 )
 _LEAVE_BALANCE_TARGET = re.compile(
     r"(?is)\b(?:quant[ei]\s+)?(?:ferie|permess\w*)\b.{0,64}?"
     r"\b(?:rest\w*|residu\w*|maturat\w*|disponibil\w*)\b.{0,24}?"
     r"\b(?:a|di|per|da)\s+(.+?)(?=[?!.]|$)"
 )
+_LEAVE_BALANCE_SUMMARY_TARGET = re.compile(
+    r"(?is)\b(?:sald[oi]|bilanc(?:io|i))(?:\s+20\d{2})?\b.{0,48}?"
+    r"\b(?:ferie|permess\w*)?\b.{0,24}?\b(?:di|per|da)\s+(.+?)(?=[?!.]|$)"
+)
 _ROLE_SUBJECT_TARGET = re.compile(
-    r"(?is)\bpermess[oi]\b.{0,24}?\bha\s+(.+?)\s+(?:sul|nel)\s+portale\b"
+    r"(?is)(?:\b(?:permess[oi]|ruol[oi])\b.{0,24}?\bha\s+(.+?)"
+    r"(?:\s+(?:sul|nel)\s+portale\b|(?=[?!.]|$))|"
+    r"\b(?:a\s+qual[ei]\s+)?grupp[oi]\s+appartiene\s+(.+?)(?=[?!.]|$))"
 )
 _TIME_SUBJECT_TARGET = re.compile(
     r"(?is)^\s*(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+)?"
-    r"(.+?)\s+pu[oò]\s+timbr(?:a|are)\b"
+    r"(.+?)\s+(?:pu[oò]\s+timbr(?:a|are)|(?:è|e)\s+abilitat[oa]\s+all[ae]\s+"
+    r"timbratur\w*)\b"
+)
+_CONTRACT_SUBJECT_TARGET = re.compile(
+    r"(?is)\b(?:che|qual[ei]?)\s+contratt[oi]\s+(?:ha|hanno)\s+(.+?)(?=[?!.]|$)"
+)
+_MATURATION_SUBJECT_TARGET = re.compile(
+    r"(?is)(?:\bcosa\s+ha\s+maturat[oa]\s+(.+?)(?=[?!.]|$)|"
+    r"\brate[oi]\s+maturat[ei]\s+(?:di|da|per)\s+(.+?)(?=[?!.]|$))"
 )
 _PAYROLL_DOCUMENT_TARGET = re.compile(
     r"(?is)\b(?:bust[ae]\s+pag[ae]|cedolin[oi]|stipendi\w*)\s+"
@@ -235,7 +302,8 @@ _GENERIC_TARGET_WORDS = frozenset(
 )
 _RESOURCE_READ_ACTION = re.compile(
     r"\b(?:dimmi|mostra\w*|controlla\w*|vedere|recupera\w*|confronta\w*|qual[ei]?|quali|"
-    r"apri\w*|verifica\w*|riporta\w*|dammi|cerca\w*|esporta\w*|fammi\s+vedere)\b",
+    r"chi|che|cosa|apri\w*|verifica\w*|riporta\w*|dammi|cerca\w*|esporta\w*|"
+    r"trova\w*|fammi\s+vedere)\b",
     re.IGNORECASE,
 )
 _MONTH_NUMBER_BY_NAME = {
@@ -446,8 +514,16 @@ def is_operational_hr_request(request: str) -> bool:
         return True
     if (
         _DIRECT_EMPLOYEE_SEARCH.search(request) is not None
+        or _BARE_EMPLOYEE_SEARCH.search(request) is not None
         or _EMPLOYEE_EXISTENCE_SEARCH.search(request) is not None
         or _EMPLOYEE_STATUS_LIST_FOLLOWUP.search(request) is not None
+        or _STATUS_ONLY_COUNT.search(request) is not None
+        or _EMPLOYEE_SORT_REQUEST.search(request) is not None
+        or _EMPLOYEE_GROUP_FILTER.search(request) is not None
+        or (
+            _EMPLOYEE_PAGE_REQUEST.search(request) is not None
+            and _EMPLOYEE_TERM.search(request) is not None
+        )
     ):
         return True
     if is_payroll_presence_request(request):
@@ -470,6 +546,9 @@ def is_operational_hr_request(request: str) -> bool:
             _ROLE_SUBJECT_TARGET,
             _TIME_SUBJECT_TARGET,
             _RESOURCE_FOR_TARGET,
+            _LEAVE_BALANCE_SUMMARY_TARGET,
+            _CONTRACT_SUBJECT_TARGET,
+            _MATURATION_SUBJECT_TARGET,
         )
     ):
         return True
@@ -562,17 +641,24 @@ def _resource_target(request: str) -> str | None:
 
     for pattern in (
         _NAMED_EMPLOYEE_TARGET,
+        _DOCUMENT_CONTEXT_TARGET,
         _RESOURCE_OF_TARGET,
         _PROFILE_TARGET,
         _LEAVE_BALANCE_TARGET,
+        _LEAVE_BALANCE_SUMMARY_TARGET,
         _ROLE_SUBJECT_TARGET,
         _TIME_SUBJECT_TARGET,
+        _CONTRACT_SUBJECT_TARGET,
+        _MATURATION_SUBJECT_TARGET,
         _RESOURCE_FOR_TARGET,
     ):
         match = pattern.search(request)
         if match is None:
             continue
-        candidate = " ".join(match.group(1).strip(" .,:;!?\"'").split())
+        raw_candidate = next((group for group in match.groups() if group is not None), None)
+        if raw_candidate is None:
+            continue
+        candidate = " ".join(raw_candidate.strip(" .,:;!?\"'").split())
         if (
             candidate
             and candidate.casefold() not in _GENERIC_TARGET_WORDS
@@ -635,9 +721,22 @@ def parse_local_operational_intent(
             )
         )
 
-    employee_search = _DIRECT_EMPLOYEE_SEARCH.search(text) or _EMPLOYEE_EXISTENCE_SEARCH.search(
-        text
-    )
+    direct_employee_search = _DIRECT_EMPLOYEE_SEARCH.search(text)
+    existence_employee_search = _EMPLOYEE_EXISTENCE_SEARCH.search(text)
+    bare_employee_search = _BARE_EMPLOYEE_SEARCH.search(text)
+    if bare_employee_search is not None:
+        bare_query = bare_employee_search.group(1)
+        if (
+            _OPERATIONAL_HR_OBJECT.search(bare_query) is not None
+            or _EMPLOYEE_TERM.search(bare_query) is not None
+            or _PAYROLL_TERM.search(bare_query) is not None
+            or _NOTIFICATION_TERM.search(bare_query) is not None
+            or any(
+                pattern.search(bare_query) is not None for pattern, _, _ in _LOCAL_RESOURCE_TERMS
+            )
+        ):
+            bare_employee_search = None
+    employee_search = direct_employee_search or existence_employee_search or bare_employee_search
     if employee_search is not None:
         query = " ".join(employee_search.group(1).strip(" .,:;!?\"'").split())
         if not query or len(query) > 128 or _TECHNICAL_TARGET.search(query) is not None:
@@ -663,6 +762,76 @@ def parse_local_operational_intent(
                     "view": "ascii",
                     "include_all": True,
                 },
+            )
+        )
+
+    if _STATUS_ONLY_COUNT.search(text) is not None:
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-READ-001",
+                action_class=ActionClass.READ,
+                sensitivity=Sensitivity.LOW,
+                parameters={"status": _requested_status(text), "view": "count"},
+            )
+        )
+
+    sort_match = _EMPLOYEE_SORT_REQUEST.search(text)
+    if sort_match is not None:
+        sort_field = {
+            "nome": "name",
+            "cognome": "name",
+            "matricola": "payroll_number",
+            "stato": "status",
+            "contratto": "contract",
+            "scadenza": "contract",
+        }[sort_match.group("field").casefold()]
+        tail = sort_match.group("tail").casefold()
+        direction = (
+            "desc"
+            if re.search(r"\b(?:decrescente|discendente|dal\s+pi[uù]\s+recente)\b", tail)
+            else "asc"
+        )
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-SORT-001",
+                action_class=ActionClass.FILTER,
+                sensitivity=Sensitivity.MEDIUM,
+                parameters={
+                    "status": _requested_status(text),
+                    "sort_by": sort_field,
+                    "sort_direction": direction,
+                    "view": "ascii",
+                    "include_all": True,
+                },
+            )
+        )
+
+    group_match = _EMPLOYEE_GROUP_FILTER.search(text)
+    if group_match is not None:
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-FILTER-001",
+                action_class=ActionClass.FILTER,
+                sensitivity=Sensitivity.MEDIUM,
+                parameters={
+                    "status": _requested_status(text),
+                    "group": group_match.group("group"),
+                    "view": "ascii",
+                    "include_all": True,
+                },
+            )
+        )
+
+    page_match = _EMPLOYEE_PAGE_REQUEST.search(text)
+    if page_match is not None and _EMPLOYEE_TERM.search(text) is not None:
+        page_raw = next(group for group in page_match.groups() if group is not None).casefold()
+        page = int(page_raw) if page_raw.isdigit() else _PAGE_NUMBER_BY_WORD[page_raw]
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-PAGE-001",
+                action_class=ActionClass.FILTER,
+                sensitivity=Sensitivity.MEDIUM,
+                parameters={"status": _requested_status(text), "page": page, "page_size": 25},
             )
         )
 
@@ -832,10 +1001,14 @@ def parse_local_operational_intent(
         for pattern, function_id, sensitivity in _LOCAL_RESOURCE_TERMS
         if pattern.search(text) is not None
     ]
-    if _LEAVE_BALANCE_TARGET.search(text) is not None:
+    if (
+        _LEAVE_BALANCE_TARGET.search(text) is not None
+        or _LEAVE_BALANCE_SUMMARY_TARGET.search(text) is not None
+    ):
         # In phrases such as "ferie e permessi maturati" the word "permessi" means leave,
-        # not application permissions.  Keep the historical RBAC meaning everywhere else.
-        resource_matches = [match for match in resource_matches if match[0] != "EMP-RBAC-001"]
+        # not application permissions, while "maturati" describes the balance rather than a
+        # separate maturations resource. Keep both historical meanings everywhere else.
+        resource_matches = [match for match in resource_matches if match[0] == "EMP-BAL-001"]
     profile_requested = _PROFILE_TERM.search(text) is not None
     resource_target_query = _resource_target(text)
     resource_read_requested = (

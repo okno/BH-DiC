@@ -24,6 +24,7 @@ from bh_dic.approvals.storage import InMemoryApprovalRepository
 from bh_dic.dic.errors import DicAmbiguousWriteOutcomeError
 from bh_dic.dic.mock import MockDicAdapter
 from bh_dic.dic.models import (
+    EmployeeFilter,
     EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
@@ -1424,6 +1425,57 @@ async def test_employee_name_search_stays_local_and_never_reaches_router() -> No
     assert router.request is None
 
 
+@pytest.mark.asyncio
+async def test_daily_sort_group_filter_and_page_stay_local_and_reach_employee_adapter() -> None:
+    router = FixedRouter(
+        IntentEnvelope(
+            intent="unsupported",
+            function_id="UNSUPPORTED",
+            action_class=ActionClass.UNSUPPORTED,
+            employee_id=None,
+            query=None,
+            parameters={},
+            date_from=None,
+            date_to=None,
+            requires_clarification=False,
+            clarification_question=None,
+            sensitivity=Sensitivity.LOW,
+            confidence=1.0,
+        )
+    )
+    adapter = CapturingMockAdapter()
+    coordinator, _, _ = await coordinator_for(router, adapter_override=adapter)
+    try:
+        sorted_result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Ordina i dipendenti per matricola decrescente",
+        )
+        assert adapter.last_employee_query is not None
+        assert adapter.last_employee_query.sort_by == "payroll_number"
+        assert adapter.last_employee_query.sort_direction is SortDirection.DESC
+
+        filtered_result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Filtra i dipendenti attivi del reparto Quality",
+        )
+        assert adapter.last_employee_query is not None
+        assert adapter.last_employee_query.employee_filter is EmployeeFilter.ACTIVE
+
+        paged_result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Mostra la seconda pagina dei dipendenti",
+        )
+        assert adapter.last_employee_query is not None
+        assert adapter.last_employee_query.page == 2
+    finally:
+        await adapter.close()
+
+    assert sorted_result.title == "Elenco completo dipendenti"
+    assert "Record inclusi: 1 su 1" in filtered_result.description
+    assert paged_result.title == "Dipendenti"
+    assert router.request is None
+
+
 @pytest.mark.parametrize("sort_by", ["name", "payroll_number", "status", "contract"])
 @pytest.mark.asyncio
 async def test_employee_sort_parameters_reach_adapter_and_redacted_list_is_complete(
@@ -1449,7 +1501,7 @@ async def test_employee_sort_parameters_reach_adapter_and_redacted_list_is_compl
     coordinator, _, _ = await coordinator_for(router, adapter_override=adapter)
     try:
         result = await coordinator.ask(
-            actor(LogicalRole.HR_READ), "Ordina per matricola decrescente"
+            actor(LogicalRole.HR_READ), "Applica l'ordinamento richiesto"
         )
     finally:
         await adapter.close()
