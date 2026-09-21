@@ -161,6 +161,17 @@ if [[ "${online}" == "true" && "${runtime_config_valid}" != "true" ]]; then
 elif [[ "${online}" == "true" ]]; then
   require_command getent
   require_command curl
+  if command -v ip >/dev/null 2>&1; then
+    ipv4_default_route="$(ip -4 route show default 2>/dev/null || true)"
+    ipv6_default_route="$(ip -6 route show default 2>/dev/null || true)"
+    if [[ -n "${ipv4_default_route}" || -n "${ipv6_default_route}" ]]; then
+      pass "default IP route is available"
+    else
+      fail "no default IP route; restore the host's approved gateway before starting the bot"
+    fi
+  else
+    fail "ip route inspection is unavailable"
+  fi
   provider_metadata="$("${python_bin}" -c '
 from urllib.parse import urlsplit
 from bh_dic.config import AppSettings

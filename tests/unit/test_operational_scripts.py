@@ -147,6 +147,9 @@ def test_doctor_checks_only_the_selected_model_endpoint() -> None:
     assert "--proto" in doctor
     assert "GROQ_API_KEY" not in doctor
     assert "OPENAI_API_KEY" not in doctor
+    assert "ip -4 route show default" in doctor
+    assert "ip -6 route show default" in doctor
+    assert "restore the host's approved gateway" in doctor
 
 
 def test_doctor_uses_only_a_runtime_local_playwright_browser_path() -> None:

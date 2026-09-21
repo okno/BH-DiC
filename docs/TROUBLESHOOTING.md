@@ -20,6 +20,7 @@ dell'ambiente corrente. La repository non pubblica la cronologia dei tentativi d
 | configurazione rifiutata | `doctor.sh`, `safe_summary()` | completare valori mancanti; non usare mock in production |
 | `MODEL_STORE=true` rifiutato | `.env` locale | riportare a `false`; non cambiare il validatore |
 | bot non parte | `systemctl status`, config, DB, Chromium e log | dalla 0.2.7 una sessione DIC mancante non blocca Discord; correggere l'errore di bootstrap senza avviare una seconda istanza |
+| `doctor.sh --online` segnala `no default IP route` | `ip -4 route show default` e `ip -6 route show default` | far ripristinare il gateway previsto dalla configurazione di rete; non aggiungere una route ipotetica e non riavviare interfacce su un host condiviso |
 | Discord mostra “L'applicazione non ha risposto” | `systemctl is-active bh-dic.service` e journal | il gateway è offline o non ha deferito entro il timeout; ripristinare prima il servizio, poi verificare permessi e RBAC |
 | bot già attivo | `status.sh`, `ps` | non avviare una seconda istanza |
 | slash command assenti | guild/application ID e scope | `register-commands.sh` nel solo guild |
