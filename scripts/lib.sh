@@ -170,6 +170,7 @@ ensure_runtime_dirs() {
   lock_file="$(runtime_lock_file)"
   mkdir -p -- \
     "${data_dir}/db" \
+    "${data_dir}/cache" \
     "${log_dir}" \
     "$(dirname -- "${pid_file}")" \
     "$(dirname -- "${lock_file}")" \
@@ -180,6 +181,7 @@ ensure_runtime_dirs() {
   chmod 700 -- \
     "${data_dir}" \
     "${data_dir}/db" \
+    "${data_dir}/cache" \
     "${log_dir}" \
     "$(dirname -- "${pid_file}")" \
     "${data_dir}/session" \
@@ -187,6 +189,7 @@ ensure_runtime_dirs() {
     "${data_dir}/traces" \
     "${data_dir}/uploads" \
     "${data_dir}/uploads/quarantine"
+  export XDG_CACHE_HOME="${data_dir}/cache"
 }
 
 read_pid() {

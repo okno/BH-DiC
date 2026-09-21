@@ -100,6 +100,7 @@ data_dir="$(runtime_data_dir)"
 if [[ -d "${data_dir}" && -w "${data_dir}" ]]; then pass "runtime data directory writable"; else fail "runtime data directory unavailable"; fi
 for directory in \
   "${data_dir}/db" \
+  "${data_dir}/cache" \
   "$(runtime_log_dir)" \
   "$(dirname -- "$(runtime_pid_file)")" \
   "${data_dir}/session" \

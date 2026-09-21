@@ -129,6 +129,13 @@ def test_env_reader_uses_portable_awk_quote_patterns() -> None:
     assert '$0 ~ /^\\".*\\"$/' not in library
 
 
+def test_runtime_cache_is_confined_to_runtime_data() -> None:
+    library = _read("lib.sh")
+
+    assert '"${data_dir}/cache"' in library
+    assert 'export XDG_CACHE_HOME="${data_dir}/cache"' in library
+
+
 def test_doctor_checks_only_the_selected_model_endpoint() -> None:
     doctor = _read("doctor.sh")
     assert "from bh_dic.config import AppSettings" in doctor
