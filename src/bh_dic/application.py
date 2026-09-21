@@ -69,6 +69,7 @@ from bh_dic.hr_assistant import (
     SeniorHrPresenter,
     is_capabilities_request,
     is_employee_aggregate_request,
+    is_operational_hr_request,
     local_contract_expiry_fallback_interval,
     local_employee_search_query,
     minimize_hr_router_request,
@@ -359,6 +360,23 @@ class BHApplicationCoordinator(InteractionCoordinator):
                         usage=exc.usage,
                     )
                     usage_completed = True
+                if (
+                    self._model_provider == "groq"
+                    and exc.provider == "groq"
+                    and exc.failure_kind is ProviderFailureKind.TOOL_USE_FAILED
+                    and exc.response_received
+                    and contract_expiry_fallback_interval is None
+                    and safe_failure_fallback is None
+                    and not is_operational_hr_request(normalized_request)
+                ):
+                    result = InteractionResult(
+                        title="Conversazione HR",
+                        description="La richiesta non richiede una funzione operativa DiC.",
+                        correlation_id=correlation_id,
+                        success=False,
+                        public_hr_fallback=True,
+                    )
+                    return await self._with_request_usage(result, correlation_id)
                 if (
                     self._model_provider != "groq"
                     or exc.provider != "groq"

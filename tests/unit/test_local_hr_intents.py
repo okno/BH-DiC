@@ -27,6 +27,8 @@ TODAY = date(2026, 8, 20)
         ("stampa una tabella ascii con tutti i dipendenti", "EMP-READ-001"),
         ("mostra l'elenco dei dipendenti", "EMP-READ-001"),
         ("visualizza la lista degli employee attivi", "EMP-READ-001"),
+        ("Dimmi i dipendenti attivi", "EMP-READ-001"),
+        ("Dimmi quelli attivi", "EMP-READ-001"),
         ("tabella dei dipendenti disattivati", "EMP-READ-001"),
         ("elenco completo organico", "EMP-READ-001"),
         ("mostrami tutti i dipendenti", "EMP-READ-001"),
@@ -49,6 +51,7 @@ TODAY = date(2026, 8, 20)
         ("quanti collaboratori lavorano qui?", "EMP-READ-001"),
         ("dimmi il totale del personale", "EMP-READ-001"),
         ("mostra l'elenco dello staff", "EMP-READ-001"),
+        ("C'è un dipendente che si chiama Nora?", "EMP-SEARCH-001"),
         ("attiva un dipendente Mario Rossi", "EMP-STATUS-002"),
         ("riattiva dipendente id EMP-SYNTH-001", "EMP-STATUS-002"),
         ("riativa il dipende Mario Rossi", "EMP-STATUS-002"),
@@ -107,6 +110,46 @@ def test_full_ascii_list_and_export_are_closed_local_intents() -> None:
         "date_from": "2026-09-01",
         "date_to": "2026-09-30",
     }
+
+
+@pytest.mark.parametrize(
+    ("message", "status"),
+    [
+        ("Dimmi i dipendenti attivi", "active"),
+        ("Dimmi quelli attivi", "active"),
+        ("Mostrami quelli inattivi", "inactive"),
+    ],
+)
+def test_daily_employee_list_phrasings_stay_local(message: str, status: str) -> None:
+    parsed = parse_local_operational_intent(message, today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-READ-001"
+    assert parsed.envelope.parameters == {
+        "status": status,
+        "view": "ascii",
+        "include_all": True,
+    }
+    assert is_operational_hr_request(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "C'è un dipendente che si chiama Nora?",
+        "Esiste una dipendente chiamata Nora?",
+        "Cerca il dipendente Nora",
+    ],
+)
+def test_employee_existence_and_search_keep_the_name_out_of_the_router(message: str) -> None:
+    parsed = parse_local_operational_intent(message, today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-SEARCH-001"
+    assert parsed.envelope.query == "Nora"
+    assert parsed.envelope.parameters == {"status": "all"}
+    assert parsed.target_query is None
+    assert is_operational_hr_request(message)
 
 
 def test_collective_payroll_presence_resolves_month_and_year_locally() -> None:

@@ -62,13 +62,26 @@ _LOCAL_SEARCH = re.compile(
     r"(?is)\b(?:cerca|trova|trovami|search)\s+"
     r"(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+|employee\s+)?(.+)$"
 )
+_DIRECT_EMPLOYEE_SEARCH = re.compile(
+    r"(?is)^\s*(?:cerca|trova|trovami|search)\s+"
+    r"(?:(?:il|la|un|una)\s+)?(?:dipendente|employee)\s+(.+?)[?!.]*\s*$"
+)
+_EMPLOYEE_EXISTENCE_SEARCH = re.compile(
+    r"(?is)^\s*(?:c[\x27\u2019]\s*[èe]|esiste)\s+(?:un(?:a|o)?\s+)?"
+    r"(?:dipendente|employee)\s+"
+    r"(?:che\s+)?(?:si\s+chiama|chiamat[oa])\s+(.+?)[?!.]*\s*$"
+)
+_EMPLOYEE_STATUS_LIST_FOLLOWUP = re.compile(
+    r"(?i)^\s*(?:dimmi|mostrami|elencami|fammi\s+vedere)\s+(?:quelli|quelle)\s+"
+    r"(?:che\s+sono\s+)?(?:attiv[ei]|inattiv[ei]|disattivat[ei]|cessat[ei])\s*[?!.]*\s*$"
+)
 _EMPLOYEE_TERM = re.compile(
     r"\b(?:dipend(?:ent\w*|e|ete)|employee\w*|organico|collaborator\w*|personale|staff|"
     r"lavorator\w*)\b",
     re.IGNORECASE,
 )
 _LIST_MARKER = re.compile(
-    r"\b(?:elenc\w*|lista|mostra\w*|stampa\w*|tabella|visualizza\w*)\b",
+    r"\b(?:dimmi|elenc\w*|lista|mostra\w*|stampa\w*|tabella|visualizza\w*)\b",
     re.IGNORECASE,
 )
 _CAPABILITIES_MARKER = re.compile(
@@ -221,7 +234,7 @@ _GENERIC_TARGET_WORDS = frozenset(
     }
 )
 _RESOURCE_READ_ACTION = re.compile(
-    r"\b(?:mostra\w*|controlla\w*|vedere|recupera\w*|confronta\w*|qual[ei]?|quali|"
+    r"\b(?:dimmi|mostra\w*|controlla\w*|vedere|recupera\w*|confronta\w*|qual[ei]?|quali|"
     r"apri\w*|verifica\w*|riporta\w*|dammi|cerca\w*|esporta\w*|fammi\s+vedere)\b",
     re.IGNORECASE,
 )
@@ -431,6 +444,12 @@ def is_operational_hr_request(request: str) -> bool:
 
     if is_capabilities_request(request):
         return True
+    if (
+        _DIRECT_EMPLOYEE_SEARCH.search(request) is not None
+        or _EMPLOYEE_EXISTENCE_SEARCH.search(request) is not None
+        or _EMPLOYEE_STATUS_LIST_FOLLOWUP.search(request) is not None
+    ):
+        return True
     if is_payroll_presence_request(request):
         return True
     if _PAYROLL_TERM.search(request) is not None:
@@ -612,6 +631,37 @@ def parse_local_operational_intent(
                         re.I,
                     )
                     is not None
+                },
+            )
+        )
+
+    employee_search = _DIRECT_EMPLOYEE_SEARCH.search(text) or _EMPLOYEE_EXISTENCE_SEARCH.search(
+        text
+    )
+    if employee_search is not None:
+        query = " ".join(employee_search.group(1).strip(" .,:;!?\"'").split())
+        if not query or len(query) > 128 or _TECHNICAL_TARGET.search(query) is not None:
+            raise HrRequestInputError("employee search target is invalid")
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-SEARCH-001",
+                action_class=ActionClass.SEARCH,
+                sensitivity=Sensitivity.MEDIUM,
+                query=query,
+                parameters={"status": "all"},
+            )
+        )
+
+    if _EMPLOYEE_STATUS_LIST_FOLLOWUP.search(text) is not None:
+        return LocalOperationalIntent(
+            _local_envelope(
+                "EMP-READ-001",
+                action_class=ActionClass.READ,
+                sensitivity=Sensitivity.MEDIUM,
+                parameters={
+                    "status": _requested_status(text),
+                    "view": "ascii",
+                    "include_all": True,
                 },
             )
         )
@@ -850,7 +900,11 @@ def parse_local_operational_intent(
                     parameters={"status": _requested_status(text), "view": "count"},
                 )
             )
-        if _LIST_MARKER.search(text) is not None and not has_explicit_employee_id:
+        if (
+            _LIST_MARKER.search(text) is not None
+            and not has_explicit_employee_id
+            and not resource_matches
+        ):
             return LocalOperationalIntent(
                 _local_envelope(
                     "EMP-READ-001",

@@ -959,7 +959,7 @@ async def test_intent_cancellation_is_not_masked_by_usage_completion_failure() -
         with pytest.raises(asyncio.CancelledError):
             await coordinator.ask(
                 actor(LogicalRole.HR_READ),
-                "Cerca il dipendente Example Synthetic",
+                "Analizza la situazione del personale aziendale",
             )
     finally:
         await adapter.close()
@@ -1337,6 +1337,29 @@ async def test_payroll_tool_failure_degrades_to_targeted_local_clarification() -
 
 
 @pytest.mark.asyncio
+async def test_non_operational_tool_failure_uses_public_hr_conversation_fallback() -> None:
+    router = FailingRouter(
+        IntentProviderError(
+            "synthetic tool failure",
+            provider="groq",
+            model="openai/gpt-oss-120b",
+            response_received=True,
+            failure_kind=ProviderFailureKind.TOOL_USE_FAILED,
+        )
+    )
+    coordinator, adapter, _ = await coordinator_for(cast(FixedRouter, router))
+    try:
+        result = await coordinator.ask(actor(LogicalRole.HR_READ), "Buongiorno")
+    finally:
+        await adapter.close()
+
+    assert router.calls == 1
+    assert result.title == "Conversazione HR"
+    assert result.public_hr_fallback
+    assert not result.success
+
+
+@pytest.mark.asyncio
 async def test_explicit_employee_id_is_restored_only_after_minimized_routing() -> None:
     router = FixedRouter(
         IntentEnvelope(
@@ -1398,9 +1421,7 @@ async def test_employee_name_search_stays_local_and_never_reaches_router() -> No
 
     assert adapter.last_employee_query is not None
     assert adapter.last_employee_query.query == "Mario Rossi"
-    assert router.request is not None
-    assert "Mario" not in router.request
-    assert "Rossi" not in router.request
+    assert router.request is None
 
 
 @pytest.mark.parametrize("sort_by", ["name", "payroll_number", "status", "contract"])
