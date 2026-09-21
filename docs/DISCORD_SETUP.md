@@ -7,13 +7,9 @@ dopo un esito operativo `UNSUPPORTED`. I
 relativi ID non sono conservati nella repository e devono essere copiati dal client Discord: non
 ricavarli dai nomi e non inventarli.
 
-> Stato al 17 agosto 2026: installazione guild-scoped e registrazione hanno evidenza storica; il
-> gateway resta separato dal login DIC e può rispondere anche con DIC `DEGRADED`. Il primo smoke è
-> stato negato dal gate RBAC prima del dispatch. Il gate applicativo 0.3.0 ha verificato la
-> classificazione `PUBLIC`/non-ephemeral e `SENSITIVE`/ephemeral, ma non il trasporto Discord. Il
-> servizio è `active/running`, con gateway `discord_ready`, e lo smoke slash resta `PENDING`.
-> Correggere i ruoli senza ampliare guild o
-> canale. Le istruzioni seguono la
+> Il gateway resta separato dal login DIC e può rispondere anche con DIC `DEGRADED`. Verificare
+> registrazione, ruoli e round-trip nell'ambiente corrente senza ampliare guild o canale. La
+> repository non contiene gli ID o lo stato del deployment. Le istruzioni seguono la
 > documentazione Discord ufficiale
 > per [creare l'app e il bot](https://docs.discord.com/developers/quick-start/getting-started),
 > [OAuth2](https://docs.discord.com/developers/topics/oauth2) e [application

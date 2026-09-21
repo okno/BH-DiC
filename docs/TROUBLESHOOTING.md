@@ -9,19 +9,10 @@ Partire sempre da stato e log redatti:
 ./scripts/audit-verify.sh
 ```
 
-Non abilitare write per diagnosticare. Dalla 0.2.7 Discord può restare online in modalità
-degradata anche senza una sessione DIC verificata. Il
-fallimento 0.2.2 è avvenuto durante l'hydration e il tentativo 0.2.3 allo stage `DIC_EMAIL`. La
-0.2.4 ha inviato la password una sola volta e si è fermata con exit 78 perché la callback DIC
-legittima non era ancora allowlistata. Un successivo accesso manuale autorizzato in browser fresco
-ha confermato credenziali, callback, dashboard e marker della lista dipendenti; il check headless
-0.2.5 ha poi attestato tenant e sessione nel processo corrente. Il riavvio successivo ha però
-dimostrato che il vault pre-0.2.7 non conservava `sessionStorage`.
-Un check 0.2.7 si è poi fermato prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`; la 0.2.8 ha
-ristretto il supporto alle route TeamSystem/OIDC esatte documentate. Il successivo gate 0.3.0 ha
-attestato autenticazione/tenant e i due subset read bounded. Nello snapshot corrente il servizio è
-`active/running`, con zero riavvii osservati e gateway `discord_ready`; lo smoke del trasporto
-Discord resta `PENDING`.
+Non abilitare write per diagnosticare. Discord può restare online in modalità degradata senza una
+sessione DIC verificata. Classificare separatamente gateway, vault/sessionStorage, federazione
+TeamSystem/OIDC, tenant, route read e provider; usare soltanto gli stati e correlation ID
+dell'ambiente corrente. La repository non pubblica la cronologia dei tentativi del server.
 
 | Sintomo | Verifica | Azione sicura |
 |---|---|---|

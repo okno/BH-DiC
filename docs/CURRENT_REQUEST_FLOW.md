@@ -1,6 +1,6 @@
 # Current request flow
 
-Baseline: `98b03932ca1bf548bff44a82a1fedd976e5603d0`.
+Pre-refactor request-flow analysis. It contains no deployment evidence.
 
 ## Slash command
 

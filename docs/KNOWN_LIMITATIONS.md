@@ -1,19 +1,18 @@
 # Limitazioni note dell'adapter DIC
 
-Contratti, maturazioni, bilanci e documenti hanno superato il gate first-party live del 2026-08-24.
-Follow-up generali su result set arbitrari, paginazione bulk completa timbrature,
+I contratti first-party per contratti, maturazioni, bilanci e documenti sono registrati, ma ogni
+ambiente deve ripetere il gate read-only sulla revisione candidata. Follow-up generali su result
+set arbitrari, paginazione bulk completa timbrature,
 workplace, modelli orario, spese/viaggi e superfici complete turni/presenze non sono implementati.
 Il contesto conversazionale supporta selezioni candidate/ordinali bounded, non il ripristino dopo
 riavvio.
 
 ## Verifica live e compatibilità UI
 
-- Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato un gate live autorizzato in
-  sola lettura per autenticazione/tenant, elenco completo, riepilogo, ruoli, timbratura target,
-  contratti, maturazioni, bilanci, payroll e documenti. Non sono state eseguite write live.
-- La prova riguarda un dipendente rappresentativo per le risorse individuali e include una
-  traversata payroll collettiva completa. Non certifica che ogni dipendente abbia record in
-  ciascun modulo.
+- La repository non contiene risultati di un gate live. Ogni rollout deve provare privatamente
+  autenticazione/tenant, risorse abilitate e traversate collettive richieste, mantenendo le write
+  disabilitate. Una risorsa rappresentativa non certifica che ogni dipendente abbia record nel
+  modulo.
 - `data-testid`, attributi `data-*`, ordinamento dei fallback e controlli distintivi delle pagine
   HR richiedono rivalidazione dopo ogni cambio UI. Un cambio può produrre `DicUiChangedError` e
   aprire il circuit breaker.
@@ -28,22 +27,15 @@ riavvio.
 - `DIC_TOTP_SECRET` non è consumato dal flusso live corrente. Qualunque challenge MFA si ferma
   fail-closed e richiede una procedura umana autorizzata; nessun codice viene compilato o inviato.
 - CAPTCHA richiede sempre intervento umano e non viene aggirato.
-- Un check headless 0.2.5 ha autenticato sessione e tenant nel processo corrente, ma il vault
-  precedente salvava soltanto cookie/localStorage. DIC conserva anche token federati in
-  `sessionStorage`, perciò il riavvio successivo li ha persi e si è fermato a `TEAMSYSTEM_EMAIL`.
-  La 0.2.7 cifra uno snapshot bounded della sola origine DIC e ne ripristina l'origine esatta prima
-  della navigazione; il gate 0.3.0 ha successivamente verificato autenticazione e tenant sul
-  server, senza rendere il formato portabile ad altri ambienti.
+- Il vault deve includere cookie/localStorage e uno snapshot bounded di `sessionStorage` della sola
+  origine DIC. Il formato è cifrato, vincolato all'ambiente e non è portabile fra installazioni.
 - DIC può usare `login_hint` e saltare `LoginEmail`. La 0.2.7 ammette soltanto le route TeamSystem
   esatte `LoginEmail`/`LoginPassword` e, prima di compilare il segreto, richiede che l'identità
   esposta dal form password coincida con quella configurata. Qualunque assenza, ambiguità o
   mismatch fallisce chiuso.
-- Un check server storico della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL` prima delle azioni
-  credenziali. La UI pubblica corrente espone la schermata e-mail anche sulla root TeamSystem
-  esatta e il flusso OIDC attraversa `/connect/authorize` e `/connect/authorize/callback`. La
-  0.2.8 gestisce soltanto questi path esatti e il legacy `/Account/LoginEmail`; può
-  accettare SSO senza controlli soltanto dopo marker DIC e tenant attestato, con zero azioni
-  credenziali. Il gate 0.3.0 ha poi attestato autenticazione e tenant sullo SHA verificato.
+- Il flusso OIDC ammette soltanto la root TeamSystem esatta, i path login registrati e
+  `/connect/authorize`/`/connect/authorize/callback` come stati pending bounded. SSO senza form è
+  accettato soltanto dopo marker DIC e tenant attestato, con zero azioni credenziali.
 - Dopo la rotazione di password/account/tenant, il vault precedente deve essere invalidato una
   volta deliberatamente prima di un unico check live. Questa procedura non autorizza retry dopo
   `CREDENTIAL_SUBMIT` o un altro esito post-submit incerto.
@@ -70,9 +62,9 @@ riavvio.
 - Il totale non qualificato significa l'intero organico; “attivi” o “disattivati” devono essere
   espliciti. Questo elimina l'ambiguità del modello ma non risolve eventuali categorie DIC future
   fuori dal campo `active` osservato.
-- L'analisi bulk delle scadenze usa esclusivamente `current_contract.valid_to` dell'elenco. Non
-  effettua fetch N+1 e non include contratti storici, futuri multipli o date che lo schema chiuso
-  non riesce a interpretare. I risultati individuali sono limitati a 25 campi Discord.
+- La lettura semplice delle scadenze usa `current_contract.valid_to` dell'elenco. I piani composti
+  contratto/payroll attraversano invece la route Contratti per ogni ID e verificano l'identità del
+  record. Date non interpretabili restano escluse; i risultati inline sono limitati a 25 campi.
 - I risultati del browser dipendono da label italiane, accessibilità e struttura
   della tabella; locale diverso da `it-IT` non è stato testato.
 - La pagina ruoli può non essere disponibile per dipendenti non collegati.
@@ -86,8 +78,10 @@ riavvio.
 - La ricerca collettiva delle buste paga confronta soltanto anno, mese e presenza del metadato
   sulle pagine payroll registrate; non interpreta il contenuto della busta ed è bounded
   a 500 dipendenti per esecuzione.
-- La risposta elenco DiC corrente non espone il netto mensile. Tabelle ed export indicano `N/D`:
-  il bot non ricava né stima il valore da metadati di busta paga.
+- La risposta elenco DiC non espone il netto mensile. La tabella composta organico/contratto/netto
+  visita serialmente la pagina payroll di ogni ID, usa un mese esplicito o l'ultima paga con netto
+  disponibile e lascia `N/D` soltanto quando il dato non esiste. Gli export preparati dal workflow
+  write restano separati e non vengono arricchiti implicitamente.
 - Ricerca, filtri, ordinamento e paginazione sono deterministici nel mock; effetti
   e limiti live (debounce, page size, combinazioni di filtri) non sono verificati.
 - Il nome visualizzato completo è intenzionalmente disponibile come `SecretStr` transitorio per
@@ -109,6 +103,15 @@ riavvio.
 - `EMP-CREATE-001` è `PARTIALLY_COMPLETED`: il mock copre lo schema completo, mentre il live
   accetta solo il subset riconciliabile. `birth_date`, `iban`, `phone`, `address` e `notes` sono
   rifiutati prima della creazione del pending.
+- `EMP-ONBOARD-001` esegue OCR esclusivamente in locale, dopo quarantena/MIME/ClamAV, e conserva
+  per massimo 15 minuti solo una bozza actor-bound in memoria. Non invia immagini, testo OCR o
+  dati estratti al provider. Accetta JPEG/PNG; PDF non è supportato nel runtime corrente.
+- La bozza completa non viene trasformata automaticamente in `EMP-CREATE-001`: il percorso DiC
+  osservato non offre una creazione atomicamente inattiva. Creare un profilo attivo e tentare poi
+  una disattivazione sarebbe una write parziale non transazionale e resta vietato.
+- L'eliminazione definitiva DiC è irreversibile e il dialog live richiede anche il nominativo;
+  finché selettore, postcondizione e conferma sono nuovamente verificati, non usare dati reali per
+  convalidare `EMP-DELETE-001`.
 - L'upload documenti richiede un file risolto sotto la root controllata e la capability ClamAV.
   Il pending conserva soltanto l'`upload_id`: path locale e SHA-256 non entrano in eventi, log,
   Discord o al provider di modello. Lo SHA-256 è visibile esclusivamente all'operatore locale nei
@@ -135,9 +138,9 @@ semantica, permessi e postcondizioni.
 
 ## Provider di modello e persona
 
-- Il router supporta OpenAI, Groq e llama/OpenAI-compatible. Groq con
-  `openai/gpt-oss-120b` ha superato il probe live chiuso sul server; quota, latenza nel tempo e gli
-  altri provider/modelli restano verifiche separate.
+- Il router supporta OpenAI, Groq e llama/OpenAI-compatible. Disponibilità, quota e latenza del
+  provider configurato devono essere verificate nell'ambiente senza promuovere automaticamente
+  DIC o Discord a disponibili.
 - Il runtime llama locale, il modello e la protezione della porta sono responsabilità
   dell'operatore e non vengono installati da BH-DiC.
 - Il provider vede categorie semantiche canoniche, sole date ISO necessarie e segnaposto; ogni
@@ -162,11 +165,9 @@ semantica, permessi e postcondizioni.
   processo/container non sono verificati.
 - La riconciliazione può essere eseguita anche dopo kill switch o scadenza
   dell'approvazione, ma richiede comunque accesso read al tenant.
-- Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime e doctor
-  offline/online sono stati verificati sul Debian target. La versione 0.3.0 allo SHA esatto
-  documentato ha superato il gate applicativo live; il servizio è `active/running`, con zero
-  riavvii osservati, gateway `discord_ready` e messaggio startup outbound inviato. Un nuovo
-  round-trip inbound manuale Discord, restore drill e carico reale restano da verificare sul target.
+- Python 3.12, dipendenze, migrazione, Chromium Playwright, ClamAV, directory runtime, doctor,
+  stato systemd, startup outbound, round-trip inbound, restore drill e carico reale sono gate
+  distinti da ripetere nell'ambiente. Il superamento di uno non dimostra gli altri.
 
 ## Criterio per rimuovere una limitazione
 

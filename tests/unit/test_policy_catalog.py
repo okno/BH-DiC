@@ -33,6 +33,7 @@ EXPECTED_IDS = frozenset(
         "EMP-PAY-001",
         "EMP-PAY-002",
         "EMP-DOC-001",
+        "EMP-ONBOARD-001",
         "EMP-UPDATE-001",
         "EMP-CREATE-001",
         "EMP-CONTRACT-002",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import date
 from io import BytesIO
 
@@ -22,7 +22,7 @@ from bh_dic.dic.errors import (
 from bh_dic.discord.checks import DiscordAccessDenied, DiscordActor, DiscordGate
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import AttachmentPayload, InteractionCoordinator, InteractionResult
-from bh_dic.discord.views import ApprovalView
+from bh_dic.discord.views import ApprovalView, EmployeeSelectView, OnboardingDraftView
 from bh_dic.errors import ApplicationPolicyDenied
 from bh_dic.hr_assistant import HrRequestInputError
 from bh_dic.language import BotLanguageProfile
@@ -86,6 +86,71 @@ class BHCommandGroup(app_commands.Group):
     def approval_view(self, action_id: str) -> ApprovalView:
         return ApprovalView(action_id, self._approve_from_view, self._reject_from_view)
 
+    def result_view(
+        self,
+        result: InteractionResult,
+        *,
+        requester_user_id: int,
+    ) -> discord.ui.View | None:
+        control_count = sum(
+            (
+                bool(result.action_id),
+                bool(result.employee_selection),
+                result.onboarding_form is not None,
+            )
+        )
+        if control_count > 1:
+            raise RuntimeError("a result cannot combine interactive control types")
+        if result.action_id:
+            return self.approval_view(result.action_id)
+        if result.employee_selection:
+            if result.employee_selection_context_id is None:
+                raise RuntimeError("employee selection is missing its immutable context")
+            choices = tuple(
+                (option.employee_id, option.label) for option in result.employee_selection
+            )
+            return EmployeeSelectView(
+                choices,
+                self._select_employee_from_view,
+                context_id=result.employee_selection_context_id,
+                requester_user_id=requester_user_id,
+            )
+        if result.onboarding_form is not None:
+            return OnboardingDraftView(
+                result.onboarding_form.draft_id,
+                result.onboarding_form.field_names,
+                self._complete_onboarding_from_view,
+                requester_user_id=requester_user_id,
+            )
+        return None
+
+    async def _select_employee_from_view(
+        self,
+        interaction: discord.Interaction,
+        context_id: str,
+        employee_id: str,
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.select_employee(actor, context_id, employee_id),
+            publish_sensitive=self._publish_sensitive_channel_responses,
+        )
+
+    async def _complete_onboarding_from_view(
+        self,
+        interaction: discord.Interaction,
+        draft_id: str,
+        values: Mapping[str, str],
+    ) -> None:
+        await self._send(
+            interaction,
+            lambda actor: self._coordinator.complete_onboarding_draft(
+                actor,
+                draft_id,
+                values,
+            ),
+        )
+
     @staticmethod
     def _files(result: InteractionResult) -> list[discord.File]:
         return [
@@ -119,9 +184,7 @@ class BHCommandGroup(app_commands.Group):
                 deferred_ephemeral = not publish_sensitive
             result = await operation(actor)
             delivery_ephemeral = result.ephemeral and not publish_sensitive
-            view: discord.ui.View | None = None
-            if result.action_id:
-                view = self.approval_view(result.action_id)
+            view = self.result_view(result, requester_user_id=interaction.user.id)
             embed = result_embed(result, self._language_profile)
             if not result.ephemeral and deferred_ephemeral:
                 # Discord fixes the privacy of the deferred original response.
@@ -427,6 +490,62 @@ class BHCommandGroup(app_commands.Group):
                 str(category),
                 payload,
             )
+
+        await self._send(interaction, operation)
+
+    @app_commands.command(
+        name="onboarding-documenti",
+        description="Estrae localmente una bozza dipendente da documenti JPEG/PNG",
+    )
+    @app_commands.describe(
+        documento="Fronte o documento principale",
+        documento_2="Seconda facciata opzionale",
+        documento_3="Terzo documento opzionale",
+        documento_4="Quarto documento opzionale",
+    )
+    async def onboarding_documents_command(
+        self,
+        interaction: discord.Interaction,
+        documento: discord.Attachment,
+        documento_2: discord.Attachment | None = None,
+        documento_3: discord.Attachment | None = None,
+        documento_4: discord.Attachment | None = None,
+    ) -> None:
+        attachments = tuple(
+            item for item in (documento, documento_2, documento_3, documento_4) if item is not None
+        )
+
+        async def operation(actor: DiscordActor) -> InteractionResult:
+            total_size = sum(attachment.size for attachment in attachments)
+            if total_size > self._upload_max_bytes:
+                return InteractionResult(
+                    title="Allegati troppo grandi",
+                    description=(
+                        "La dimensione cumulativa dei documenti supera il limite di upload "
+                        "configurato."
+                    ),
+                    success=False,
+                )
+            payloads: list[AttachmentPayload] = []
+            for attachment in attachments:
+                if attachment.size > self._upload_max_bytes:
+                    return InteractionResult(
+                        title="Allegato troppo grande",
+                        description="Un documento supera il limite di upload configurato.",
+                        success=False,
+                    )
+                content = await attachment.read(use_cached=True)
+                if len(content) != attachment.size:
+                    raise ValueError("dimensione allegato incoerente")
+                payloads.append(
+                    AttachmentPayload(
+                        original_filename=attachment.filename,
+                        content_type=attachment.content_type,
+                        declared_size=attachment.size,
+                        content=content,
+                    )
+                )
+            return await self._coordinator.onboard_documents(actor, tuple(payloads))
 
         await self._send(interaction, operation)
 

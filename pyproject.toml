@@ -23,6 +23,7 @@ dependencies = [
   "discord.py>=2.7,<3",
   "openai>=3,<4",
   "openpyxl>=3.1.5,<4",
+  "Pillow>=12.3,<13",
   "playwright>=1.62,<2",
   "pydantic>=2.13,<3",
   "pydantic-settings>=2.15,<3",

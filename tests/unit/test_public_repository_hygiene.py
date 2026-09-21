@@ -59,8 +59,14 @@ def test_public_documents_do_not_embed_operational_discord_identifiers() -> None
     tracked_text = _tracked_public_text_corpus()
 
     assert re.search(r"(?<!\d)\d{17,20}(?!\d)", corpus) is None
-    assert ("1303955635" + "984924722") not in tracked_text
-    assert ("#" + "mng" + "-ai").casefold() not in tracked_text.casefold()
+    assert (
+        re.search(
+            r"\b(?:10\.(?:\d{1,3}\.){2}\d{1,3}|192\.168\.(?:\d{1,3}\.)\d{1,3}|"
+            r"172\.(?:1[6-9]|2\d|3[01])\.(?:\d{1,3}\.)\d{1,3})\b",
+            tracked_text,
+        )
+        is None
+    )
     assert "<DISCORD_GUILD_ID>" in corpus
     assert "<DISCORD_CHANNEL_ID>" in corpus
 
@@ -98,19 +104,25 @@ def test_public_codeql_workflow_uploads_security_results() -> None:
     assert "upload:" + " never" not in workflow
 
 
-def test_documented_live_status_matches_the_observed_transport_and_auth_gates() -> None:
-    status_files = (
-        ROOT / "README.md",
-        ROOT / "docs" / "IMPLEMENTATION_REPORT.md",
-        ROOT / "docs" / "LIVE_VERIFICATION_STATUS.md",
-        ROOT / "docs" / "OPERATIONS.md",
+def test_public_documents_do_not_publish_deployment_snapshots() -> None:
+    corpus = _public_document_corpus()
+    snapshot_patterns = (
+        r"\b[0-9a-f]{40}\b",
+        r"\bactive/running\b",
+        r"zero\s+riavvii\s+osservati",
+        r"production\s+gate\s+returned",
+        r"observation\s+window\s*:",
+        r"ultimo\s+gate\s*:",
+        r"stato\s+osservato\s+al",
+        r"target\s+verificato\s+eseguiva",
+        r"gateway\s+`discord_ready`",
+        r"\b[0-9]+/[0-9]+\s+record\s+nel\s+gate\b",
     )
 
-    for path in status_files:
-        text = path.read_text(encoding="utf-8")
-        assert "VERIFIED_BY_ADAPTER" in text, path
-        assert "0.3.0" in text, path
-        assert "TEAMSYSTEM_EMAIL" in text, path
-        assert "sessionStorage" in text, path
-        assert "DEGRADED" in text, path
-        assert "RBAC" in text, path
+    assert all(
+        re.search(pattern, corpus, flags=re.IGNORECASE) is None for pattern in snapshot_patterns
+    )
+
+    implementation_report = (ROOT / "docs" / "IMPLEMENTATION_REPORT.md").read_text(encoding="utf-8")
+    assert "registro\noperativo privato" in implementation_report
+    assert "non devono essere copiati" in implementation_report

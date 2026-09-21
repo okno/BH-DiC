@@ -16,10 +16,23 @@ UPLOAD_RETENTION_HOURS=24
 UPLOAD_ALLOWED_MIME_TYPES=application/pdf,image/jpeg,image/png
 CLAMAV_REQUIRED=true
 CLAMAV_SOCKET=
+OCR_TESSERACT_EXECUTABLE=tesseract
+OCR_TIMEOUT_SECONDS=20
 ```
 
 `EMP-DOC-002` additionally requires the `DOCUMENT_OPERATOR` role, the global and specific flags,
 an available `clamav` capability, a redacted preview and confirmation.
+
+`EMP-ONBOARD-001` is a separate, non-writing workflow for HR write users. `/bh
+onboarding-documenti` accepts one to four JPEG/PNG images, applies this same quarantine and ClamAV
+pipeline, then invokes local Tesseract (`ita+eng`). Raw OCR text and document bytes never reach the
+model provider. Extracted fields live only in an actor/guild/channel-bound in-memory draft for at
+most 15 minutes; missing fields can be completed through an ephemeral Discord modal. I campi
+mostrati nel modal/embed ephemeral sono soggetti alla retention e alle policy di Discord, quindi
+non esistono soltanto nella memoria del processo una volta consegnati al client. Conflicts are never
+auto-resolved. A complete draft is not evidence that DiC created a person. L'ingresso cumulativo è
+limitato da `UPLOAD_MAX_MB`, ogni immagine è limitata a 25 milioni di pixel e il file viene spostato
+atomicamente in `processed` prima dell'OCR, anche quando l'estrazione fallisce.
 
 ## Directory layout and permissions
 

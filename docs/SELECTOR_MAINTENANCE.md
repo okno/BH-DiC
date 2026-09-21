@@ -150,7 +150,7 @@ Controlli locali, esclusivamente sintetici:
 ```
 
 La ricognizione della struttura login/attestazione non equivale a uno smoke delle Function ID. Il
-gate completo del 2026-08-24 ha coperto le risorse elencate in `DIC_LIVE_READ_COVERAGE.md`; non
+gate di ogni rollout deve coprire le risorse elencate in `DIC_LIVE_READ_COVERAGE.md`; non
 autorizza write né garantisce compatibilità dopo un drift UI/API. Ogni nuovo smoke live
 read-only deve usare `ENABLE_WRITE_ACTIONS=false`, un tenant atteso esplicito, nessun
 download/upload, una query bounded e al massimo l'apertura delle route censite. Registrare solo

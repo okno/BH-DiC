@@ -1,21 +1,12 @@
 # Deployment
 
-## Stato corrente
+## Stato e responsabilità
 
-La preparazione su Debian 12 in `/opt/bh-dic` è completata. Sono stati verificati Python 3.12
-installato senza sostituire il Python di sistema, virtualenv e dipendenze, migrazione SQLite,
-directory runtime private, Chromium Playwright, ClamAV tramite socket `0660`, audit, smoke mock,
-doctor offline/online e Groq `openai/gpt-oss-120b` con `model-check --live`.
-
-Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` è stato distribuito e ha superato il gate
-live autorizzato in sola lettura per autenticazione/tenant ed ogni risorsa read implementata. Il
-servizio è risultato `active/running`, con zero riavvii osservati, gateway `discord_ready` e
-messaggio startup outbound inviato con DiC disponibile. Non confondere questi PASS con un
-round-trip inbound, che deve essere iniziato da un utente Discord reale autorizzato.
-Gli hotfix successivi di soli script operativi o documentazione hanno gate/deployment separati e
-non cambiano retroattivamente l'evidenza DIC associata a quello SHA.
-`ENABLE_WRITE_ACTIONS=false`, `ENABLE_LIVE_WRITE_TESTS=false` e tutte le flag write specifiche
-restano `false`.
+Questo è un runbook generico. La repository non dichiara quale revisione sia installata né lo
+stato di alcun server. Prima di ogni rollout verificare privatamente Python, virtualenv,
+dipendenze, migrazioni, directory, Chromium, ClamAV, audit, doctor e provider. Conservare SHA,
+host, esiti e rollback nel change ticket dell'ambiente. Le write devono restare disabilitate salvo
+autorizzazione distinta.
 
 ## Gate SSH
 
@@ -147,8 +138,7 @@ resta bloccante; l'indisponibilità della sola sessione DIC è invece uno stato 
 - `.env.example` presente; `.env` assente o protetto e valorizzato localmente;
 - directory e file con i permessi documentati;
 - `doctor.sh` riuscito, con risultato online separato se autorizzato;
-- gestore systemd unico; nello snapshot corrente il servizio è `active/running`, con zero riavvii
-  osservati e gateway `discord_ready`, in attesa del solo smoke Discord autorizzato;
+- gestore systemd unico e stato verificato nel change ticket privato;
 - `/bh status` con provider/modello, stato API e token cumulativi locali; totale organico pubblico
   con `READ_ONLY`, scadenze individuali ephemeral con ruolo dedicato `HR_READ`;
 - nessun processo Chromium/Playwright residuo;

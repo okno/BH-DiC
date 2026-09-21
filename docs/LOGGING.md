@@ -73,6 +73,12 @@ timestamp e contatori esatti quando disponibili. Prompt, testo utente, Employee 
 non devono apparire né nella tabella né nei JSONL. `/bh status` espone soltanto aggregati locali e
 gap; non stampare righe SQL per diagnosticarli.
 
+Un fallimento del router produce `intent_route_provider_failed` con soli metadati chiusi:
+provider/modello, `failure_kind`, presenza della risposta e dei contatori, numero di Function ID
+candidati e disponibilità di un fallback locale. Prompt, nome cercato e risposta provider non sono
+inclusi. `UNAVAILABLE` significa che il provider ha risposto senza contatori validi: il runtime non
+può ricostruirli né deve stimarli.
+
 ## Correlazione e incidenti
 
 Usare correlation ID e action ID, mai PII, per attraversare componenti. Gli eventi di deny,

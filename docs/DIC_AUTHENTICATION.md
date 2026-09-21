@@ -30,39 +30,14 @@ tenant DIC vengono attestati esattamente, senza compilare credenziali. La route
 `/Account/LoginPasswordExpired` viene riconosciuta soltanto per produrre un errore
 fail-closed che richiede rinnovo umano.
 
-Una ricognizione live autorizzata in sola lettura ha osservato questa struttura e
-la schermata `PasswordExpired`. La password TeamSystem è stata poi rinnovata nel
-flusso umano e il secret locale è stato aggiornato. Il primo
-`dic-auth-check --live` della release 0.2.2 si è fermato prima dell'autenticazione per una race di
-hydration classificata `DicUiChangedError`: non ha creato un vault e non ha
-eseguito Function ID HR. La 0.2.3 ha corretto quel percorso, ma il tentativo successivo si è
-fermato fail-closed allo stage `DIC_EMAIL`: il placeholder pubblico corrispondeva sia al componente
-padre sia all'input nativo. La 0.2.4 restringe il target all'unico input nativo nel contenitore
-pubblico `data-testid="login-email"`. Il tentativo server 0.2.4 ha inviato la password una sola
-volta, ma ha classificato come inattesa la callback DIC legittima e si è fermato con exit 78.
-Una successiva verifica manuale autorizzata, in browser fresco e in sola lettura, ha accettato le
-credenziali con un solo submit e ha osservato password TeamSystem → callback DIC esatta → dashboard
-→ route e marker esatti della lista dipendenti. Dopo il deployment 0.2.5, un singolo check headless
-ha restituito sessione `AUTHENTICATED`, tenant `VERIFIED_BY_ADAPTER` e ha creato un vault cifrato,
-ma non ne ha dimostrato la durabilità al riavvio.
-Il riavvio successivo ha evidenziato due limiti ora corretti: DIC passa a TeamSystem un
-`login_hint`, quindi l'IdP può saltare direttamente a `LoginPassword`, e i token federati DIC
-risiedono in `sessionStorage`, che il solo `storage_state` Playwright non conserva. Dalla 0.2.7
-entrambe le transizioni TeamSystem esatte sono ammesse; prima del segreto il form è vincolato
-all'account configurato e il vault cifrato include anche lo snapshot bounded della sola origine
-DIC. Il normale gateway non invia credenziali e resta disponibile `DEGRADED` se il restore manca.
-Il successivo check server della 0.2.7 si è fermato a `TEAMSYSTEM_EMAIL`: l'interfaccia pubblica
-corrente espone anche la schermata e-mail sulla root TeamSystem esatta e l'OIDC attraversa le
-route esatte `connect/authorize`/`connect/authorize/callback`. La 0.2.8 tratta questi
-soli stati come documentato sopra. Se una sessione IdP già valida completa il SSO senza schermate
-credenziali, il percorso è accettato soltanto dopo route applicativa DIC, marker autenticato e
-attestazione tenant esatta, con zero fill/click/submit sui controlli e-mail/password.
-
-La 0.3.0 conserva questi confini e aggiunge l'osservazione passiva della risposta elenco e la
-ripersistenza di una sessione già attestata. Sul target Debian lo SHA esatto
-`c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe` ha poi superato un unico gate live autorizzato in sola
-lettura: autenticazione e tenant sono stati attestati prima delle due letture bounded. Questo
-risultato non autorizza write, non estende le route ammesse e non attesta il trasporto Discord.
+Il flusso usa l'unico input nativo sotto `data-testid="login-email"`, tratta la callback DIC come
+stato transitorio bounded e ammette `login_hint` soltanto attraverso le route esatte elencate.
+Prima del segreto, il form password deve riferirsi all'account configurato. Il vault cifrato
+include cookie/localStorage e uno snapshot bounded di `sessionStorage` della sola origine DIC.
+Il gateway normale non invia credenziali e resta `DEGRADED` quando il restore manca. Una sessione
+IdP già valida può completare SSO senza form soltanto dopo route applicativa, marker autenticato e
+attestazione tenant esatta, senza azioni sui controlli e-mail/password. Questi contratti devono
+essere verificati privatamente sulla revisione distribuita; il repository non conserva esiti live.
 
 Discord e il provider di modello non ricevono credenziali, cookie, `storage_state`, primitive
 Playwright, righe dipendente, nomi, Employee ID, risultati DIC o una funzione di navigazione
@@ -125,7 +100,7 @@ non commettere `.env`, chiavi, cookie o file di sessione.
    resta singolo. I segreti sono compilati direttamente nei controlli previsti.
    Non espone primitive di navigazione arbitrarie. Il campo e-mail DIC usa l'unico
    input nativo sotto il contenitore pubblico `data-testid="login-email"`, evitando
-   il placeholder che nella 0.2.3 risolveva anche il componente padre. Il submit DIC
+   placeholder che possano risolvere anche il componente padre. Il submit DIC
    usa prima il `data-testid` e poi il fallback pubblico verificato
    `button`/`Accedi` esatto.
 5. Una sessione TeamSystem già autenticata può saltare entrambe le schermate credenziali. Questo
@@ -182,23 +157,22 @@ l'endpoint e non usa la risposta per funzioni HR.
 
 ## Lettura passiva dell'elenco dipendenti
 
-La 0.3.0 applica lo stesso principio di osservazione passiva alla lista dipendenti. Playwright
+L'adapter applica lo stesso principio di osservazione passiva alla lista dipendenti. Playwright
 installa un listener bounded prima di una navigazione o azione UI deterministica e accetta
 soltanto la risposta che la pagina emette su origine esatta
 `https://secure.dipendentincloud.it`, path esatto `/backend_apiV2/employees`, metodo `GET`, status
 `200` e media type JSON. BH-DiC non costruisce né invia una richiesta HTTP diretta a questo path.
 
-Il contratto URL della risposta e quello del paginator sono distinti. Una diagnostica live
-autorizzata e minimizzata ha osservato che `path`, gli URL di prima/ultima/pagina
-precedente/successiva e gli URL non nulli di `links` usano la stessa origine HTTPS esatta ma il
-path `/employees`. Il campo `path` resta privo di query; ogni URL pagina non nullo preserva invece
+Il contratto URL della risposta e quello del paginator sono distinti. `path`, gli URL di
+prima/ultima/pagina precedente/successiva e gli URL non nulli di `links` devono usare la stessa
+origine HTTPS esatta ma il path `/employees`. Il campo `path` resta privo di query; ogni URL pagina
+non nullo preserva invece
 l'intera query UI validata di nove parametri e può cambiare soltanto il valore canonico di `page`.
 I boundary precedente/successivo e il link attivo vengono correlati alla pagina corrente e
 all'ultima pagina senza fidarsi delle label visuali. Il parser rifiuta userinfo, porta esplicita,
 fragment, origin o path lookalike e anche la sostituzione reciproca dei due path. Ogni difformità
-produce un errore generico fail-closed senza includere URL, query, body o PII. Questo contratto è
-stato attraversato dal gate live bounded della 0.3.0; restano separate e non verificate le altre
-modalità read e lo smoke del trasporto Discord.
+produce un errore generico fail-closed senza includere URL, query, body o PII. Ogni ambiente deve
+ripetere il gate bounded e il round-trip Discord come verifiche separate.
 
 La query catturata deve corrispondere all'azione UI appena eseguita: pagina, page size fisso,
 ricerca, campi di ricerca, ordinamento e filtro `active` sono confrontati con un insieme chiuso.
@@ -283,15 +257,9 @@ sovrascrivono il vault.
 
 Se la sessione manca, scade o il vault è illeggibile, il gateway resta online in stato `DEGRADED`,
 preserva il file e le funzioni DIC falliscono chiuso. Il check esplicito continua invece a
-rifiutare un vault illeggibile finché l'operatore non decide se conservarlo o invalidarlo. Questa composizione è testata
-localmente. I tentativi 0.2.2 e 0.2.3 si
-sono fermati prima del submit password; la 0.2.4 ha raggiunto la callback DIC dopo un singolo
-submit, ma l'ha rifiutata fail-closed. Un successivo check headless ha confermato autenticazione e
-tenant nel contesto corrente; la 0.2.7 corregge il ripristino completo dopo il riavvio. Il check
-server 0.2.7 successivo si è fermato a `TEAMSYSTEM_EMAIL`; la 0.2.8 ha ampliato soltanto il
-contratto di route esatte descritto sopra. Il gate live bounded della 0.3.0 ha successivamente
-verificato autenticazione, tenant e letture riuscite sullo SHA documentato, senza abilitare write.
-Un errore di persistenza dopo autenticazione verificata non viene interpretato
+rifiutare un vault illeggibile finché l'operatore non decide se conservarlo o invalidarlo. Questa
+composizione è testata localmente; la compatibilità live va riprovata nel change privato. Un errore
+di persistenza dopo autenticazione verificata non viene interpretato
 come logout: resta un esito `CREDENTIAL_SUBMIT` sconosciuto, senza secondo login automatico.
 
 `/bh dic reconnect` è ephemeral, è limitato al guild/canale configurato e richiede
@@ -337,20 +305,10 @@ La sequenza non riavvia il servizio. Su un host PID-only fermare e verificare pr
 `--live` costruisce il runtime browser, prova prima il ripristino mediante la
 route read-only fissa, esegue il login allowlisted solo se necessario, verifica
 marker autenticato e attestazione tenant, persiste il vault e chiude sempre il
-runtime. Può quindi contattare DIC e TeamSystem e attivare MFA/CAPTCHA. Dopo il
-rinnovo della password, il tentativo 0.2.2 si è fermato fail-closed prima
-dell'autenticazione per hydration incompleta. Il tentativo 0.2.3 ha superato quel punto ma si è
-fermato allo stage `DIC_EMAIL` per l'ambiguità padre/input del placeholder. La 0.2.4 usa il target
-nativo univoco, ha effettuato un solo submit e ha poi rifiutato la callback DIC legittima con exit
-78. La 0.2.5 corregge esclusivamente questo stato transitorio e l'attesa bounded del marker.
-Il check autorizzato 0.2.5 è stato eseguito una sola volta con bot fermo e write disabilitate e ha
-verificato autenticazione, tenant e scrittura del vault nel processo corrente; il riavvio ha poi
-evidenziato il campo `sessionStorage` mancante, corretto nella 0.2.7. Un check 0.2.7 successivo si è
-fermato prima delle azioni credenziali a `TEAMSYSTEM_EMAIL`; la 0.2.8 ha corretto il solo contratto
-TeamSystem/OIDC. Infine, il gate live unico della 0.3.0 sullo SHA documentato ha verificato
-autenticazione e tenant prima delle letture bounded, mantenendo tutte le write disabilitate. In
-assenza del flag il codice live non viene invocato; per futuri rinnovi o invalidazioni resta
-obbligatoria la stessa procedura singola.
+runtime. Può quindi contattare DIC e TeamSystem e attivare MFA/CAPTCHA. In assenza dell'opt-in il
+codice live non viene invocato. Ogni rinnovo o invalidazione richiede una sola procedura esplicita,
+bot fermo, write disabilitate e registrazione privata dell'esito; un outcome incerto vieta il
+retry automatico.
 
 ## Invalidazione e rotazione
 
@@ -412,10 +370,9 @@ non rilanciarlo in loop e verificare lo stato dell'account con una procedura uma
 La 0.2.8 non cambia questa regola: il percorso SSO senza credenziali è accettato solo
 dopo marker e tenant e non autorizza un retry quando l'esito del submit è incerto.
 
-Il caso osservato nella 0.2.4 è stato ricondotto alla callback DIC legittima non ancora
-allowlistata, non allo user agent: la 0.2.5 conserva lo user agent Chromium nativo e non introduce
-spoofing. Un nuovo `CREDENTIAL_SUBMIT` dopo l'aggiornamento resta comunque un esito sconosciuto e
-impone nuovamente lo stop, senza tentativi aggiuntivi.
+La callback DIC legittima è uno stato transitorio allowlisted; lo user agent resta quello Chromium
+nativo e non viene introdotto spoofing. Un `CREDENTIAL_SUBMIT` resta comunque un esito sconosciuto
+e impone lo stop, senza tentativi aggiuntivi.
 
 In caso di errore:
 

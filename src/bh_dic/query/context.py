@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -26,8 +27,12 @@ _ORDINALS = {
     "quinta": 5,
 }
 _ORDINAL = re.compile(
-    r"(?i)\b(?:il|la|l['\u2019])?\s*(primo|prima|secondo|seconda|terzo|terza|"
-    r"quarto|quarta|quinto|quinta)\b"
+    r"(?i)^(?:(?:apri|usa|scegli|seleziona)\s+)?(?:il|la|l['\u2019])?\s*"
+    r"(primo|prima|secondo|seconda|terzo|terza|quarto|quarta|quinto|quinta)$"
+)
+_SELECTION_CONTEXT_ID = re.compile(r"^[0-9a-f]{32}$")
+_DIRECT_EMPLOYEE_ID = re.compile(
+    r"(?i)^(?:(?:employee|dipendente)\s*id|id)?\s*[:#]?\s*([A-Za-z0-9_-]{1,64})$"
 )
 _BARE_EMPLOYEE_REFERENCE = re.compile(
     r"^(?:[A-Za-z0-9][A-Za-z0-9_-]{0,63}|"
@@ -82,6 +87,12 @@ class PendingEmployeeTarget:
     expires_at: float
 
 
+@dataclass(frozen=True, slots=True)
+class EmployeeSelectionContext:
+    key: ConversationKey
+    context: ConversationContext
+
+
 class ConversationContextStore:
     """LRU/TTL store isolated by user, guild and transport conversation."""
 
@@ -105,6 +116,7 @@ class ConversationContextStore:
         self._clock = clock
         self._items: OrderedDict[ConversationKey, ConversationContext] = OrderedDict()
         self._pending_targets: OrderedDict[ConversationKey, PendingEmployeeTarget] = OrderedDict()
+        self._selection_contexts: OrderedDict[str, EmployeeSelectionContext] = OrderedDict()
 
     @staticmethod
     def _validated_context_parameters(
@@ -128,7 +140,7 @@ class ConversationContextStore:
         *,
         function_id: str,
         parameters: Mapping[str, object] | None = None,
-    ) -> None:
+    ) -> str:
         if not candidate_employee_ids or len(candidate_employee_ids) > self._max_candidates:
             raise ValueError("candidate result set is empty or exceeds the bound")
         validated_ids = tuple(validate_employee_id(item) for item in candidate_employee_ids)
@@ -139,16 +151,23 @@ class ConversationContextStore:
         safe_parameters = self._validated_context_parameters(parameters)
         now = self._clock()
         self._purge_expired(now)
-        self._items[key] = ConversationContext(
+        context = ConversationContext(
             candidate_employee_ids=validated_ids,
             function_id=function_id,
             parameters=safe_parameters,
             expires_at=now + self._ttl_seconds,
         )
+        self._items[key] = context
         self._pending_targets.pop(key, None)
         self._items.move_to_end(key)
         while len(self._items) > self._max_conversations:
             self._items.popitem(last=False)
+        context_id = uuid.uuid4().hex
+        self._selection_contexts[context_id] = EmployeeSelectionContext(key, context)
+        self._selection_contexts.move_to_end(context_id)
+        while len(self._selection_contexts) > self._max_conversations:
+            self._selection_contexts.popitem(last=False)
+        return context_id
 
     def remember_pending_target(
         self,
@@ -201,24 +220,89 @@ class ConversationContextStore:
     def selection(
         self, key: ConversationKey, request: str
     ) -> tuple[str, ConversationContext] | None:
-        match = _ORDINAL.search(request)
-        if match is None:
-            return None
         now = self._clock()
         self._purge_expired(now)
         context = self._items.get(key)
         if context is None:
             return None
-        ordinal = _ORDINALS[match.group(1).casefold()]
-        if ordinal > len(context.candidate_employee_ids):
+        match = _ORDINAL.fullmatch(" ".join(request.strip().split()))
+        selected: str | None = None
+        if match is not None:
+            ordinal = _ORDINALS[match.group(1).casefold()]
+            if ordinal <= len(context.candidate_employee_ids):
+                selected = context.candidate_employee_ids[ordinal - 1]
+        else:
+            direct = _DIRECT_EMPLOYEE_ID.fullmatch(" ".join(request.strip().split()))
+            if direct is not None:
+                try:
+                    candidate = validate_employee_id(direct.group(1))
+                except ValueError:
+                    candidate = ""
+                if candidate in context.candidate_employee_ids:
+                    selected = candidate
+        if selected is None:
             return None
         self._items.move_to_end(key)
-        return context.candidate_employee_ids[ordinal - 1], context
+        return selected, context
+
+    def activate_selection_context(
+        self,
+        key: ConversationKey,
+        context_id: str,
+        employee_id: str,
+    ) -> bool:
+        """Restore the immutable context which produced one Discord selection menu."""
+
+        if _SELECTION_CONTEXT_ID.fullmatch(context_id) is None:
+            return False
+        try:
+            selected = validate_employee_id(employee_id)
+        except ValueError:
+            return False
+        now = self._clock()
+        self._purge_expired(now)
+        snapshot = self._selection_contexts.get(context_id)
+        if (
+            snapshot is None
+            or snapshot.key != key
+            or selected not in snapshot.context.candidate_employee_ids
+        ):
+            return False
+        self._selection_contexts.move_to_end(context_id)
+        self._items[key] = snapshot.context
+        self._items.move_to_end(key)
+        return True
+
+    def candidate_context(self, key: ConversationKey, request: str) -> ConversationContext | None:
+        """Return an opaque candidate set for a bounded bare surname/name follow-up."""
+
+        normalized = " ".join(request.strip().split())
+        first_word = normalized.split(maxsplit=1)[0].casefold() if normalized else ""
+        if (
+            not normalized
+            or len(normalized) > 128
+            or _BARE_EMPLOYEE_REFERENCE.fullmatch(normalized) is None
+            or first_word in _NEW_REQUEST_MARKERS
+        ):
+            return None
+        now = self._clock()
+        self._purge_expired(now)
+        context = self._items.get(key)
+        if context is not None:
+            self._items.move_to_end(key)
+        return context
 
     def clear(self, key: ConversationKey) -> bool:
         candidate_removed = self._items.pop(key, None) is not None
         pending_removed = self._pending_targets.pop(key, None) is not None
-        return candidate_removed or pending_removed
+        selection_ids = [
+            context_id
+            for context_id, snapshot in self._selection_contexts.items()
+            if snapshot.key == key
+        ]
+        for context_id in selection_ids:
+            self._selection_contexts.pop(context_id, None)
+        return candidate_removed or pending_removed or bool(selection_ids)
 
     def _purge_expired(self, now: float) -> None:
         expired = [key for key, value in self._items.items() if value.expires_at <= now]
@@ -229,11 +313,19 @@ class ConversationContextStore:
         ]
         for key in pending_expired:
             self._pending_targets.pop(key, None)
+        expired_selections = [
+            context_id
+            for context_id, snapshot in self._selection_contexts.items()
+            if snapshot.context.expires_at <= now
+        ]
+        for context_id in expired_selections:
+            self._selection_contexts.pop(context_id, None)
 
 
 __all__ = [
     "ConversationContext",
     "ConversationContextStore",
     "ConversationKey",
+    "EmployeeSelectionContext",
     "PendingEmployeeTarget",
 ]

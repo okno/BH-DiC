@@ -1,9 +1,8 @@
 # Current architecture audit
 
-Baseline audited on 2026-08-24 at commit
-`98b03932ca1bf548bff44a82a1fedd976e5603d0` (`main`). This document describes
-the implementation as it exists before the conversational-navigation refactor.
-It is evidence, not a declaration of live tenant coverage.
+This document preserves the pre-refactor architecture analysis using only synthetic evidence. It
+does not identify a deployed revision or declare live tenant coverage. Current behavior is
+documented in `QUERY_PLANNER.md` and must be verified from the code and tests.
 
 ## Verified baseline
 

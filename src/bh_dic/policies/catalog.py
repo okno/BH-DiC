@@ -130,6 +130,7 @@ class FunctionSpec:
     deletes_resource: bool = False
     always_effectful: bool = False
     operator_live_available: bool = True
+    adapter_managed: bool = True
 
     @property
     def is_write(self) -> bool:
@@ -192,6 +193,9 @@ def _read(
     action_class: ActionClass = ActionClass.READ,
     sensitivity: Sensitivity = Sensitivity.MEDIUM,
     target: bool = False,
+    expose: bool = True,
+    capabilities: frozenset[str] = frozenset(),
+    adapter_managed: bool = True,
 ) -> FunctionSpec:
     return FunctionSpec(
         function_id,
@@ -202,6 +206,9 @@ def _read(
         role_rules,
         requires_target=target,
         enabled_by_default=True,
+        expose_to_model=expose,
+        required_capabilities=capabilities,
+        adapter_managed=adapter_managed,
     )
 
 
@@ -370,6 +377,15 @@ _SPECS = (
         DOCS_READ,
         sensitivity=Sensitivity.HIGH,
         target=True,
+    ),
+    _read(
+        "EMP-ONBOARD-001",
+        "Estrazione locale documento per bozza dipendente",
+        HR_WRITE,
+        sensitivity=Sensitivity.CRITICAL,
+        expose=False,
+        capabilities=frozenset({"clamav", "tesseract_ita_eng"}),
+        adapter_managed=False,
     ),
     _write(
         "EMP-UPDATE-001",

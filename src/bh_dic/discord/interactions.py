@@ -24,6 +24,20 @@ class ResultField:
 
 
 @dataclass(frozen=True, slots=True)
+class EmployeeSelectionOption:
+    """One opaque employee choice rendered only inside the authorized transport."""
+
+    employee_id: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingFormRequest:
+    draft_id: str
+    field_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class InteractionResult:
     title: str
     description: str
@@ -33,6 +47,9 @@ class InteractionResult:
     action_id: str | None = None
     messages: tuple[str, ...] = ()
     attachments: tuple[ResponseAttachment, ...] = ()
+    employee_selection: tuple[EmployeeSelectionOption, ...] = ()
+    employee_selection_context_id: str | None = None
+    onboarding_form: OnboardingFormRequest | None = None
     success: bool = True
     public_hr_fallback: bool = False
 
@@ -97,6 +114,26 @@ class InteractionCoordinator(Protocol):
         employee_id: str,
         category: str,
         attachment: AttachmentPayload,
+    ) -> InteractionResult: ...
+
+    async def onboard_documents(
+        self,
+        actor: DiscordActor,
+        attachments: tuple[AttachmentPayload, ...],
+    ) -> InteractionResult: ...
+
+    async def complete_onboarding_draft(
+        self,
+        actor: DiscordActor,
+        draft_id: str,
+        values: Mapping[str, str],
+    ) -> InteractionResult: ...
+
+    async def select_employee(
+        self,
+        actor: DiscordActor,
+        context_id: str,
+        employee_id: str,
     ) -> InteractionResult: ...
 
     async def employee(self, actor: DiscordActor, employee_id: str) -> InteractionResult: ...

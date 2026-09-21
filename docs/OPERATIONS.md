@@ -1,30 +1,16 @@
 # Operazioni
 
-## Ultima evidenza osservata sul target
+## Evidenza dell'ambiente
 
-- repository installata in `/opt/bh-dic` sul target Debian 12; il remote GitHub è intenzionalmente
-  `PUBLIC` e il tree corrente contiene soltanto sorgenti e materiale sintetico, mai configurazione
-  runtime o PII; l'eccezione nei metadati Git storici è registrata nell'implementation report;
-- Python 3.12, virtualenv, migrazione, Chromium, ClamAV e doctor offline/online verificati;
-- Groq `openai/gpt-oss-120b` verificato con probe live chiuso;
-- SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` distribuito e verificato con il gate live
-  autorizzato in sola lettura su tutte le risorse read implementate;
-- autenticazione/tenant, elenco completo, riepilogo, ruoli, timbratura target, contratti,
-  maturazioni, bilanci, payroll, documenti, telemetria token e status verificati;
-- servizio `active/running`, zero riavvii osservati, gateway `discord_ready` e startup outbound
-  Discord verificato; il round-trip inbound richiede un utente reale autorizzato;
-- check headless 0.2.5 `LIVE_AUTHENTICATED`, sessione `AUTHENTICATED` e tenant
-  `VERIFIED_BY_ADAPTER` nel processo corrente; il vault pre-0.2.7 non conservava `sessionStorage`;
-- comando guild-scoped registrato e gateway storicamente responsivo; primo smoke negato dal gate
-  RBAC prima del dispatch;
-- kill switch globale e tutte le flag write specifiche disabilitati.
+La repository pubblica non contiene host, revisione distribuita, configurazione, PII o snapshot
+operativi. Conservare privatamente per ogni rollout: SHA approvato, gate locali, dipendenze,
+migrazione, audit, Chromium/ClamAV, provider, autenticazione/tenant, probe read, gateway Discord,
+round-trip e stato delle feature flag. Il runbook assume kill switch write disabilitato.
 
-La 0.2.7 separa il gateway dal login DIC e conserva cifrato lo snapshot bounded
-`sessionStorage`; la 0.2.8 limita il contratto TeamSystem/OIDC alle route esatte documentate. La
-0.3.0 aggiunge presenter Senior HR, lettura passiva elenco, refresh del vault e telemetria token.
-Le risorse read attraversate dal gate, inclusa la traversata payroll collettiva, sono
-`LIVE_READ_VERIFIED`; l'inbound Discord e tutte le write restano evidenze separate. Il primo deny RBAC resta
-un'evidenza storica, non il risultato della configurazione corrente.
+Il gateway è separato dal login DIC e conserva cifrato lo snapshot bounded `sessionStorage`; il
+contratto TeamSystem/OIDC è limitato alle route esatte documentate. Presenter HR, letture DIC,
+refresh del vault, telemetria token, inbound Discord e write sono evidenze distinte. Nessun esito
+storico della repository descrive la configurazione corrente.
 
 ## Runbook giornaliero
 
@@ -166,18 +152,17 @@ eseguire il comando in loop. `DicAuthOutcomeUnknownError`/`CREDENTIAL_SUBMIT` co
 indica che il submit può essere partito ma completamento, tenant o vault non sono dimostrabili:
 fermare il runbook e verificare umanamente, senza un nuovo login.
 
-La 0.2.5 tratta soltanto l'esatta `/it/callback` DIC come transitoria entro il budget condiviso;
+Il flusso tratta soltanto l'esatta `/it/callback` DIC come transitoria entro il budget condiviso;
 non legge né registra la query e rifiuta fragment, porta esplicita, userinfo, host somigliante,
 trailing slash e path aggiuntivi. Il marker autenticato viene atteso entro la cattura tenant, ma
-`/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. Il singolo
-check headless successivo al login manuale è stato completato. La 0.2.7 ammette anche l'ingresso
-diretto alla route password quando DIC usa `login_hint`, senza cambio user agent né fallback
-generici. Un check server 0.2.7 storico si è fermato a `TEAMSYSTEM_EMAIL`. La 0.2.8
-riconosce anche la root e-mail esatta corrente e le sole transizioni OIDC esatte; un SSO silenzioso
+`/data/company/id` resta obbligatorio. Lo user agent Chromium nativo resta invariato. È ammesso
+anche l'ingresso diretto alla route password quando DIC usa `login_hint`, senza cambio user agent
+né fallback generici. Il contratto riconosce anche la root e-mail esatta e le sole transizioni
+OIDC esatte; un SSO silenzioso
 non esegue fill/click/submit credenziali ed è valido solo dopo marker DIC e tenant attestato. Un
 nuovo exit 78 o `CREDENTIAL_SUBMIT` impone lo stop del check senza retry né nuova invalidazione.
 
-La 0.3.0 ripersiste sotto lock cookie e `sessionStorage` aggiornati soltanto dopo stato
+Il runtime ripersiste sotto lock cookie e `sessionStorage` aggiornati soltanto dopo stato
 autenticato/tenant attestato o lettura riuscita. Questa manutenzione del vault non invia
 credenziali e non è un retry di login; fallimenti, mismatch o stati ignoti non sovrascrivono il
 file valido.

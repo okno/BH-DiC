@@ -18,15 +18,23 @@ from bh_dic.policies.catalog import (
 
 FUNCTION_CATALOG = POLICY_FUNCTION_CATALOG
 
-READ_FUNCTIONS = frozenset(FunctionId(value) for value in READ_FUNCTION_IDS)
-MUTATING_FUNCTIONS = frozenset(FunctionId(value) for value in WRITE_FUNCTION_IDS)
+READ_FUNCTIONS = frozenset(
+    FunctionId(value)
+    for value in READ_FUNCTION_IDS
+    if POLICY_FUNCTION_CATALOG[value].adapter_managed
+)
+MUTATING_FUNCTIONS = frozenset(
+    FunctionId(value)
+    for value in WRITE_FUNCTION_IDS
+    if POLICY_FUNCTION_CATALOG[value].adapter_managed
+)
 
 # Compatibility name for adapter code.  Membership is derived from the
 # normative ``expose_to_model``/``destructive`` properties and is not policy.
 FORBIDDEN_FUNCTIONS = frozenset(
     FunctionId(value)
     for value, spec in POLICY_FUNCTION_CATALOG.items()
-    if spec.destructive and not spec.expose_to_model
+    if spec.adapter_managed and spec.destructive and not spec.expose_to_model
 )
 
 if frozenset(item.value for item in FunctionId) != frozenset(POLICY_FUNCTION_CATALOG):

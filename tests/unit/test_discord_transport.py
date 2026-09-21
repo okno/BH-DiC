@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import discord
 import pytest
@@ -19,8 +19,10 @@ from bh_dic.discord.checks import DiscordGate
 from bh_dic.discord.commands import BHCommandGroup
 from bh_dic.discord.embeds import result_embed
 from bh_dic.discord.interactions import (
+    EmployeeSelectionOption,
     InteractionCoordinator,
     InteractionResult,
+    OnboardingFormRequest,
     ResponseSensitivity,
     ResultField,
 )
@@ -29,6 +31,8 @@ from bh_dic.discord.views import (
     ApprovalView,
     EmployeeSelect,
     EmployeeSelectView,
+    OnboardingDraftView,
+    OnboardingFormModal,
     PaginationView,
     RejectReasonModal,
 )
@@ -229,6 +233,9 @@ def _coordinator(
         approve=AsyncMock(return_value=response),
         reject=AsyncMock(return_value=response),
         upload=AsyncMock(return_value=response),
+        onboard_documents=AsyncMock(return_value=response),
+        complete_onboarding_draft=AsyncMock(return_value=response),
+        select_employee=AsyncMock(return_value=response),
         employee=AsyncMock(return_value=response),
         contracts=AsyncMock(return_value=response),
         documents=AsyncMock(return_value=response),
@@ -317,14 +324,44 @@ async def test_approval_modals_and_persistent_view_dispatch_callbacks() -> None:
 async def test_selection_and_pagination_views_dispatch_without_network() -> None:
     selection = AsyncMock()
     choices = [(str(index), f"Employee {index}" + "x" * 120) for index in range(30)]
-    select = EmployeeSelect(choices, selection)
+    select = EmployeeSelect(choices, selection, context_id="b" * 32)
     assert len(select.options) == 25
     assert all(len(option.label) <= 100 and len(option.value) <= 100 for option in select.options)
     select._values = ["7"]
     interaction, raw = _interaction()
     await select.callback(interaction)
-    selection.assert_awaited_once_with(interaction, "7")
-    assert len(EmployeeSelectView(choices, selection).children) == 1
+    selection.assert_awaited_once_with(interaction, "b" * 32, "7")
+    selection_view = EmployeeSelectView(
+        choices,
+        selection,
+        context_id="b" * 32,
+        requester_user_id=10,
+    )
+    assert len(selection_view.children) == 1
+    assert await selection_view.interaction_check(interaction)
+    other, other_raw = _interaction()
+    other_raw.user.id = 11
+    assert not await selection_view.interaction_check(other)
+    assert other_raw.response.sent[0][1]["ephemeral"] is True
+
+    onboarding_callback = AsyncMock()
+    onboarding_view = OnboardingDraftView(
+        "a" * 32,
+        ("email", "phone"),
+        onboarding_callback,
+        requester_user_id=10,
+    )
+    modal_interaction, modal_raw = _interaction()
+    await onboarding_view._open_modal(modal_interaction)
+    modal = cast(OnboardingFormModal, modal_raw.response.modals[0])
+    modal._inputs["email"]._value = "persona@example.test"
+    modal._inputs["phone"]._value = "+39 333 1234567"
+    await modal.on_submit(modal_interaction)
+    onboarding_callback.assert_awaited_once_with(
+        modal_interaction,
+        "a" * 32,
+        {"email": "persona@example.test", "phone": "+39 333 1234567"},
+    )
 
     previous = AsyncMock()
     following = AsyncMock()
@@ -356,6 +393,37 @@ async def test_command_send_success_action_denial_rate_limit_and_failure(
     await group._send(interaction, operation)
     assert raw.response.deferred == [{"ephemeral": True, "thinking": True}]
     assert isinstance(raw.followup.sent[0][1]["view"], ApprovalView)
+
+    selectable, selectable_raw = _interaction()
+    selectable_result = InteractionResult(
+        "Scegli",
+        "Seleziona un dipendente.",
+        employee_selection=(
+            EmployeeSelectionOption("EMP-SYNTH-001", "Persona sintetica · EMP-SYNTH-001"),
+        ),
+        employee_selection_context_id="b" * 32,
+    )
+    await group._send(selectable, AsyncMock(return_value=selectable_result))
+    selectable_view = cast(EmployeeSelectView, selectable_raw.followup.sent[0][1]["view"])
+    assert isinstance(selectable_view, EmployeeSelectView)
+    selectable_menu = cast(EmployeeSelect, selectable_view.children[0])
+    selectable_menu._values = ["EMP-SYNTH-001"]
+    selected_interaction, _selected_raw = _interaction()
+    await selectable_menu.callback(selected_interaction)
+    _raw_coordinator.select_employee.assert_awaited_once_with(
+        ANY,
+        "b" * 32,
+        "EMP-SYNTH-001",
+    )
+
+    onboarding, onboarding_raw = _interaction()
+    onboarding_result = InteractionResult(
+        "Bozza",
+        "Completa i dati.",
+        onboarding_form=OnboardingFormRequest("a" * 32, ("email", "phone")),
+    )
+    await group._send(onboarding, AsyncMock(return_value=onboarding_result))
+    assert isinstance(onboarding_raw.followup.sent[0][1]["view"], OnboardingDraftView)
 
     denied, denied_raw = _interaction(role_id=999)
     await group._send(denied, operation)
@@ -605,6 +673,38 @@ async def test_all_slash_command_routes_and_upload_guards() -> None:
     payload = raw_coordinator.upload.await_args.args[-1]
     assert payload.content == b"content"
 
+    onboarding_attachment = FakeAttachment(b"image")
+    onboarding, _onboarding_raw = _interaction()
+    await _invoke(
+        BHCommandGroup.onboarding_documents_command,
+        group,
+        onboarding,
+        cast(discord.Attachment, onboarding_attachment),
+        None,
+        None,
+        None,
+    )
+    payloads = raw_coordinator.onboard_documents.await_args.args[-1]
+    assert len(payloads) == 1 and payloads[0].content == b"image"
+
+    first_document = FakeAttachment(b"12345")
+    second_document = FakeAttachment(b"67890")
+    cumulative, cumulative_raw = _interaction()
+    onboarding_calls = raw_coordinator.onboard_documents.await_count
+    await _invoke(
+        BHCommandGroup.onboarding_documents_command,
+        group,
+        cumulative,
+        cast(discord.Attachment, first_document),
+        cast(discord.Attachment, second_document),
+        None,
+        None,
+    )
+    assert first_document.read_calls == [] and second_document.read_calls == []
+    assert raw_coordinator.onboard_documents.await_count == onboarding_calls
+    cumulative_embed = cast(discord.Embed, cumulative_raw.followup.sent[0][1]["embed"])
+    assert cumulative_embed.title is not None and "grandi" in cumulative_embed.title
+
 
 def test_dic_reconnect_is_nested_under_the_guild_scoped_bh_group() -> None:
     coordinator, _ = _coordinator()
@@ -709,6 +809,7 @@ async def test_bot_setup_and_message_modes_are_offline_and_fail_closed(
     fallback = InteractionResult(
         "Funzione non disponibile",
         "Nessuna funzione operativa autorizzata.",
+        correlation_id="corr-coordinator-fallback",
         success=False,
         public_hr_fallback=True,
     )
@@ -1067,6 +1168,7 @@ async def test_public_hr_reply_displays_exact_request_and_cumulative_token_usage
     fallback = InteractionResult(
         "Funzione non disponibile",
         "Nessuna funzione operativa autorizzata.",
+        correlation_id="corr-coordinator-fallback",
         success=False,
         public_hr_fallback=True,
     )
@@ -1131,6 +1233,8 @@ async def test_public_hr_reply_displays_exact_request_and_cumulative_token_usage
     assert "input 41 · output 19 · totale 60" in rendered
     assert "4 chiamate · input 100 · output 30 · totale 130" in rendered
     assert "contatori mancanti/incerti 1" in rendered
+    started = usage.start.await_args.args[0]
+    assert started.key.correlation_id == "corr-coordinator-fallback"
     usage.complete.assert_awaited_once()
     await bot.close()
 

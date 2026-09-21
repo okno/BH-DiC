@@ -22,7 +22,7 @@ TODAY = date(2026, 8, 24)
 
 def test_local_planner_builds_payroll_entity_resolution_without_provider() -> None:
     planned = build_local_hr_query_plan(
-        "Qual è lo stipendio netto di Amin del mese di luglio?",
+        "Qual è lo stipendio netto di Nora del mese di luglio?",
         today=TODAY,
     )
     assert planned is not None
@@ -31,10 +31,25 @@ def test_local_planner_builds_payroll_entity_resolution_without_provider() -> No
     assert planned.plan.target_entities == ("EMPLOYEE_TARGET_1",)
     assert planned.plan.steps[0].function_id == "EMP-PAY-001"
     assert planned.legacy_intent is not None
-    assert planned.legacy_intent.target_query == "Amin"
+    assert planned.legacy_intent.target_query == "Nora"
     assert planned.legacy_intent.envelope.parameters == {
         "year": 2026,
         "month": 7,
+        "include_net": True,
+    }
+
+
+def test_local_planner_understands_colloquial_payroll_without_provider() -> None:
+    planned = build_local_hr_query_plan("Quanto ha preso Nora a giugno?", today=TODAY)
+
+    assert planned is not None
+    assert planned.plan.resources == (HRResource.PAYROLLS,)
+    assert planned.plan.entity_resolution is EntityResolutionMode.LOCAL_SEARCH
+    assert planned.legacy_intent is not None
+    assert planned.legacy_intent.target_query == "Nora"
+    assert planned.legacy_intent.envelope.parameters == {
+        "year": 2026,
+        "month": 6,
         "include_net": True,
     }
 
@@ -60,6 +75,51 @@ def test_compound_plan_has_ordered_read_only_steps_and_local_dates() -> None:
     assert {item.field: item.value for item in plan.filters}["group"] == "sala"
     assert plan.delivery_mode is DeliveryMode.EPHEMERAL
     assert plan.sensitivity is Sensitivity.HIGH
+
+
+def test_workforce_contract_payroll_table_is_a_complete_local_plan() -> None:
+    planned = build_local_hr_query_plan(
+        "Stampa una tabella con nomi, cognomi, ID, tipologia e scadenza contratto e netto "
+        "mensile di tutti i dipendenti",
+        today=TODAY,
+    )
+
+    assert planned is not None
+    assert planned.legacy_intent is None
+    assert planned.plan.intent == "workforce_contract_payroll_table"
+    assert planned.plan.aggregation == "latest_paid"
+    assert [step.function_id for step in planned.plan.steps] == [
+        "EMP-READ-001",
+        "EMP-CONTRACT-001",
+        "EMP-PAY-001",
+    ]
+
+
+def test_complete_employee_dossier_declares_every_registered_target_read() -> None:
+    planned = build_local_hr_query_plan(
+        "Fammi il dossier HR completo di Nora",
+        today=TODAY,
+    )
+
+    assert planned is not None
+    assert planned.plan.intent == "employee_hr_dossier"
+    assert planned.plan.target_entities == ("EMPLOYEE_TARGET_1",)
+    assert [step.function_id for step in planned.plan.steps] == [
+        "EMP-READ-002",
+        "EMP-CONTRACT-001",
+        "EMP-RBAC-001",
+        "EMP-TIME-001",
+        "EMP-MAT-001",
+        "EMP-BAL-001",
+        "EMP-PAY-001",
+        "EMP-DOC-001",
+    ]
+    assert planned.legacy_intent is not None
+    assert planned.legacy_intent.target_query == "Nora"
+    assert planned.legacy_intent.envelope.parameters == {
+        "query_plan": "employee_hr_dossier",
+        "year": 2026,
+    }
 
 
 @pytest.mark.parametrize(
@@ -175,7 +235,7 @@ def _conversational_corpus() -> list[tuple[str, str]]:
             "Riporta",
         )
     )
-    rows.extend(("payroll_target", f"Qual è il netto di Amin per {month}?") for month in months)
+    rows.extend(("payroll_target", f"Qual è il netto di Nora per {month}?") for month in months)
     rows.extend(
         ("payroll_presence", f"Quali dipendenti hanno una busta paga a {month}?")
         for month in months

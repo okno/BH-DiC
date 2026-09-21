@@ -1,8 +1,7 @@
 # Current failure analysis
 
-This analysis is tied to baseline commit
-`98b03932ca1bf548bff44a82a1fedd976e5603d0`. Examples are synthetic and contain
-no tenant data.
+This is a pre-refactor analysis preserved with synthetic examples only. It contains no deployed
+revision, tenant data or live-environment evidence.
 
 | Area | Root cause | User-visible impact | Required regression proof |
 | --- | --- | --- | --- |
@@ -33,7 +32,7 @@ no tenant data.
 
 ### Compound payroll question
 
-Synthetic request: “Qual è il netto di Amin a luglio e puoi allegare la busta
+Synthetic request: “Qual è il netto di Nora a luglio e puoi allegare la busta
 paga?”
 
 The present system must choose one Function ID. If it routes to payroll metadata

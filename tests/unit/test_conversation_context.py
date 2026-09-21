@@ -9,7 +9,7 @@ def test_context_is_isolated_by_user_channel_and_expires() -> None:
     now = 100.0
     store = ConversationContextStore(ttl_seconds=30, clock=lambda: now)
     key = ConversationKey(1, 10, 20)
-    store.remember_candidates(
+    context_id = store.remember_candidates(
         key,
         ("EMP-SYNTH-001", "EMP-SYNTH-002"),
         function_id="EMP-PAY-001",
@@ -21,6 +21,17 @@ def test_context_is_isolated_by_user_channel_and_expires() -> None:
     assert dict(selected[1].parameters) == {"month": 7, "year": 2026}
     assert store.selection(ConversationKey(2, 10, 20), "il secondo") is None
     assert store.selection(ConversationKey(1, 10, 21), "il secondo") is None
+    assert store.selection(key, "employee id EMP-SYNTH-001") is not None
+    assert store.selection(key, "EMP-NOT-A-CANDIDATE") is None
+    assert store.selection(key, "Quali contratti scadono nel secondo semestre?") is None
+    assert store.activate_selection_context(key, context_id, "EMP-SYNTH-001")
+    assert not store.activate_selection_context(
+        ConversationKey(2, 10, 20), context_id, "EMP-SYNTH-001"
+    )
+    assert not store.activate_selection_context(key, context_id, "EMP-NOT-A-CANDIDATE")
+    assert store.candidate_context(key, "Rossi") is not None
+    assert store.candidate_context(key, "mostra Rossi") is None
+    assert store.candidate_context(ConversationKey(2, 10, 20), "Rossi") is None
 
     now = 131.0
     assert store.selection(key, "il secondo") is None
@@ -54,14 +65,14 @@ def test_pending_employee_target_accepts_one_bounded_name_or_id_and_is_consumed(
         parameters={"latest_paid": True, "include_net": True},
     )
 
-    pending = store.pending_target(key, "Amine Mohamed Abbadi")
+    pending = store.pending_target(key, "Utente Sintetico Uno")
 
     assert pending is not None
     assert pending.function_id == "EMP-PAY-001"
     assert dict(pending.parameters) == {"include_net": True, "latest_paid": True}
-    assert store.pending_target(key, "Amine Mohamed Abbadi") is not None
+    assert store.pending_target(key, "Utente Sintetico Uno") is not None
     assert store.clear_pending_target(key)
-    assert store.pending_target(key, "Amine Mohamed Abbadi") is None
+    assert store.pending_target(key, "Utente Sintetico Uno") is None
 
 
 def test_pending_employee_target_does_not_consume_a_new_sentence() -> None:
@@ -69,6 +80,6 @@ def test_pending_employee_target_does_not_consume_a_new_sentence() -> None:
     key = ConversationKey(1, 10, 20)
     store.remember_pending_target(key, function_id="EMP-PAY-001")
 
-    assert store.pending_target(key, "qual è lo stipendio di Amine?") is None
+    assert store.pending_target(key, "qual è lo stipendio di Utente?") is None
     assert store.pending_target(key, "mostra notifiche") is None
     assert store.pending_target(key, "EMP-SYNTH-001") is not None

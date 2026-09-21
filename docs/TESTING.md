@@ -49,9 +49,10 @@ make check
 `make check` non include automaticamente `gitleaks`; verificare ogni comando singolarmente e
 registrare exit code. Se un tool non è installato, il gate è `BLOCKED`, non `PASS`.
 
-Per lo SHA 0.3.0 verificato: 834 test locali PASS; branch coverage 85% su 10.361 statement e 3.258
-branch; Ruff, mypy, Bandit e `pip-audit` verdi; CI e CodeQL riusciti. Questi risultati non
-sostituiscono le evidenze live bounded riportate in [Stato di verifica](LIVE_VERIFICATION_STATUS.md).
+I risultati di test appartengono alla revisione esatta su cui sono eseguiti e devono essere
+registrati dal CI/change ticket, non copiati come snapshot in questo documento. I gate locali non
+sostituiscono la verifica read-only dell'ambiente descritta in
+[Stato di verifica](LIVE_VERIFICATION_STATUS.md).
 
 ## Suite e marker
 

@@ -4,10 +4,8 @@ Questa è la guida canonica end-to-end per preparare BH-DiC su Debian 12 o 13, c
 e il provider di modello, validare in mock e attivare inizialmente le sole letture. I documenti
 specialistici collegati approfondiscono i singoli controlli.
 
-> Stato al 17 agosto 2026: la versione 0.3.0 allo SHA esatto documentato è installata sul target
-> Debian e ha superato il gate applicativo live bounded con autenticazione/tenant e write
-> disabilitate. Il servizio è `active/running`, con zero riavvii osservati e gateway
-> `discord_ready`; lo smoke del trasporto Discord resta `PENDING`. Tutte le write devono restare
+> Questa guida non attesta alcuna installazione reale. Registrare revisione, host, esiti di gate e
+> stato del servizio nel change ticket privato. Tutte le write devono partire
 > `DISABLED_BY_POLICY`.
 
 ## 1. Decisioni prima dell'installazione
@@ -36,7 +34,8 @@ sudo apt-get update
 sudo apt-get install --yes \
   bash ca-certificates git openssh-client tar curl acl util-linux \
   python3 python3-venv python3-dev \
-  libmagic1 clamav clamav-daemon clamav-freshclam
+  libmagic1 clamav clamav-daemon clamav-freshclam \
+  tesseract-ocr tesseract-ocr-ita tesseract-ocr-eng
 python3 --version
 python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'
 ```
@@ -90,7 +89,7 @@ Confrontare lo SHA con quello approvato. Il remote non deve contenere credenzial
 pubblica contiene soltanto sorgenti e materiale sintetico: non copiarvi `.env`, output runtime,
 identificatori operativi, segreti o PII.
 
-## 5. Dipendenze Python, Playwright e ClamAV
+## 5. Dipendenze Python, Playwright, ClamAV e OCR locale
 
 Creare ambiente e dipendenze senza avviare il bot. Il primo passaggio omette solo il browser:
 
@@ -119,11 +118,15 @@ packaging Debian:
 sudo systemctl enable --now clamav-freshclam.service clamav-daemon.service
 sudo usermod --append --groups clamav bh-dic
 sudo -u bh-dic -H clamdscan --version
+sudo -u bh-dic -H tesseract --version
+sudo -u bh-dic -H tesseract --list-langs
 ```
 
 Verificare sul target il path e i permessi del socket; valorizzare `CLAMAV_SOCKET` solo se il
 default non viene rilevato. Se ClamAV o il socket non sono disponibili, mantenere
 `ENABLE_DOCUMENT_UPLOAD=false`: con `CLAMAV_REQUIRED=true` l'upload fallisce chiuso.
+L'elenco lingue Tesseract deve includere esattamente almeno `ita` ed `eng`; in caso contrario
+`EMP-ONBOARD-001` resta negata dalla capability e `doctor.sh` fallisce.
 
 ## 6. Creare `.env` senza segreti nella cronologia
 
@@ -295,8 +298,8 @@ Se la password TeamSystem è scaduta, un amministratore deve rinnovarla nel flus
 aggiornare `DIC_PASSWORD` localmente senza mostrarla. Non invalidare un vault leggibile per il
 solo upgrade, ma dopo una rotazione di password/account/tenant l'invalidazione è obbligatoria. Nel
 caso di una futura rotazione, con servizio fermo e autorizzazione esplicita alla rete DIC, eseguire
-una sola invalidazione seguita da una sola verifica. Sul target documentato la 0.3.0 ha già
-superato il gate live: non ripetere questa sequenza senza una nuova rotazione o compromissione.
+una sola invalidazione seguita da una sola verifica. Non ripetere questa sequenza senza una nuova
+rotazione o compromissione.
 Usare esclusivamente la [procedura canonica guarded](DIC_AUTHENTICATION.md#invalidazione-e-rotazione),
 che impone stop systemd verificato, identità `bh-dic` e nessun restart automatico.
 

@@ -352,7 +352,11 @@ class BHDiCBot(commands.Bot):
                         )
                         return
                     async with self._public_hr_slots:
-                        await self._reply_as_public_hr(message, request, correlation_id)
+                        await self._reply_as_public_hr(
+                            message,
+                            request,
+                            result.correlation_id or correlation_id,
+                        )
                     return
                 await self._reply_with_result(
                     message,
@@ -520,7 +524,10 @@ class BHDiCBot(commands.Bot):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        view = self.bh_commands.approval_view(result.action_id) if result.action_id else None
+        view = self.bh_commands.result_view(
+            result,
+            requester_user_id=message.author.id,
+        )
         files = [
             discord.File(BytesIO(attachment.content), filename=attachment.filename)
             for attachment in result.attachments
@@ -657,10 +664,14 @@ class BHDiCBot(commands.Bot):
     def _format_request_usage(totals: ModelUsageTotals) -> str:
         if totals.reported_calls:
             usage = totals.usage
-            return (
+            rendered = (
                 f"input {usage.input_tokens} · output {usage.output_tokens} · "
                 f"totale {usage.total_tokens}"
             )
+            gaps = totals.started_calls + totals.unavailable_calls + totals.unknown_calls
+            if gaps:
+                rendered += f" · contatori mancanti/incerti {gaps}"
+            return rendered
         if totals.unavailable_calls:
             return "risposta ricevuta, ma il provider non ha restituito i contatori"
         if totals.unknown_calls or totals.started_calls:

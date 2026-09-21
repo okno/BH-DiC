@@ -2,10 +2,8 @@
 
 Il debug deve preservare gli stessi confini di produzione. Non disabilitare TLS, host-key
 checking, RBAC, redazione, ClamAV, audit o feature flag per ottenere un test verde. Usare solo
-dati sintetici. Sul target sono stati verificati separatamente provider, autenticazione/tenant e
-i due subset read bounded della 0.3.0. Il servizio è `active/running`, con zero riavvii osservati e
-gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING` e tutte le write restano
-disabilitate.
+dati sintetici. Verificare separatamente provider, autenticazione/tenant, route read e trasporto
+Discord; nessun PASS storico della repository sostituisce i controlli sull'ambiente corrente.
 
 ## Modalità DEBUG locale
 

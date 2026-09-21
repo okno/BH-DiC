@@ -6,6 +6,10 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import shutil
+
+# The only invocation uses a fixed argv, no shell, a timeout, and discarded stderr.
+import subprocess  # nosec B404
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +41,7 @@ from bh_dic.files.quarantine import QuarantineStore
 from bh_dic.files.repository import SqlAlchemyUploadRepository
 from bh_dic.files.service import FileService
 from bh_dic.model_usage import ModelUsageService, SqlAlchemyModelUsageRepository
+from bh_dic.onboarding import LocalTesseractOcr, OnboardingDraftStore
 from bh_dic.openai.client import MockPublicHrResponder, PublicHrResponder
 from bh_dic.openai.factory import build_intent_client, build_public_hr_responder
 from bh_dic.openai.intent_router import IntentRouter, MockIntentRouter, OpenAIIntentRouter
@@ -54,6 +59,32 @@ from bh_dic.services.dic_service import DicService
 
 _MOCK_SECRET = b"BH-DiC synthetic mock key only!!"
 logger = logging.getLogger(__name__)
+
+
+def _tesseract_ita_eng_available(executable: str) -> bool:
+    """Return a local capability bit without exposing command output or paths."""
+
+    resolved = shutil.which(executable)
+    if resolved is None:
+        return False
+    try:
+        completed = subprocess.run(  # noqa: S603  # nosec B603
+            [resolved, "--list-langs"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if completed.returncode != 0:
+        return False
+    try:
+        languages = set(completed.stdout.decode("utf-8", errors="strict").splitlines())
+    except UnicodeDecodeError:
+        return False
+    return {"ita", "eng"}.issubset(languages)
 
 
 async def _close_browser_without_masking_primary(
@@ -363,7 +394,15 @@ async def build_runtime(
         writes_enabled=lambda: flags.enabled("ENABLE_WRITE_ACTIONS"),
         default_ttl=timedelta(minutes=settings.pending_action_ttl_minutes),
     )
-    capabilities = frozenset({"clamav"}) if settings.clamav_socket else frozenset()
+    capability_set: set[str] = set()
+    if settings.clamav_socket:
+        capability_set.add("clamav")
+    if await asyncio.to_thread(
+        _tesseract_ita_eng_available,
+        settings.ocr_tesseract_executable,
+    ):
+        capability_set.add("tesseract_ita_eng")
+    capabilities = frozenset(capability_set)
     state_digest_key = hmac.new(audit_material, b"bh-dic:state-digest:v1", hashlib.sha256).digest()
     try:
         adapter, browser_session, session_manager = await _adapter(
@@ -387,6 +426,12 @@ async def build_runtime(
             retention=timedelta(hours=settings.upload_retention_hours),
             allowed_mime_types=frozenset(settings.upload_allowed_mime_types),
             clamav_required=settings.clamav_required,
+        )
+        onboarding_ocr = LocalTesseractOcr(
+            quarantine_root=file_store.root,
+            executable=settings.ocr_tesseract_executable,
+            timeout_seconds=settings.ocr_timeout_seconds,
+            max_input_bytes=settings.upload_max_mb * 1024 * 1024,
         )
         gate = _discord_gate(settings)
     except BaseException:
@@ -502,6 +547,10 @@ async def build_runtime(
             model_provider=configured_model_provider,
             model_name=configured_model_name,
             dic_reconnect_handler=reconnect_dic_session,
+            onboarding_ocr=onboarding_ocr,
+            onboarding_drafts=OnboardingDraftStore(
+                ttl_seconds=min(900, settings.pending_action_ttl_minutes * 60),
+            ),
         )
     except BaseException:
         await _cleanup_failed_runtime_build(

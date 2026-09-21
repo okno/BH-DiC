@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import UTC, date, datetime
+from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
 
@@ -35,8 +37,9 @@ from bh_dic.dic.models import (
     SortDirection,
 )
 from bh_dic.discord.checks import DiscordActor
-from bh_dic.discord.interactions import ResponseSensitivity
+from bh_dic.discord.interactions import AttachmentPayload, ResponseSensitivity
 from bh_dic.exports import HrExportService
+from bh_dic.files.models import UploadStatus
 from bh_dic.model_usage import (
     ModelUsageEvent,
     ModelUsageKey,
@@ -44,6 +47,7 @@ from bh_dic.model_usage import (
     ModelUsageStatus,
     ModelUsageTotals,
 )
+from bh_dic.onboarding import OcrText
 from bh_dic.openai.client import (
     IntentProviderError,
     ProviderFailureKind,
@@ -172,6 +176,9 @@ async def coordinator_for(
     model_provider: str = "groq",
     dic_reconnect_enabled: bool = False,
     dic_reconnect_handler: object | None = None,
+    files_override: object | None = None,
+    onboarding_ocr_override: object | None = None,
+    capabilities: frozenset[str] = frozenset(),
 ) -> tuple[BHApplicationCoordinator, MockDicAdapter, InMemoryApprovalRepository]:
     baseline = dict(DEFAULT_FEATURE_FLAGS)
     baseline["ENABLE_WRITE_ACTIONS"] = writes
@@ -204,6 +211,7 @@ async def coordinator_for(
             allowed_channel_ids=frozenset({"3001"}),
             current_tenant_id="TENANT-SYNTH-001",
             allowed_tenant_ids=frozenset({"TENANT-SYNTH-001"}),
+            capabilities=capabilities,
             mock_mode=mock_mode,
         ),
         pseudonym_key=b"P" * 32,
@@ -214,6 +222,8 @@ async def coordinator_for(
         model_usage=model_usage,
         model_provider=model_provider,
         model_name="openai/gpt-oss-120b",
+        files=files_override,  # type: ignore[arg-type]
+        onboarding_ocr=onboarding_ocr_override,  # type: ignore[arg-type]
         **kwargs,  # type: ignore[arg-type]
     )
     return coordinator, adapter, repository
@@ -354,10 +364,56 @@ async def test_diagnostics_are_admin_only_and_report_runtime_route_states() -> N
 
     assert diagnostics.title == "Diagnostica DIC redatta"
     assert "payload" in diagnostics.description
+    assert any(field.name == "employees.payrolls" for field in diagnostics.fields)
+    assert all(
+        field.value == "READY"
+        for field in diagnostics.fields
+        if field.name.startswith(("employees.", "timestamps."))
+    )
     assert "Route inventariate" in coverage.description
     assert routes.fields
     assert all("/" not in field.name for field in routes.fields)
     assert schemas.title == "Stato schemi DIC"
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_only_safe_failure_types_without_provider_or_payload() -> None:
+    router = _operator_router()
+    coordinator, adapter, _ = await coordinator_for(router)
+    adapter.get_contracts = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("synthetic private payload must not escape")
+    )
+    try:
+        result = await coordinator.diagnostics(actor(LogicalRole.SECURITY_ADMIN))
+    finally:
+        await adapter.close()
+
+    contract_probe = next(field for field in result.fields if field.name == "employees.contracts")
+    assert contract_probe.value == "FAILED:RuntimeError"
+    assert "private payload" not in result.description
+    assert router.exposed is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_treat_empty_tenant_resources_as_not_applicable_not_failed() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    adapter.list_employees = AsyncMock(  # type: ignore[method-assign]
+        return_value=EmployeeListResult(
+            items=(),
+            page=1,
+            page_size=1,
+            total=0,
+            has_next=False,
+        )
+    )
+    try:
+        result = await coordinator.diagnostics(actor(LogicalRole.SECURITY_ADMIN))
+    finally:
+        await adapter.close()
+
+    assert result.success
+    assert "probe read non riusciti: 0" in result.description
+    assert any(field.value == "NOT_APPLICABLE" for field in result.fields)
 
 
 @pytest.mark.asyncio
@@ -431,6 +487,68 @@ async def test_large_ascii_list_bounds_channel_preview_but_keeps_every_row_in_at
     complete = result.attachments[0].content.decode("utf-8")
     assert "EMP-SYNTH-001" in complete
     assert "EMP-SYNTH-301" in complete
+
+
+@pytest.mark.asyncio
+async def test_complete_workforce_table_reads_contracts_and_latest_net_without_router() -> None:
+    router = _operator_router()
+    coordinator, adapter, _ = await coordinator_for(
+        router,
+        today_provider=lambda: date(2026, 8, 28),
+    )
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-LATEST",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            status="published",
+            published_at="2026-08-01",
+            net_cents=123_456,
+        )
+    ]
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Stampa una tabella con nomi, cognomi, ID, tipologia e scadenza contratto e "
+            "netto mensile di tutti i dipendenti",
+        )
+    finally:
+        await adapter.close()
+
+    assert result.success
+    assert result.title == "Organico, contratti e netto — dati DiC completi"
+    assert router.exposed is None
+    assert "ultima busta paga con netto disponibile" in result.description
+    complete = result.attachments[0].content.decode("utf-8")
+    assert "EMP-SYNTH-001" in complete
+    assert "indeterminato" in complete
+    assert "EUR 1.234,56" in complete
+
+
+@pytest.mark.asyncio
+async def test_workforce_plan_checks_payroll_entitlement_before_target_resource_reads() -> None:
+    adapter = MockDicAdapter()
+    contract_read = AsyncMock(side_effect=AssertionError("contract read must not start"))
+    payroll_read = AsyncMock(side_effect=AssertionError("payroll read must not start"))
+    adapter.get_contracts = contract_read  # type: ignore[method-assign]
+    adapter.get_payroll_metadata = payroll_read  # type: ignore[method-assign]
+    coordinator, runtime_adapter, _ = await coordinator_for(
+        _operator_router(),
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 28),
+    )
+    try:
+        with pytest.raises(ApplicationPolicyDenied):
+            await coordinator.ask(
+                actor(LogicalRole.HR_READ, entitlements=frozenset()),
+                "Stampa una tabella dei dipendenti con contratto e netto mensile",
+            )
+    finally:
+        await runtime_adapter.close()
+
+    contract_read.assert_not_awaited()
+    payroll_read.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -563,6 +681,122 @@ async def test_ambiguous_target_can_be_selected_by_local_ordinal_followup() -> N
 
 
 @pytest.mark.asyncio
+async def test_colloquial_payroll_keeps_period_across_surname_disambiguation() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = MockDicAdapter()
+    seed = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = seed.model_copy(
+        update={
+            "display_name": SecretStr("Nora Collaudo"),
+            "display_name_redacted": "Nora Collaudo",
+            "first_name": SecretStr("Nora"),
+            "last_name": SecretStr("Collaudo"),
+        }
+    )
+    adapter._items["EMP-SYNTH-002"] = seed.model_copy(
+        update={
+            "employee_id": "EMP-SYNTH-002",
+            "display_name": SecretStr("Nora Esempio"),
+            "display_name_redacted": "Nora Esempio",
+            "first_name": SecretStr("Nora"),
+            "last_name": SecretStr("Esempio"),
+        }
+    )
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-MAY",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=5,
+            net_cents=111_111,
+        ),
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-JUNE",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=6,
+            net_cents=222_222,
+        ),
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-JULY",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            net_cents=333_333,
+        ),
+    ]
+    adapter._payrolls["EMP-SYNTH-002"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-OTHER",
+            employee_id="EMP-SYNTH-002",
+            year=2026,
+            month=6,
+            net_cents=444_444,
+        )
+    ]
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 28),
+    )
+    requester = actor(LogicalRole.HR_READ)
+    try:
+        ambiguous = await coordinator.ask(requester, "Quanto ha preso Nora a giugno?")
+        selected = await coordinator.ask(requester, "Collaudo")
+        july_menu = await coordinator.ask(requester, "Quanto ha preso Nora a luglio?")
+        assert ambiguous.employee_selection_context_id is not None
+        selected_from_old_menu = await coordinator.select_employee(
+            requester,
+            ambiguous.employee_selection_context_id,
+            "EMP-SYNTH-001",
+        )
+    finally:
+        await adapter.close()
+
+    assert ambiguous.title == "Risultato non univoco"
+    assert {item.employee_id for item in ambiguous.employee_selection} == {
+        "EMP-SYNTH-001",
+        "EMP-SYNTH-002",
+    }
+    assert router.calls == 0
+    assert len(selected.fields) == 1
+    assert selected.fields[0].name == "06/2026"
+    assert "€ 2.222,22" in selected.fields[0].value
+    assert july_menu.employee_selection_context_id != ambiguous.employee_selection_context_id
+    assert selected_from_old_menu.fields[0].name == "06/2026"
+    assert "€ 2.222,22" in selected_from_old_menu.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_employee_name_requires_confirmation_before_payroll_read() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = MockDicAdapter()
+    seed = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = seed.model_copy(
+        update={
+            "display_name": SecretStr("Nora Collaudo"),
+            "display_name_redacted": "Nora Collaudo",
+        }
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 28),
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Quanto ha preso Noraa a giugno?",
+        )
+    finally:
+        await adapter.close()
+
+    assert result.title == "Conferma il dipendente simile"
+    assert [item.employee_id for item in result.employee_selection] == ["EMP-SYNTH-001"]
+    assert router.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_read_request_crosses_router_policy_and_mock_adapter() -> None:
     router = FixedRouter(
         IntentEnvelope(
@@ -590,7 +824,10 @@ async def test_read_request_crosses_router_policy_and_mock_adapter() -> None:
         adapter_override=capturing_adapter,
     )
     try:
-        result = await coordinator.ask(actor(LogicalRole.READ_ONLY), "Quanti collaboratori attivi?")
+        result = await coordinator.ask(
+            actor(LogicalRole.READ_ONLY),
+            "Analizza il totale aziendale",
+        )
     finally:
         await adapter.close()
 
@@ -656,7 +893,10 @@ async def test_ask_records_and_renders_exact_provider_usage_without_request_data
         model_usage=cast(ModelUsageService, usage_service),
     )
     try:
-        result = await coordinator.ask(actor(LogicalRole.READ_ONLY), "Totale collaboratori")
+        result = await coordinator.ask(
+            actor(LogicalRole.READ_ONLY),
+            "Analizza il totale aziendale",
+        )
     finally:
         await adapter.close()
 
@@ -1071,6 +1311,32 @@ async def test_contract_fallback_rejects_other_errors_roles_and_ambiguous_reques
 
 
 @pytest.mark.asyncio
+async def test_payroll_tool_failure_degrades_to_targeted_local_clarification() -> None:
+    router = FailingRouter(
+        IntentProviderError(
+            "synthetic tool failure",
+            provider="groq",
+            model="openai/gpt-oss-120b",
+            response_received=True,
+            failure_kind=ProviderFailureKind.TOOL_USE_FAILED,
+        )
+    )
+    coordinator, adapter, _ = await coordinator_for(cast(FixedRouter, router))
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Analizza la retribuzione mensile",
+        )
+    finally:
+        await adapter.close()
+
+    assert router.exposed == frozenset({"EMP-PAY-001", "EMP-PAY-002"})
+    assert result.title == "Chiarimento necessario"
+    assert "Employee ID" in result.description
+    assert "mese" in result.description
+
+
+@pytest.mark.asyncio
 async def test_explicit_employee_id_is_restored_only_after_minimized_routing() -> None:
     router = FixedRouter(
         IntentEnvelope(
@@ -1245,7 +1511,7 @@ async def test_payroll_read_renders_only_useful_minimized_metadata() -> None:
     try:
         result = await coordinator.ask(
             actor(LogicalRole.HR_READ),
-            "Metadati busta paga 2026 per employee id EMP-SYNTH-001",
+            "Analizza la retribuzione annuale per employee id EMP-SYNTH-001",
         )
     finally:
         await adapter.close()
@@ -1268,10 +1534,10 @@ async def test_latest_paid_net_keeps_pending_question_when_user_replies_with_nam
     item = adapter._items["EMP-SYNTH-001"]
     adapter._items["EMP-SYNTH-001"] = item.model_copy(
         update={
-            "display_name": SecretStr("Amine Mohamed Abbadi"),
-            "display_name_redacted": "Amine Mohamed Abbadi",
-            "first_name": SecretStr("Amine"),
-            "last_name": SecretStr("Mohamed Abbadi"),
+            "display_name": SecretStr("Utente Sintetico Uno"),
+            "display_name_redacted": "Utente Sintetico Uno",
+            "first_name": SecretStr("Utente"),
+            "last_name": SecretStr("Sintetico Uno"),
         }
     )
     adapter._payrolls["EMP-SYNTH-001"] = [
@@ -1303,7 +1569,7 @@ async def test_latest_paid_net_keeps_pending_question_when_user_replies_with_nam
             requester,
             "qual è il netto dell'ultimo mese pagato?",
         )
-        result = await coordinator.ask(requester, "Amine Mohamed Abbadi")
+        result = await coordinator.ask(requester, "Utente Sintetico Uno")
     finally:
         await adapter.close()
 
@@ -1311,6 +1577,98 @@ async def test_latest_paid_net_keeps_pending_question_when_user_replies_with_nam
     assert router.calls == 0
     assert result.fields[0].name == "07/2026"
     assert "€ 1.456,78" in result.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_colloquial_standard_reads_resolve_locally_without_model_routing() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = MockDicAdapter()
+    item = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = item.model_copy(
+        update={
+            "display_name": SecretStr("Nora Esempio"),
+            "display_name_redacted": "Nora Esempio",
+            "first_name": SecretStr("Nora"),
+            "last_name": SecretStr("Esempio"),
+        }
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 26),
+    )
+    requester = actor(
+        LogicalRole.HR_READ,
+        LogicalRole.DOCUMENT_OPERATOR,
+        entitlements=frozenset(
+            {
+                "balances:read",
+                "documents:metadata",
+                "payroll:read",
+                "pii:read",
+                "protected_documents:download",
+            }
+        ),
+    )
+    try:
+        time_access = await coordinator.ask(requester, "Nora può timbrare?")
+        balance = await coordinator.ask(requester, "quante ferie restano a Nora?")
+        documents = await coordinator.ask(
+            requester,
+            "ci sono documenti in scadenza per Nora?",
+        )
+        dossier_question = await coordinator.ask(requester, "fammi il dossier HR completo")
+        profile = await coordinator.ask(requester, "Nora")
+        alerts = await coordinator.ask(requester, "leggi gli avvisi non letti")
+    finally:
+        await adapter.close()
+
+    assert router.calls == 0
+    assert time_access.title == "Timbratura EMP-SYNTH-001"
+    assert balance.title == "Bilancio EMP-SYNTH-001 — 2026"
+    assert documents.title == "Metadati documenti EMP-SYNTH-001"
+    assert dossier_question.title == "Chiarimento necessario"
+    assert profile.title == "Dossier HR completo — EMP-SYNTH-001"
+    assert len(profile.fields) == 8
+    assert profile.attachments[0].filename == "dossier_hr_EMP-SYNTH-001_2026.txt"
+    assert b"## Dipendente EMP-SYNTH-001" in profile.attachments[0].content
+    assert alerts.title == "Notifiche Dipendenti in Cloud"
+    assert alerts.fields
+    assert all("NON LETTA" in field.name for field in alerts.fields)
+
+
+@pytest.mark.asyncio
+async def test_employee_dossier_preflights_every_entitlement_before_detail_reads() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = MockDicAdapter()
+    item = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = item.model_copy(
+        update={
+            "display_name": SecretStr("Nora Esempio"),
+            "display_name_redacted": "Nora Esempio",
+            "first_name": SecretStr("Nora"),
+            "last_name": SecretStr("Esempio"),
+        }
+    )
+    adapter.get_employee_summary = AsyncMock(  # type: ignore[method-assign]
+        wraps=adapter.get_employee_summary
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 26),
+    )
+    try:
+        with pytest.raises(ApplicationPolicyDenied):
+            await coordinator.ask(
+                actor(LogicalRole.HR_READ),
+                "fammi il dossier HR completo di Nora",
+            )
+    finally:
+        await adapter.close()
+
+    assert router.calls == 0
+    adapter.get_employee_summary.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1342,6 +1700,73 @@ async def test_notifications_are_listed_and_read_state_uses_confirmation() -> No
     assert completed.success
     assert stored is not None and stored.status is ActionStatus.SUCCEEDED
     assert notifications.items[0].read is True
+
+
+@pytest.mark.asyncio
+async def test_onboarding_ocr_builds_actor_bound_draft_and_never_creates_employee() -> None:
+    upload_id = "a" * 32
+    files = SimpleNamespace(
+        ingest=AsyncMock(
+            return_value=SimpleNamespace(
+                upload_id=upload_id,
+                status=UploadStatus.CLEAN,
+                rejection_reason=None,
+            )
+        ),
+        claim_clean_upload=AsyncMock(
+            return_value=SimpleNamespace(
+                path=(Path.cwd() / "var" / "uploads" / "processed" / upload_id).resolve(),
+                detected_mime="image/png",
+            )
+        ),
+    )
+    ocr = SimpleNamespace(
+        extract=AsyncMock(
+            return_value=OcrText(
+                source=upload_id,
+                text=(
+                    "NOME: NOMEALFA\nCOGNOME: COGNOMEALFA\n"
+                    "CODICE FISCALE: AAAAAA00A00A000A\nDATA DI NASCITA: 01/01/2000"
+                ),
+            )
+        )
+    )
+    coordinator, adapter, repository = await coordinator_for(
+        _operator_router(),
+        files_override=files,
+        onboarding_ocr_override=ocr,
+        capabilities=frozenset({"clamav", "tesseract_ita_eng"}),
+    )
+    requester = actor(LogicalRole.HR_WRITE)
+    try:
+        draft = await coordinator.onboard_documents(
+            requester,
+            (
+                AttachmentPayload(
+                    original_filename="synthetic.png",
+                    content_type="image/png",
+                    declared_size=9,
+                    content=b"synthetic",
+                ),
+            ),
+        )
+        assert draft.onboarding_form is not None
+        completed = await coordinator.complete_onboarding_draft(
+            requester,
+            draft.onboarding_form.draft_id,
+            {"email": "persona@example.test", "phone": "+39 333 1234567"},
+        )
+        pending = await repository.list_actions()
+    finally:
+        await adapter.close()
+
+    assert draft.title == "Bozza onboarding dipendente"
+    assert draft.onboarding_form.field_names == ("email", "phone")
+    assert completed.onboarding_form is None
+    assert "Nessun dipendente è stato creato" in completed.description
+    assert pending == ()
+    files.claim_clean_upload.assert_awaited_once_with(upload_id)
+    ocr.extract.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2220,7 +2645,7 @@ async def test_hidden_operator_ids_never_enter_the_model_allowlist() -> None:
                 LogicalRole.DOCUMENT_OPERATOR,
                 LogicalRole.SYSTEM_ADMIN,
             ),
-            "Quanti collaboratori sono attivi?",
+            "Analizza la situazione aziendale",
         )
     finally:
         await adapter.close()

@@ -3,15 +3,14 @@
 Fonte normativa: `src/bh_dic/policies/catalog.py`. Questa pagina è una proiezione documentale e
 non deve essere mantenuta come secondo catalogo runtime.
 
-## Stato verificato
+## Stato della codebase
 
-- **35/35** Function ID hanno specifica policy e percorso mock sintetico testato.
-- **15 read**: tutte hanno policy e test sintetici. Il gate read-only del 2026-08-24 sullo SHA
-  `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha verificato live elenco completo, riepilogo,
-  ruoli, target timbratura, contratti, maturazioni, bilanci, payroll e documenti. Un empty state
-  valido non viene confuso con un errore; per contratti, bilanci e documenti è stato verificato
-  separatamente anche uno schema non vuoto, senza stampare contenuti personali. Il 2026-08-26 è
-  stato inoltre osservato e validato il contratto JSON paginato delle notifiche top-bar.
+- **36/36** Function ID hanno una specifica policy; le 35 route adapter hanno un percorso mock
+  sintetico e l'onboarding locale ha test OCR/draft isolati.
+- **16 read/local**: tutte hanno policy e test sintetici. I contratti adapter registrati coprono
+  elenco completo, riepilogo, ruoli, target timbratura, contratti, maturazioni, bilanci, payroll,
+  documenti e notifiche. Un empty state valido non viene confuso con un errore. La compatibilità
+  del singolo ambiente deve essere riprovata privatamente sulla revisione candidata.
 - **15 write**: `IMPLEMENTED`, `TESTED_WITH_MOCK`, `LIVE_WRITE_UNVERIFIED`,
   `DISABLED_BY_POLICY`; **5 write** sono `PARTIALLY_COMPLETED`, `TESTED_WITH_MOCK`,
   `LIVE_WRITE_UNVERIFIED`, `DISABLED_BY_POLICY`. Tra queste, `EMP-CREATE-001` ha un percorso live
@@ -21,17 +20,15 @@ non deve essere mantenuta come secondo catalogo runtime.
   dati sintetici. I 20 Function ID write
   sono tutti disabilitati dalla policy; i 19 gate distinti usati dal catalogo per le write
   (globale più specifici) sono `false` nella configurazione di esempio.
-- Lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato sul target Debian il gate
-  applicativo live autorizzato in sola lettura sulle superfici sopra. L'invio outbound del
-  messaggio startup Discord è verificato; un nuovo round-trip inbound manuale resta da eseguire
-  dal client Discord. Nessuna write live è stata eseguita.
+- La matrice non attesta alcun server corrente. Gate read-only, startup Discord e round-trip
+  inbound devono essere ripetuti e registrati nel change ticket privato di ogni rollout.
 
 La 0.3.0 estende i percorsi read senza ampliare il catalogo: `EMP-READ-001` usa la risposta elenco
 emessa dalla UI sotto schema chiuso; `EMP-CONTRACT-001` può analizzare le date del contratto
 corrente sull'intero elenco paginato senza fetch per-dipendente. La semantica “totale” e gli
 intervalli relativi sono risolti localmente. `current_contract` accetta per-record soltanto i
 keyset esatti `BASE` o `EXTENDED=BASE+6` chiavi tecniche; queste ultime hanno shape stretta e sono
-discard-only. Il gate live rapido verifica ogni risorsa una volta su un dipendente
+discard-only. Il gate read-only di un ambiente deve verificare ogni risorsa su un record
 rappresentativo; non dimostra che ogni dipendente abbia record in ogni modulo e non sostituisce
 il test collettivo payroll.
 
@@ -54,10 +51,11 @@ catalogo esclude anche dalla tool exposure ordinaria.
 | `EMP-TIME-001` | timbratura/accessi | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED per target singolo |
 | `EMP-MAT-001` | maturazioni | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 | `EMP-BAL-001` | bilancio | HR read + `balances:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
-| `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read + `payroll:read`; link con `protected_documents:download` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_VERIFIED 2026-08-24 |
+| `EMP-PAY-001` | busta paga individuale: mese, netto e link PDF temporaneo | HR read + `payroll:read`; link con `protected_documents:download` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — CONTRACT_VERIFIED — LIVE_READ_VERIFIED |
 | `EMP-PAY-002` | ricerca collettiva buste paga per mese | HR read + `payroll:read` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED con traversata collettiva completa |
 | `EMP-DOC-001` | metadati documenti | document operator + `documents:metadata` | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED |
 | `EMP-NOTIF-001` | notifiche top-bar DIC, incluse non lette | HR read | `ENABLE_READ_ACTIONS` | eligible | IMPLEMENTED — TESTED_WITH_MOCK — LIVE_READ_VERIFIED sul contratto JSON osservato |
+| `EMP-ONBOARD-001` | OCR locale JPEG/PNG e bozza onboarding actor-bound | HR write + ClamAV + Tesseract `ita+eng` | `ENABLE_READ_ACTIONS` | mai | IMPLEMENTED — TESTED_WITH_MOCK — NEEDS_VALIDATION end-to-end sintetica sul runtime distribuito; nessuna creazione DiC |
 
 ## Write, file ed export
 

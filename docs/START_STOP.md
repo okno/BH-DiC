@@ -1,9 +1,7 @@
 # Start e stop
 
-> Stato osservato al 17 agosto 2026: la 0.3.0 allo SHA esatto documentato ha superato il gate
-> applicativo live bounded con write disabilitate. Il servizio target è `active/running`, con zero
-> riavvii osservati e gateway `discord_ready`; lo smoke del trasporto Discord resta `PENDING`. Il
-> gateway resta separato dal login DIC.
+> Runbook generico: verificare lo stato reale nel change ticket e nei log privati dell'ambiente.
+> Il gateway resta separato dal login DIC e le write devono partire disabilitate.
 
 ## Prerequisiti
 
@@ -139,21 +137,19 @@ sudo systemctl start bh-dic.service &&
 sudo systemctl is-active bh-dic.service
 ```
 
-La 0.2.3 attende l'hydration entro un budget limitato e non ritenta automaticamente le
-credenziali; la 0.2.4 usa per l'e-mail DIC l'unico input nativo sotto il contenitore pubblico
+Il login attende l'hydration entro un budget limitato e non ritenta automaticamente le
+credenziali; usa per l'e-mail DIC l'unico input nativo sotto il contenitore pubblico
 `data-testid="login-email"`, invece del placeholder che corrispondeva anche al componente padre.
-La 0.2.5 ammette la callback DIC esatta soltanto come transitoria bounded, senza leggere o
+Ammette la callback DIC esatta soltanto come transitoria bounded, senza leggere o
 registrare la query, e attende il marker entro lo stesso budget mantenendo obbligatorio il tenant.
-La 0.2.7 accetta l'ingresso TeamSystem esatto sia su `LoginEmail` sia direttamente su
+Accetta l'ingresso TeamSystem esatto sia su `LoginEmail` sia direttamente su
 `LoginPassword` quando DIC passa il `login_hint`; non cambia lo User-Agent e non aggiunge route
 generiche. Il vault conserva cifrati anche i token DIC in `sessionStorage`, così il riavvio può
-ripristinare la sessione completa. Un check server 0.2.7 storico si è però fermato a
-`TEAMSYSTEM_EMAIL`. La 0.2.8 riconosce anche la root e-mail TeamSystem esatta corrente e
+ripristinare la sessione completa. Il contratto riconosce anche la root e-mail TeamSystem esatta e
 le sole transizioni bounded `/connect/authorize`/`/connect/authorize/callback`. Se l'IdP completa
 un SSO senza mostrare controlli, non viene eseguita alcuna azione credenziale e il successo
 richiede comunque marker DIC e attestazione tenant esatta. Eseguire invalidazione e check live
-esattamente una volta soltanto dopo una futura rotazione o compromissione; la sequenza storica è
-già conclusa. Se un futuro check restituisce
+esattamente una volta soltanto dopo una futura rotazione o compromissione. Se un check restituisce
 JSON con `error_type`/`stage`, non trasformarlo in un loop: il servizio può comunque essere
 avviato in modalità degradata per rispondere a status/health, ma nessuna funzione DIC sarà
 operativa finché una sessione non viene verificata.
@@ -177,10 +173,7 @@ I comandi `--online`/`--live` richiedono autorizzazione esplicita a rete/costo. 
 fa una sola richiesta sintetica chiusa e non costruisce Discord, DIC o browser; deve precedere
 l'avvio e non attesta il tenant DIC.
 
-Al 17 agosto 2026 preparazione, provider, autenticazione/tenant e i due subset read bounded
-documentati sono riusciti sullo SHA 0.3.0 verificato. Il servizio è stato avviato
-`active/running`, con zero riavvii osservati e gateway `discord_ready`. Verificare ora il
-round-trip slash autorizzato e poi decidere esplicitamente il lifecycle; le write restano
-disabilitate.
+Verificare preparazione, provider, autenticazione/tenant, probe read e round-trip Discord per la
+revisione effettivamente distribuita; le write restano disabilitate.
 
 Vedere [Operations](OPERATIONS.md) e [Troubleshooting](TROUBLESHOOTING.md).

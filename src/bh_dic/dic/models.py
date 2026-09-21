@@ -101,6 +101,7 @@ class FunctionId(StrEnum):
     EMP_EXPORT_001 = "EMP-EXPORT-001"
     EMP_NOTIF_001 = "EMP-NOTIF-001"
     EMP_NOTIF_002 = "EMP-NOTIF-002"
+    EMP_ONBOARD_001 = "EMP-ONBOARD-001"
 
 
 class EmployeeFilter(StrEnum):

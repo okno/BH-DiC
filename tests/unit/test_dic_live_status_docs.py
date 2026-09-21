@@ -34,8 +34,8 @@ def test_live_matrix_contains_exactly_the_authoritative_catalog() -> None:
     rows = _matrix_rows()
 
     assert set(rows) == ALL_FUNCTION_IDS
-    assert len(ALL_FUNCTION_IDS) == 35
-    assert len(READ_FUNCTION_IDS) == 15
+    assert len(ALL_FUNCTION_IDS) == 36
+    assert len(READ_FUNCTION_IDS) == 16
     assert len(WRITE_FUNCTION_IDS) == 20
     assert len(PARTIALLY_COMPLETED_FUNCTIONS) == 5
     assert len(LIVE_NOT_AVAILABLE_FUNCTIONS) == 4
@@ -47,7 +47,11 @@ def test_live_matrix_preserves_truthful_read_and_write_statuses() -> None:
     for function_id in READ_FUNCTION_IDS:
         row = rows[function_id]
         assert "IMPLEMENTED — TESTED_WITH_MOCK" in row
-        assert "LIVE_READ_VERIFIED" in row
+        if FUNCTION_CATALOG[function_id].adapter_managed:
+            assert "LIVE_READ_VERIFIED" in row
+        else:
+            assert "NEEDS_VALIDATION" in row
+            assert "LIVE_READ_VERIFIED" not in row
 
     for function_id in WRITE_FUNCTION_IDS:
         row = rows[function_id]

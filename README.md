@@ -7,18 +7,9 @@ feature flag, approvazioni e controlli prima di invocare l'adapter browser. La m
 `channel` inoltra le richieste operative riconosciute allo stesso coordinator di `/bh` e usa un
 responder stateless senza tool soltanto per l'orientamento HR generale.
 
-> Stato al 24 agosto 2026: lo SHA `3d9283a8070aa3f73bd061adc3b608bb1440c1b5` ha superato
-> sul target Debian il gate live read-only completo per elenco, riepilogo, ruoli, timbratura
-> target, contratti, maturazioni, bilanci, payroll e documenti. Il servizio è risultato
-> `active/running`, con zero riavvii osservati, gateway `discord_ready` e messaggio startup
-> outbound inviato con DiC disponibile. Un round-trip inbound va avviato da un utente Discord
-> reale autorizzato. Nessuna write live è stata eseguita.
-
-Le evidenze storiche `VERIFIED_BY_ADAPTER`, `TEAMSYSTEM_EMAIL`, restore `sessionStorage`, gateway
-`DEGRADED` e primo deny RBAC restano nel report come tappe separate; non sostituiscono né
-contraddicono il gate 0.3.0 corrente. I commit successivi limitati a documentazione o hardening
-operativo richiedono gate e deployment propri e non ereditano implicitamente l'evidenza DIC dello
-SHA applicativo.
+La repository pubblica non contiene stato, revisioni, host, ruoli o risultati del deployment
+reale. Ogni ambiente deve produrre e conservare privatamente la propria evidenza di rollout; gli
+stati nel catalogo descrivono il codice e non attestano una produzione corrente.
 
 ## Uso autorizzato
 
@@ -89,6 +80,7 @@ percorsi read bounded verificati live da tutte le altre modalità ancora da vali
 - Linux per il deployment operativo e Bash per gli script;
 - Chromium gestito da Playwright;
 - ClamAV per gli upload;
+- Tesseract con language pack `ita` e `eng` per l'OCR locale opzionale;
 - accesso autorizzato a Discord, al provider scelto e a Dipendenti in Cloud;
 - SQLite locale o PostgreSQL tramite driver async.
 
@@ -104,13 +96,11 @@ APP_ENV=test MOCK_MODE=true python -m pytest
 ```
 
 Per il server seguire [Installazione](docs/INSTALLATION.md) e
-[Deployment](docs/DEPLOYMENT.md). Il target verificato eseguiva la versione `0.3.0` allo SHA esatto
-riportato nello stato live; applicare sempre la migrazione `0002_model_usage` su altre
-installazioni. Invalidare il vault esclusivamente dopo rotazione o compromissione documentata; un
+[Deployment](docs/DEPLOYMENT.md). Applicare sempre le migrazioni richieste dalla revisione
+candidata. Invalidare il vault esclusivamente dopo rotazione o compromissione documentata; un
 semplice upgrade non richiede un nuovo login. Il gateway può essere avviato `DEGRADED` se la
-sessione verificata non è disponibile. Il servizio può essere fermato durante una finestra di
-manutenzione controllata; lo stato operativo osservato è quello dichiarato in apertura. Il prossimo
-passo funzionale autorizzato è lo smoke del trasporto Discord, non l'abilitazione delle write.
+sessione verificata non è disponibile. Ogni rollout registra privatamente stato del servizio,
+gate read-only e round-trip Discord; nessuna di queste prove abilita le write.
 
 ## Configurazione e operatività
 
@@ -163,13 +153,22 @@ I DM richiedono tutte le seguenti impostazioni: `DISCORD_ALLOW_DMS=true`,
 essere elencato in più mapping, ma ogni autorizzazione rimane esplicita.
 
 Esempi locali supportati: `dimmi il numero totale dei dipendenti`, `stampa una tabella ASCII con
-tutti i dipendenti`, `quali dipendenti hanno una busta paga a luglio?`, `genera un PDF/Word/Excel
-con tutti i dipendenti`, `riattiva <nome o ID>` e `disattiva <nome o ID> motivo: ...`. La ricerca
-collettiva delle buste percorre in modo bounded e read-only l'elenco Dipendenti e le sole pagine
-Buste paga dichiarate, senza passare la domanda o i dati al provider AI. Attiva/disattiva restano
-write con preview, conferma e A1/A2; non vengono abilitate automaticamente. Il netto mensile non è
-disponibile nella proiezione DiC
-corrente e viene indicato `N/D`, mai inventato.
+tutti i dipendenti`, `quali dipendenti hanno una busta paga a luglio?`, `quanto ha preso Nora a
+giugno?`, `Nora può timbrare?`, `quante ferie restano a Nora?`, `leggi gli avvisi non letti`,
+`genera un PDF/Word/Excel con tutti i dipendenti`, `riattiva <nome o ID>` e `disattiva <nome o ID>
+motivo: ...`. `Dossier HR completo di <nome o ID>` attraversa, dopo un preflight unico di tutti gli
+entitlement, anagrafica, contratti, ruoli, timbratura, maturazioni, bilancio, buste paga e documenti
+e restituisce un allegato completo; se manca un'autorizzazione non esegue alcuna lettura di
+dettaglio. La ricerca collettiva delle buste percorre in modo bounded e read-only l'elenco
+Dipendenti e le sole pagine Buste paga dichiarate, senza passare la domanda o i dati al provider
+AI. Attiva/disattiva restano write con preview, conferma e A1/A2; non vengono abilitate
+automaticamente. Il netto mensile non è presente nell'elenco, ma la richiesta composta “tabella
+... contratto e netto mensile” attraversa anche le pagine Contratti e Buste paga per ogni ID e usa
+il periodo richiesto o l'ultima paga con netto disponibile; solo i record realmente assenti restano
+`N/D`.
+
+Il ciclo di pianificazione, i budget e il confine della discovery sono descritti in
+[Planner HR read-only](docs/QUERY_PLANNER.md).
 
 Quando `/bh status` segnala una sessione DIC non disponibile, un utente del canale con ruolo
 applicativo `SECURITY_ADMIN` o `SYSTEM_ADMIN` può usare `/bh dic reconnect`, se
@@ -198,10 +197,8 @@ tool. Vedere anche [Testing](docs/TESTING.md).
 
 ## Sicurezza e limiti
 
-- Il progetto è alpha. Il gate live copre soltanto conteggio aggregato e scadenze bounded del
-  prossimo mese di calendario; ricerca, altre letture e altri intervalli restano da validare.
-- Lo smoke del trasporto Discord 0.3.0 è ancora `PENDING`; nello snapshot documentato il servizio
-  è `active/running`, con zero riavvii osservati e gateway `discord_ready`.
+- Il progetto è alpha. Ogni rilascio richiede un nuovo gate read-only nell'ambiente autorizzato;
+  nessuna evidenza di deployment è pubblicata in questa repository.
 - MFA, CAPTCHA e UI drift possono impedire l'automazione.
 - Nessuna write live è stata eseguita; i percorsi write sono `TESTED_WITH_MOCK` e
   `DISABLED_BY_POLICY`.

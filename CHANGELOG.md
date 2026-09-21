@@ -53,7 +53,7 @@ stable public API is declared.
   matricola è visibile integralmente soltanto con `pii:read`.
 
 - Il routing Groq usa Chat Completions con una sola tool call obbligatoria e validazione locale,
-  evitando il percorso Responses che in produzione restituiva `tool_use_failed` su richieste reali.
+  con fallback chiuso per `tool_use_failed` e catalogo provider ristretto per famiglia.
 - Rate limit e concorrenza della chat pubblica sono separati dagli slash command. Deny RBAC,
   saturazione e indisponibilità provider producono ora una risposta pubblica chiusa invece del
   silenzio.
@@ -136,16 +136,9 @@ stable public API is declared.
 
 ### Verification
 
-- Gate locali completi sul rilascio: 834 test passati, branch coverage 85% su 10.361 statement e
-  3.258 branch, Ruff, mypy, Bandit e `pip-audit` verdi. CI e CodeQL sono riusciti sullo SHA esatto
-  `c2c1e8da8a7f2aba5cb8a9f679d1251e15cb38fe`.
-- Lo stesso SHA, versione `0.3.0`, è stato verificato sul target Debian con un unico gate live
-  autorizzato in sola lettura: autenticazione e tenant attestati; conteggio aggregato
-  `PUBLIC`/non-ephemeral con telemetria token; scadenze del prossimo mese di calendario
-  `SENSITIVE`/ephemeral, bounded e con telemetria token; stato API/token completo. Le write sono
-  rimaste disabilitate. Il gate applicativo non attesta il trasporto Discord: lo smoke slash
-  Discord resta `PENDING`. Dopo il gate il servizio è stato avviato `active/running`, con zero
-  riavvii osservati e gateway `discord_ready`.
+- La release richiede suite, lint, type-check, security scan e gate read-only separato. I risultati
+  specifici dell'ambiente e la revisione distribuita sono conservati fuori dalla repository
+  pubblica.
 
 ## [0.2.8] - 2026-08-17
 
@@ -175,9 +168,8 @@ stable public API is declared.
 
 ### Verification
 
-- Gate locali completi della candidata 0.2.8: 655 test passati, branch coverage 85,88%, Ruff,
-  mypy, Bandit, dependency check/audit, YAML, script operativi e link documentali verdi. La
-  correzione non è ancora stata verificata sul target DIC live.
+- La release richiede gate locali e verifica DIC read-only separata; i risultati di ambiente non
+  sono conservati nel changelog pubblico.
 
 ## [0.2.7] - 2026-08-17
 
@@ -237,11 +229,8 @@ stable public API is declared.
 
 ### Verification
 
-- Un accesso manuale autorizzato, in un browser fresco e in sola lettura, ha accettato le
-  credenziali con un solo submit e ha osservato la sequenza TeamSystem password → callback DIC
-  esatta → dashboard → route e marker esatti della lista dipendenti. Questo attesta soltanto il
-  login manuale (`LIVE_AUTHENTICATED`): adapter headless, attestazione tenant e persistenza del
-  vault sul server restano da verificare con un unico check autorizzato dopo il deployment.
+- La release richiede un unico check autorizzato con bot fermo e write disabilitate. L'esito e la
+  revisione distribuita restano nel registro operativo privato.
 
 ## [0.2.4] - 2026-08-16
 
@@ -258,8 +247,7 @@ stable public API is declared.
 
 ### Changed
 
-- Il gate DIC resta non completato: nessuna sessione, attestazione tenant o Function ID è stata
-  verificata live. Dopo il deployment della 0.2.4 l'operatore deve eseguire esattamente un nuovo
+- Il gate DIC resta separato dai test locali. L'operatore esegue al massimo un nuovo
   `dic-auth-check --live` autorizzato, con bot fermo e write disabilitate.
 
 ## [0.2.3] - 2026-08-16
@@ -283,10 +271,8 @@ stable public API is declared.
 
 ### Changed
 
-- La documentazione operativa registra il rinnovo umano della password TeamSystem e
-  l'aggiornamento del secret locale. Il tentativo live con la 0.2.2 si è fermato prima
-  dell'autenticazione per una race di hydration; sessione, tenant e Function ID DIC restano da
-  verificare live, con bot fermo e write disabilitate.
+- La documentazione operativa richiede rinnovo password umano, aggiornamento locale del segreto e
+  verifica separata di sessione, tenant e Function ID con bot fermo e write disabilitate.
 
 ## [0.2.2] - 2026-08-16
 
@@ -311,8 +297,8 @@ stable public API is declared.
 
 ### Changed
 
-- Debian deployment and operations documentation now records the verified Groq and local runtime
-  gates while keeping the unfinished DIC authentication check clearly blocked.
+- Debian deployment and operations documentation separates local runtime gates from DIC
+  authentication evidence, which remains private and revision-specific.
 - Shell environment parsing uses a portable `awk` quote expression and no longer emits `mawk`
   escape warnings on Debian 12.
 

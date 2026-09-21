@@ -1,9 +1,8 @@
 # DiC employee route graph
 
-Live discovery was performed in read-only mode on 2026-08-24 against the
-configured, tenant-attested session at source commit
-`98b03932ca1bf548bff44a82a1fedd976e5603d0`. Identifiers below are templates;
-no tenant or employee identifier is stored.
+This graph documents the versioned route registry. Identifiers are templates; no tenant or
+employee identifier is stored. Registry state is not, by itself, evidence that a deployment has
+passed a current live probe.
 
 ```text
 /it/app/employees
@@ -11,14 +10,19 @@ no tenant or employee identifier is stored.
     └── employee selected by opaque ID
         ├── /info/{employee_id}/summary            LIVE_READ_VERIFIED
         ├── /info/{employee_id}/roles              LIVE_READ_VERIFIED
-        ├── /info/{employee_id}/contracts          ROUTE_VERIFIED / EXTRACTOR_DEGRADED
-        ├── /info/{employee_id}/maturations        ROUTE_VERIFIED / EXTRACTOR_DEGRADED
-        ├── /info/{employee_id}/counters           ROUTE_VERIFIED / EXTRACTOR_DEGRADED
+        ├── /info/{employee_id}/contracts          REGISTERED_READ
+        ├── /info/{employee_id}/maturations        REGISTERED_READ
+        ├── /info/{employee_id}/counters           REGISTERED_READ
         ├── /info/{employee_id}/payrolls           LIVE_READ_VERIFIED
-        └── /info/{employee_id}/documents/list     ROUTE_VERIFIED / EXTRACTOR_DEGRADED
+        └── /info/{employee_id}/documents/list     REGISTERED_READ
 
 /it/app/settings/timestamps/employees              LIVE_READ_VERIFIED
 ```
+
+La lettura paghe usa sempre il template tipizzato
+`/it/app/employees/info/{employee_id}/payrolls`; il modello non genera URL. La risoluzione del nome
+avviene prima nel tenant tramite elenco DiC, con conferma obbligatoria per omonimi o similarità
+fuzzy, poi l'ID selezionato viene verificato contro il contesto opaco della stessa conversazione.
 
 The observed navigation also loads employee permissions, workplaces, work-time,
 expense, shift and timesheet-related fields through first-party employee APIs.

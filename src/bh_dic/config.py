@@ -178,6 +178,8 @@ class AppSettings(BaseSettings):
     )
     clamav_required: bool = True
     clamav_socket: str | None = Field(default=None, max_length=512)
+    ocr_tesseract_executable: str = Field(default="tesseract", min_length=1, max_length=512)
+    ocr_timeout_seconds: float = Field(default=20, ge=1, le=120)
     save_failure_screenshots: bool = False
     playwright_trace_mode: Literal["off", "on", "retain-on-failure"] = "off"
     trace_retention_hours: int = Field(default=4, ge=1, le=24)

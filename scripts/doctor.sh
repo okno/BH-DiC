@@ -107,6 +107,22 @@ else
   pass "ClamAV requirement disabled (document upload must remain disabled)"
 fi
 
+ocr_executable="$(read_env_value OCR_TESSERACT_EXECUTABLE tesseract)"
+ocr_resolved=""
+if [[ "${ocr_executable}" == */* ]]; then
+  if [[ -x "${ocr_executable}" && -f "${ocr_executable}" ]]; then ocr_resolved="${ocr_executable}"; fi
+else
+  ocr_resolved="$(command -v -- "${ocr_executable}" 2>/dev/null || true)"
+fi
+if [[ -z "${ocr_resolved}" ]]; then
+  fail "local Tesseract OCR executable unavailable"
+elif ocr_languages="$("${ocr_resolved}" --list-langs 2>/dev/null)" && \
+  grep -qx 'ita' <<<"${ocr_languages}" && grep -qx 'eng' <<<"${ocr_languages}"; then
+  pass "local Tesseract OCR and ita+eng language packs available"
+else
+  fail "local Tesseract OCR is missing ita or eng language packs"
+fi
+
 if [[ "$(read_env_bool ENABLE_WRITE_ACTIONS false)" == "true" ]]; then
   warn "WRITE ACTIONS ARE ENABLED; verify approvals and individual feature flags before startup"
 else
