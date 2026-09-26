@@ -86,7 +86,7 @@ _BARE_EMPLOYEE_SEARCH = re.compile(
     r"([\wÀ-ÿ'-]{2,64}(?:\s+[\wÀ-ÿ'-]{2,64}){0,3})[?!.]*\s*$"
 )
 _EMPLOYEE_EXISTENCE_SEARCH = re.compile(
-    r"(?is)^\s*(?:c[\x27\u2019]\s*[èe]|esiste)\s+(?:un(?:a|o)?\s+)?"
+    r"(?is)^\s*(?:c(?:[\x27\u2019]\s*[èe]|e)|esiste)\s+(?:un(?:a|o)?\s+)?"
     r"(?:dipendente|employee)\s+"
     r"(?:(?:che\s+)?(?:si\s+chiama|chiamat[oa])|di\s+nome)\s+(.+?)[?!.]*\s*$"
 )
@@ -135,7 +135,10 @@ _EXPORT_FORMAT = re.compile(
     r"\b(?P<format>xlsx|excel|foglio\s+di\s+calcolo|pdf|docx|doc|word|documento)\b",
     re.IGNORECASE,
 )
-_PAYROLL_TERM = re.compile(r"\b(?:bust[ae]\s+paga|cedolin[oi]|payroll\w*)\b", re.IGNORECASE)
+_PAYROLL_TERM = re.compile(
+    r"\b(?:bust[ae](?:\s+pag[ae])?|cedolin[oi]|payroll\w*)\b",
+    re.IGNORECASE,
+)
 _PAYROLL_COLLECTIVE = re.compile(
     r"\b(?:quali|chi|elenc\w*|lista|tutti\s+i\s+dipendenti|dipendenti)\b",
     re.IGNORECASE,
@@ -148,6 +151,8 @@ _PAYROLL_MONTH = re.compile(
 _PAYROLL_YEAR = re.compile(r"\b(20\d{2})\b")
 _NET_PAY_REQUEST = re.compile(
     r"\b(?:stipendi\w*|retribuzion\w*)(?:\s+nett\w*)?\s+(?:di|del|della|per)\b|"
+    r"^\s*stipendi\w*(?:\s+nett\w*)?\s+"
+    r"(?!(?:medi[oa]|mensil[ei]|annual[ei]|lord[oaie]|total[ei])\b)|"
     r"\bpaga\s+nett\w*\s+(?:di|del|della|per)\b|"
     r"\bnett\w*\s+(?:mensile|da\s+pagare|di\b|del\b|della\b|per\b)|"
     r"\bultim[oa]\s+(?:mese\s+pagat[oa]|busta\s+paga|cedolino)\b",
@@ -172,7 +177,7 @@ _COLLOQUIAL_PAY_TARGET = re.compile(
 _NET_PAY_TARGET = re.compile(
     r"(?is)\b(?:(?:stipendi\w*|retribuzion\w*)(?:\s+nett\w*)?|"
     r"paga\s+nett\w*|nett\w*)\s+"
-    r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
+    r"(?:(?:di|del|della|per)\s+)?(?:il\s+dipendente\s+|la\s+dipendente\s+)?"
     r"(.+?)(?=\s+(?:del\s+)?mese\b|\s+(?:a|di|per)\s+(?:gennaio|febbraio|marzo|aprile|"
     r"maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b|[?!.]|$)"
 )
@@ -282,9 +287,10 @@ _MATURATION_SUBJECT_TARGET = re.compile(
     r"\brate[oi]\s+maturat[ei]\s+(?:di|da|per)\s+(.+?)(?=[?!.]|$))"
 )
 _PAYROLL_DOCUMENT_TARGET = re.compile(
-    r"(?is)\b(?:bust[ae]\s+pag[ae]|cedolin[oi]|stipendi\w*)\s+"
+    r"(?is)\b(?:bust[ae](?:\s+pag[ae])?|cedolin[oi])\s+"
     r"(?:(?:pi[uù]\s+recente|pi[uù]\s+nuov[oa]|ultim[oa])\s+)?"
-    r"(?:di|del|della|per)\s+(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+)?"
+    r"(?:(?:di|del|della|per)\s+)?"
+    r"(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+)?"
     r"(.+?)(?=\s+(?:(?:a|di|nel|per)\s+(?:(?:mese\s+)?(?:di\s+)?)?)?"
     r"(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|"
     r"novembre|dicembre)\b|\s+(?:nel|del)\s+20\d{2}\b|[?!.]|$)"
@@ -1267,6 +1273,16 @@ def normalize_hr_intent(intent: IntentEnvelope, request: str, *, today: date) ->
         if period is not None:
             year, month = period
             updates["parameters"] = {"year": year, "month": month}
+
+    if intent.function_id == "EMP-PAY-001" and not any(
+        key in intent.parameters for key in ("year", "month", "latest_paid")
+    ):
+        period = local_payroll_presence_period(request, today=today)
+        updates["parameters"] = (
+            {"year": period[0], "month": period[1], "include_net": True}
+            if period is not None
+            else {"latest_paid": True, "include_net": True}
+        )
 
     return intent.model_copy(update=updates) if updates else intent
 

@@ -34,6 +34,13 @@ di Nora` — sono normalizzate localmente. Nome e domanda non vengono inviati al
 ambigui come `permessi` vengono distinti fra saldo ferie/permessi e autorizzazioni del portale dal
 contesto chiuso della frase.
 
+La risoluzione non usa il filtro testuale della UI DiC. Il coordinator acquisisce l'organico dalla
+route paginata già validata e confronta localmente nome, cognome e Employee ID. Una corrispondenza
+esatta e univoca può proseguire senza un chiarimento; più persone compatibili producono un menu di
+scelta actor-bound; un fuzzy match resta sempre una proposta da confermare. Se il modello individua
+la funzione ma non il target, lo stesso resolver locale recupera l'unica persona nominata nel testo
+originale senza esporre il roster al provider.
+
 La stessa boundary locale gestisce domande di esistenza (`c'è una dipendente di nome …?`), ricerca
 breve (`trova …`), profilo/anagrafica, stipendio colloquiale, contratto del singolo, ruoli/gruppi,
 timbratura, ratei, saldo ferie e documenti con stato. Ordinamento dell'organico, filtro bounded per
@@ -45,7 +52,10 @@ o `da firmare` non possono diventare accidentalmente parte del nome cercato.
 Le richieste già riconosciute localmente non chiamano il provider. Per le restanti, il provider
 riceve soltanto termini canonici senza nomi, ID o testo DiC. Il filtro di famiglia espone al
 massimo tre Function ID read pertinenti (per esempio solo payroll o solo documenti), mai l'intero
-catalogo. Un `tool_use_failed` Groq su una famiglia chiusa può degradare a un chiarimento locale;
+catalogo. Sui modelli Groq GPT-OSS supportati il classificatore usa uno Structured Output JSON
+stretto e `tool_choice=none`: il modello sceglie una Function ID consentita ma non dispone di tool
+né controlla il browser. Schema, catalogo, target, RBAC e parametri sono rivalidati localmente.
+Per altri modelli, un `tool_use_failed` su una famiglia chiusa può degradare a un chiarimento locale;
 non produce una write e non interrompe con un generico errore AI quando target o periodo possono
 essere richiesti in sicurezza.
 

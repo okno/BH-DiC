@@ -159,6 +159,10 @@ def test_employee_existence_and_search_keep_the_name_out_of_the_router(message: 
         ("Quali sono i dati anagrafici di Nora?", "EMP-READ-002", "Nora"),
         ("Che contratto ha Nora?", "EMP-CONTRACT-001", "Nora"),
         ("Qual è lo stipendio di Nora a giugno?", "EMP-PAY-001", "Nora"),
+        ("Stipendio Nora Collaudo", "EMP-PAY-001", "Nora Collaudo"),
+        ("Busta di Nora", "EMP-PAY-001", "Nora"),
+        ("Ultima busta di Nora", "EMP-PAY-001", "Nora"),
+        ("Busta paga 12345", "EMP-PAY-001", "12345"),
         ("Saldo ferie e permessi di Nora", "EMP-BAL-001", "Nora"),
         ("Bilancio 2026 di Nora", "EMP-BAL-001", "Nora"),
         ("Cosa ha maturato Nora?", "EMP-MAT-001", "Nora"),
@@ -193,6 +197,18 @@ def test_bare_employee_search_and_status_only_count_are_closed_local_requests() 
     assert count is not None
     assert count.envelope.function_id == "EMP-READ-001"
     assert count.envelope.parameters == {"status": "inactive", "view": "count"}
+
+
+def test_employee_existence_accepts_common_missing_apostrophe_without_provider() -> None:
+    parsed = parse_local_operational_intent(
+        "Ce una dipendente che si chiama Nora?",
+        today=TODAY,
+    )
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-SEARCH-001"
+    assert parsed.envelope.query == "Nora"
+    assert not parsed.envelope.requires_clarification
 
 
 def test_bare_search_does_not_mistake_a_resource_for_an_employee_target() -> None:

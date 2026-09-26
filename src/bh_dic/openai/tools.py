@@ -308,5 +308,41 @@ def build_openai_tools(allowed_function_ids: Iterable[str]) -> list[dict[str, An
     return result
 
 
+def build_intent_response_schema(allowed_function_ids: Iterable[str]) -> dict[str, Any]:
+    """Build one strict classifier schema for providers with Structured Outputs.
+
+    The schema selects only a policy-visible Function ID.  It carries the same bounded envelope
+    fields as the tool boundary, while local validation still derives the action class and intent
+    from the immutable catalog.
+    """
+
+    allowed = sorted(
+        function_id
+        for function_id in frozenset(allowed_function_ids)
+        if function_id in FUNCTION_CATALOG and FUNCTION_CATALOG[function_id].expose_to_model
+    )
+    return _parameters_schema([*allowed, "UNSUPPORTED"])
+
+
+def tool_name_for_function_id(
+    function_id: str,
+    allowed_function_ids: Iterable[str],
+) -> str | None:
+    """Return the catalog tool identity for one locally allowed Function ID."""
+
+    if function_id == "UNSUPPORTED":
+        return "unsupported_request"
+    allowed = frozenset(allowed_function_ids)
+    if function_id not in allowed:
+        return None
+    spec = FUNCTION_CATALOG.get(function_id)
+    if spec is None or not spec.expose_to_model:
+        return None
+    return next(
+        (tool.name for tool in TOOL_CATALOG if function_id in tool.function_ids),
+        None,
+    )
+
+
 def exposed_tool_names(allowed_function_ids: Iterable[str]) -> frozenset[str]:
     return frozenset(tool["name"] for tool in build_openai_tools(allowed_function_ids))

@@ -13,7 +13,7 @@ import json
 import re
 import unicodedata
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -147,6 +147,32 @@ DicReconnectHandler = Callable[[], Awaitable[SessionStatus]]
 _MAX_INLINE_ASCII_CHUNKS = 10
 _MAX_WORKFORCE_PLAN_EMPLOYEES = 200
 _DIC_RECONNECT_FUNCTION_ID = "DIC-RECONNECT"
+_EMPLOYEE_MENTION_STOPWORDS = frozenset(
+    {
+        "agosto",
+        "aprile",
+        "busta",
+        "cedolino",
+        "dicembre",
+        "dipendente",
+        "febbraio",
+        "ferie",
+        "gennaio",
+        "giugno",
+        "luglio",
+        "maggio",
+        "marzo",
+        "novembre",
+        "ottobre",
+        "paga",
+        "payroll",
+        "retribuzione",
+        "risorse",
+        "settembre",
+        "stipendio",
+        "umane",
+    }
+)
 
 
 class BHApplicationCoordinator(InteractionCoordinator):
@@ -463,6 +489,39 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 normalized_request,
                 today=request_today,
             )
+        resolved_item: EmployeeListItem | None = None
+        spec = get_function_spec(intent.function_id)
+        missing_target = (
+            spec is not None
+            and spec.requires_target
+            and intent.employee_id is None
+            and target_query is None
+        )
+        if missing_target:
+            # A provider may correctly identify the HR operation while failing to recover the
+            # redacted employee target. Never trust it with roster identities: match the original
+            # request against the complete DIC roster locally and continue only for one exact,
+            # unambiguous person. This also overrides an unnecessary model clarification.
+            inferred = await self._infer_unique_employee_mention(normalized_request)
+            if inferred is not None:
+                resolved_item = inferred
+                intent = intent.model_copy(
+                    update={
+                        "employee_id": inferred.employee_id,
+                        "requires_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+            elif not intent.requires_clarification:
+                # The model cannot suppress a clarification required by the closed catalog.
+                intent = intent.model_copy(
+                    update={
+                        "requires_clarification": True,
+                        "clarification_question": (
+                            "Indica il nome, il cognome oppure l'Employee ID della persona."
+                        ),
+                    }
+                )
         if intent.requires_clarification:
             spec = get_function_spec(intent.function_id)
             if spec is not None and spec.requires_target and intent.employee_id is None:
@@ -497,7 +556,6 @@ class BHApplicationCoordinator(InteractionCoordinator):
             )
             return await self._with_request_usage(result, correlation_id)
 
-        resolved_item: EmployeeListItem | None = None
         if target_query is not None and intent.function_id in visible:
             resolved = await self._resolve_employee_target(
                 target_query,
@@ -2118,6 +2176,42 @@ class BHApplicationCoordinator(InteractionCoordinator):
         )
         return result
 
+    async def _infer_unique_employee_mention(self, request: str) -> EmployeeListItem | None:
+        """Find one unambiguous roster name in free-form text without provider disclosure."""
+
+        request_tokens = frozenset(self._normalized_person_tokens(request))
+        if not request_tokens:
+            return None
+        roster = await self.dic.list_all_employees(
+            EmployeeListQuery(
+                employee_filter=EmployeeFilter.ALL,
+                sort_by="name",
+                sort_direction=SortDirection.ASC,
+                page=1,
+                page_size=100,
+            ),
+            max_records=500,
+        )
+        full_name_matches: list[EmployeeListItem] = []
+        token_matches: list[EmployeeListItem] = []
+        for item in roster.items:
+            name_tokens = self._normalized_person_tokens(self._employee_display_name(item))
+            meaningful = tuple(
+                token
+                for token in name_tokens
+                if len(token) >= 3 and token not in _EMPLOYEE_MENTION_STOPWORDS
+            )
+            if meaningful and all(token in request_tokens for token in meaningful):
+                full_name_matches.append(item)
+                continue
+            if any(token in request_tokens for token in meaningful):
+                token_matches.append(item)
+        if len(full_name_matches) == 1:
+            return full_name_matches[0]
+        if not full_name_matches and len(token_matches) == 1:
+            return token_matches[0]
+        return None
+
     async def _resolve_employee_target(
         self,
         query: str,
@@ -2131,82 +2225,26 @@ class BHApplicationCoordinator(InteractionCoordinator):
         """Resolve a local name query without exposing it to the model provider."""
 
         normalized_query = normalize_text(query, max_length=128, allow_newlines=False)
-        result = await self.dic.list_all_employees(
+        roster = await self.dic.list_all_employees(
             EmployeeListQuery(
-                query=normalized_query,
                 employee_filter=EmployeeFilter.ALL,
                 sort_by="name",
                 sort_direction=SortDirection.ASC,
                 page=1,
                 page_size=100,
-            )
+            ),
+            max_records=500,
         )
         available = [
             item
-            for item in result.items
+            for item in roster.items
             if allowed_candidate_ids is None or item.employee_id in allowed_candidate_ids
         ]
-        exact = [
-            item
-            for item in available
-            if self._employee_display_name(item).casefold() == normalized_query.casefold()
-            or item.employee_id.casefold() == normalized_query.casefold()
-        ]
-        query_tokens = self._normalized_person_tokens(normalized_query)
-        token_exact = [
-            item
-            for item in available
-            if query_tokens
-            and all(
-                token in self._normalized_person_tokens(self._employee_display_name(item))
-                for token in query_tokens
-            )
-        ]
-        candidates = exact or token_exact
-        suggestions_only = False
-        if not candidates and available:
-            candidates = available
-            suggestions_only = True
-        if not candidates:
-            roster = await self.dic.list_all_employees(
-                EmployeeListQuery(
-                    employee_filter=EmployeeFilter.ALL,
-                    sort_by="name",
-                    sort_direction=SortDirection.ASC,
-                    page=1,
-                    page_size=100,
-                ),
-                max_records=500,
-            )
-            roster_items = [
-                item
-                for item in roster.items
-                if allowed_candidate_ids is None or item.employee_id in allowed_candidate_ids
-            ]
-            token_exact = [
-                item
-                for item in roster_items
-                if query_tokens
-                and all(
-                    token in self._normalized_person_tokens(self._employee_display_name(item))
-                    for token in query_tokens
-                )
-            ]
-            if token_exact:
-                candidates = token_exact
-            elif allowed_candidate_ids is None:
-                scored = sorted(
-                    (
-                        (self._person_similarity(normalized_query, item), item)
-                        for item in roster_items
-                    ),
-                    key=lambda pair: pair[0],
-                    reverse=True,
-                )
-                best = scored[0][0] if scored else 0.0
-                if best >= 0.80:
-                    candidates = [item for score, item in scored if score >= best - 0.06][:25]
-                    suggestions_only = True
+        candidates, suggestions_only = self._employee_candidates(
+            normalized_query,
+            available,
+            allow_fuzzy=allowed_candidate_ids is None,
+        )
         if not candidates:
             if allowed_candidate_ids is not None:
                 description = (
@@ -2292,6 +2330,49 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 for token in name_tokens
             )
         return max(scores)
+
+    @classmethod
+    def _employee_candidates(
+        cls,
+        query: str,
+        items: Sequence[EmployeeListItem],
+        *,
+        allow_fuzzy: bool,
+    ) -> tuple[list[EmployeeListItem], bool]:
+        """Resolve IDs and person tokens locally; fuzzy candidates always require confirmation."""
+
+        folded_query = query.casefold()
+        exact = [
+            item
+            for item in items
+            if cls._employee_display_name(item).casefold() == folded_query
+            or item.employee_id.casefold() == folded_query
+        ]
+        if exact:
+            return exact, False
+        query_tokens = cls._normalized_person_tokens(query)
+        token_exact = [
+            item
+            for item in items
+            if query_tokens
+            and all(
+                token in cls._normalized_person_tokens(cls._employee_display_name(item))
+                for token in query_tokens
+            )
+        ]
+        if token_exact:
+            return token_exact, False
+        if not allow_fuzzy:
+            return [], False
+        scored = sorted(
+            ((cls._person_similarity(query, item), item) for item in items),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+        best = scored[0][0] if scored else 0.0
+        if best < 0.80:
+            return [], False
+        return [item for score, item in scored if score >= best - 0.06][:25], True
 
     def _context_followup_intent(
         self,
@@ -2417,11 +2498,35 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     raise ApplicationError("employee group filter is invalid") from exc
                 if not group_filter:
                     raise ApplicationError("employee group filter is invalid")
-            result = (
-                await self.dic.list_all_employees(employee_query)
-                if include_all or group_filter is not None
-                else await self.dic.list_employees(employee_query)
-            )
+            if function_id == "EMP-SEARCH-001" and intent.query:
+                normalized_search = normalize_text(
+                    intent.query,
+                    max_length=128,
+                    allow_newlines=False,
+                )
+                roster = await self.dic.list_all_employees(
+                    employee_query.model_copy(update={"query": None, "page": 1}),
+                    max_records=500,
+                )
+                local_matches, _ = self._employee_candidates(
+                    normalized_search,
+                    roster.items,
+                    allow_fuzzy=True,
+                )
+                shown_matches = tuple(local_matches[:100])
+                result = EmployeeListResult(
+                    items=shown_matches,
+                    page=1,
+                    page_size=max(1, len(shown_matches)),
+                    total=len(local_matches),
+                    has_next=len(local_matches) > len(shown_matches),
+                )
+            else:
+                result = (
+                    await self.dic.list_all_employees(employee_query)
+                    if include_all or group_filter is not None
+                    else await self.dic.list_employees(employee_query)
+                )
             if group_filter is not None:
                 filtered_items = tuple(
                     item

@@ -55,8 +55,12 @@ stable public API is declared.
 - Payroll/netto e link al documento richiedono entitlement distinti e consegna privata; la
   matricola è visibile integralmente soltanto con `pii:read`.
 
-- Il routing Groq usa Chat Completions con una sola tool call obbligatoria e validazione locale,
-  con fallback chiuso per `tool_use_failed` e catalogo provider ristretto per famiglia.
+- Il routing Groq sui modelli GPT-OSS supportati usa Structured Outputs con schema JSON stretto,
+  senza tool eseguibili; Function ID, parametri e policy vengono comunque rivalidati localmente.
+  Gli altri modelli compatibili mantengono il catalogo provider ristretto per famiglia.
+- La risoluzione del dipendente usa l'organico DiC completo e una corrispondenza locale: nome,
+  cognome o ID univoci proseguono senza chiarimenti superflui, mentre omonimi e fuzzy match
+  richiedono una selezione esplicita. Il provider non riceve mai identità dell'organico.
 - Rate limit e concorrenza della chat pubblica sono separati dagli slash command. Deny RBAC,
   saturazione e indisponibilità provider producono ora una risposta pubblica chiusa invece del
   silenzio.
@@ -64,6 +68,17 @@ stable public API is declared.
   distingue `public_hr_response` da `intent_route` e chiude anche le chiamate cancellate.
 - Gli extra dei deny Discord sono appiattiti nei JSON log, coerentemente con
   `details.reason`, senza inserire prompt o identificativi utente grezzi.
+
+### Fixed
+
+- Le formulazioni quotidiane abbreviate per stipendio e busta paga vengono ricondotte localmente
+  alla lettura payroll, inclusi mese esplicito, ultima busta e ID numerico.
+- Una classificazione AI corretta ma priva di target non provoca più automaticamente un
+  chiarimento: il coordinator recupera localmente l'unica persona nominata nell'organico. Se il
+  target è davvero assente o ambiguo, il catalogo forza invece una domanda sicura.
+- La ricerca per nome non dipende più dal filtro server-side dell'interfaccia DiC: il roster viene
+  acquisito dalla route paginata validata e filtrato localmente, evitando errori dovuti a variazioni
+  della UI di ricerca.
 
 ## [0.3.0] - 2026-08-17
 

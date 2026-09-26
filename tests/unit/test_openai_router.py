@@ -13,7 +13,11 @@ from bh_dic.openai.intent_router import MockIntentRouter, OpenAIIntentRouter
 from bh_dic.openai.prompts import INTENT_ROUTER_PROMPT
 from bh_dic.openai.redaction import UnsafePromptError, prepare_provider_input, redact_structure
 from bh_dic.openai.schemas import ActionClass, IntentEnvelope, Sensitivity
-from bh_dic.openai.tools import build_openai_tools
+from bh_dic.openai.tools import (
+    build_intent_response_schema,
+    build_openai_tools,
+    tool_name_for_function_id,
+)
 
 
 def _valid_envelope(**overrides: object) -> dict[str, object]:
@@ -55,6 +59,24 @@ def test_tool_exposure_hides_write_schemas() -> None:
     assert names == {"list_employees", "unsupported_request"}
     assert all(tool["strict"] is True for tool in tools)
     assert all(tool["parameters"]["additionalProperties"] is False for tool in tools)
+
+
+def test_structured_router_schema_exposes_only_allowed_model_functions() -> None:
+    schema = build_intent_response_schema({"EMP-READ-001", "EMP-DELETE-001"})
+    function_ids = schema["properties"]["function_id"]["enum"]
+
+    assert function_ids == ["EMP-READ-001", "UNSUPPORTED"]
+    assert schema["additionalProperties"] is False
+    assert (
+        tool_name_for_function_id("EMP-READ-001", frozenset({"EMP-READ-001"})) == "list_employees"
+    )
+    assert (
+        tool_name_for_function_id(
+            "EMP-DELETE-001",
+            frozenset({"EMP-READ-001", "EMP-DELETE-001"}),
+        )
+        is None
+    )
 
 
 def test_relative_read_period_contract_is_explicitly_local() -> None:

@@ -648,6 +648,21 @@ def _chat_choice(*calls: object, finish_reason: str = "tool_calls") -> SimpleNam
     )
 
 
+def _structured_chat_choice(
+    content: str | None = None,
+    *,
+    finish_reason: str = "stop",
+    tool_calls: object | None = None,
+    executed_tools: object | None = None,
+) -> SimpleNamespace:
+    message = SimpleNamespace(content=content or _tool_arguments())
+    if tool_calls is not None:
+        message.tool_calls = tool_calls
+    if executed_tools is not None:
+        message.executed_tools = executed_tools
+    return SimpleNamespace(message=message, finish_reason=finish_reason)
+
+
 def _chat_call(
     *, name: str = "list_employees", arguments: str | None = None, call_type: str = "function"
 ) -> SimpleNamespace:
@@ -676,9 +691,9 @@ def _groq_chat_client(completions: _ChatCompletionsStub) -> GroqChatCompletionsI
 
 
 @pytest.mark.asyncio
-async def test_groq_chat_intent_uses_local_tools_and_provider_specific_payload() -> None:
+async def test_groq_chat_intent_uses_strict_structured_output_and_provider_payload() -> None:
     completions = _ChatCompletionsStub(
-        choices=[_chat_choice(_chat_call())],
+        choices=[_structured_chat_choice()],
         request_id="req-groq-chat-synthetic",
         usage=SimpleNamespace(prompt_tokens=31, completion_tokens=9, total_tokens=40),
     )
@@ -700,13 +715,56 @@ async def test_groq_chat_intent_uses_local_tools_and_provider_specific_payload()
         "role": "system",
         "content": "Prompt Groq Chat sintetico.",
     }
-    assert completions.request["tool_choice"] == "required"
-    assert "strict" not in completions.request["tools"][0]["function"]
+    assert completions.request["tool_choice"] == "none"
+    assert "tools" not in completions.request
+    assert completions.request["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "bh_dic_intent_route",
+            "strict": True,
+            "schema": completions.request["response_format"]["json_schema"]["schema"],
+        },
+    }
+    schema = completions.request["response_format"]["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["function_id"]["enum"] == [
+        "EMP-READ-001",
+        "UNSUPPORTED",
+    ]
     assert completions.request["parallel_tool_calls"] is False
     assert completions.request["max_completion_tokens"] == 1_200
     assert completions.request["reasoning_effort"] == "low"
     assert "max_tokens" not in completions.request
     assert "store" not in completions.request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("choice", "message"),
+    [
+        (_structured_chat_choice(finish_reason="length"), "structured intent"),
+        (_structured_chat_choice(content="not-json"), "not valid JSON"),
+        (
+            _structured_chat_choice(
+                content=_tool_arguments(function_id="EMP-PAY-001"),
+            ),
+            "non-exposed function_id",
+        ),
+        (_structured_chat_choice(tool_calls=[_chat_call()]), "unexpected tool calls"),
+        (
+            _structured_chat_choice(executed_tools=[SimpleNamespace(type="browser_search")]),
+            "unexpected built-in tool",
+        ),
+    ],
+)
+async def test_groq_structured_intent_rejects_incomplete_or_unsafe_output(
+    choice: object,
+    message: str,
+) -> None:
+    client = _groq_chat_client(_ChatCompletionsStub(choices=[choice]))
+
+    with pytest.raises(IntentProviderError, match=message):
+        await client.route("richiesta sintetica", frozenset({"EMP-READ-001"}))
 
 
 @pytest.mark.asyncio

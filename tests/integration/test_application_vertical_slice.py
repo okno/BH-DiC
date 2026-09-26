@@ -798,6 +798,55 @@ async def test_fuzzy_employee_name_requires_confirmation_before_payroll_read() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Stipendio Nora Collaudo",
+        "Busta di Nora",
+        "Ultima busta di Nora",
+        "Busta paga EMP-SYNTH-001",
+    ],
+)
+async def test_daily_payroll_shorthand_resolves_from_complete_roster_without_provider(
+    request_text: str,
+) -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = CapturingMockAdapter()
+    seed = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = seed.model_copy(
+        update={
+            "display_name": SecretStr("Nora Collaudo"),
+            "display_name_redacted": "Nora Collaudo",
+        }
+    )
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-LATEST",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            net_cents=234_567,
+        )
+    ]
+    coordinator, _, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 28),
+    )
+    try:
+        result = await coordinator.ask(actor(LogicalRole.HR_READ), request_text)
+    finally:
+        await adapter.close()
+
+    assert result.success
+    assert result.fields[0].name == "07/2026"
+    assert "€ 2.345,67" in result.fields[0].value
+    assert adapter.last_employee_query is not None
+    assert adapter.last_employee_query.query is None
+    assert router.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_read_request_crosses_router_policy_and_mock_adapter() -> None:
     router = FixedRouter(
         IntentEnvelope(
@@ -1338,6 +1387,139 @@ async def test_payroll_tool_failure_degrades_to_targeted_local_clarification() -
 
 
 @pytest.mark.asyncio
+async def test_provider_failure_recovers_unique_roster_name_from_free_form_request() -> None:
+    router = FailingRouter(
+        IntentProviderError(
+            "synthetic tool failure",
+            provider="groq",
+            model="openai/gpt-oss-120b",
+            response_received=True,
+            failure_kind=ProviderFailureKind.TOOL_USE_FAILED,
+        )
+    )
+    adapter = CapturingMockAdapter()
+    seed = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = seed.model_copy(
+        update={
+            "display_name": SecretStr("Nora Collaudo"),
+            "display_name_redacted": "Nora Collaudo",
+        }
+    )
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-FREE-FORM",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            net_cents=345_678,
+        )
+    ]
+    coordinator, _, _ = await coordinator_for(
+        cast(FixedRouter, router),
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 28),
+        model_provider="groq",
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Analizza la retribuzione disponibile assegnata a Nora Collaudo",
+        )
+    finally:
+        await adapter.close()
+
+    assert result.success
+    assert result.fields[0].name == "07/2026"
+    assert "€ 3.456,78" in result.fields[0].value
+    assert router.calls == 1
+    assert adapter.last_employee_query is not None
+    assert adapter.last_employee_query.query is None
+
+
+@pytest.mark.asyncio
+async def test_provider_cannot_request_clarification_for_one_unique_roster_name() -> None:
+    intent = IntentEnvelope(
+        intent="read_employee_payroll",
+        function_id="EMP-PAY-001",
+        action_class=ActionClass.READ,
+        employee_id=None,
+        query=None,
+        parameters={"latest_paid": True},
+        date_from=None,
+        date_to=None,
+        requires_clarification=False,
+        clarification_question=None,
+        sensitivity=Sensitivity.HIGH,
+        confidence=1.0,
+    )
+    adapter = CapturingMockAdapter()
+    seed = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = seed.model_copy(
+        update={
+            "display_name": SecretStr("Nora Collaudo"),
+            "display_name_redacted": "Nora Collaudo",
+        }
+    )
+    adapter._payrolls["EMP-SYNTH-001"] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-UNIQUE",
+            employee_id="EMP-SYNTH-001",
+            year=2026,
+            month=7,
+            net_cents=345_678,
+        )
+    ]
+    coordinator, _, _ = await coordinator_for(
+        FixedRouter(intent),
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 28),
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Analizza il compenso disponibile assegnato a Nora Collaudo",
+        )
+    finally:
+        await adapter.close()
+
+    assert result.success
+    assert result.fields[0].name == "07/2026"
+    assert adapter.last_employee_query is not None
+    assert adapter.last_employee_query.query is None
+
+
+@pytest.mark.asyncio
+async def test_provider_cannot_suppress_required_target_clarification() -> None:
+    intent = IntentEnvelope(
+        intent="read_employee_payroll",
+        function_id="EMP-PAY-001",
+        action_class=ActionClass.READ,
+        employee_id=None,
+        query=None,
+        parameters={"latest_paid": True},
+        date_from=None,
+        date_to=None,
+        requires_clarification=False,
+        clarification_question=None,
+        sensitivity=Sensitivity.HIGH,
+        confidence=1.0,
+    )
+    coordinator, adapter, _ = await coordinator_for(FixedRouter(intent))
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Analizza il compenso individuale disponibile",
+        )
+    finally:
+        await adapter.close()
+
+    assert not result.success
+    assert result.title == "Chiarimento necessario"
+    assert "nome" in result.description
+    assert "Employee ID" in result.description
+
+
+@pytest.mark.asyncio
 async def test_non_operational_tool_failure_uses_public_hr_conversation_fallback() -> None:
     router = FailingRouter(
         IntentProviderError(
@@ -1421,8 +1603,36 @@ async def test_employee_name_search_stays_local_and_never_reaches_router() -> No
         await adapter.close()
 
     assert adapter.last_employee_query is not None
-    assert adapter.last_employee_query.query == "Mario Rossi"
+    assert adapter.last_employee_query.query is None
     assert router.request is None
+
+
+@pytest.mark.asyncio
+async def test_employee_existence_uses_complete_roster_and_local_fuzzy_matching() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = CapturingMockAdapter()
+    seed = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = seed.model_copy(
+        update={
+            "display_name": SecretStr("Rafaela Collaudo"),
+            "display_name_redacted": "Rafaela Collaudo",
+        }
+    )
+    coordinator, _, _ = await coordinator_for(router, adapter_override=adapter)
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Ce una dipendente che si chiama Raffaela?",
+        )
+    finally:
+        await adapter.close()
+
+    assert result.success
+    assert len(result.fields) == 1
+    assert result.fields[0].name == "Rafaela Collaudo"
+    assert adapter.last_employee_query is not None
+    assert adapter.last_employee_query.query is None
+    assert router.calls == 0
 
 
 @pytest.mark.asyncio
@@ -2387,8 +2597,10 @@ async def test_clarification_unsupported_and_write_precondition_responses() -> N
         confidence=1.0,
     )
     coordinator, adapter, _ = await coordinator_for(FixedRouter(missing_target), writes=True)
-    with pytest.raises(ApplicationPolicyDenied, match="employee ID is required"):
-        await coordinator.ask(actor(LogicalRole.HR_WRITE), "modifica")
+    result = await coordinator.ask(actor(LogicalRole.HR_WRITE), "modifica")
+    assert not result.success
+    assert result.title == "Chiarimento necessario"
+    assert "Employee ID" in result.description
     await adapter.close()
 
 

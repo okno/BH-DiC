@@ -65,6 +65,22 @@ def test_employee_count_filter_is_resolved_locally(query_text: str, status: str)
     assert normalized.parameters["status"] == status
 
 
+def test_provider_payroll_candidate_gets_a_closed_local_period_default() -> None:
+    latest = normalize_hr_intent(
+        _intent("EMP-PAY-001"),
+        "Analizza la retribuzione disponibile assegnata alla persona indicata",
+        today=date(2026, 8, 17),
+    )
+    named_month = normalize_hr_intent(
+        _intent("EMP-PAY-001"),
+        "Analizza la retribuzione disponibile a giugno",
+        today=date(2026, 8, 17),
+    )
+
+    assert latest.parameters == {"latest_paid": True, "include_net": True}
+    assert named_month.parameters == {"year": 2026, "month": 6, "include_net": True}
+
+
 @pytest.mark.parametrize(
     ("today", "expected_from", "expected_to"),
     [

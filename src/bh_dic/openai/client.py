@@ -29,7 +29,12 @@ from bh_dic.openai.schemas import (
     RouteMetadata,
     Sensitivity,
 )
-from bh_dic.openai.tools import build_openai_tools, tool_by_name
+from bh_dic.openai.tools import (
+    build_intent_response_schema,
+    build_openai_tools,
+    tool_by_name,
+    tool_name_for_function_id,
+)
 from bh_dic.policies.catalog import (
     FUNCTION_CATALOG,
     WriteParameterValidationError,
@@ -46,6 +51,14 @@ class ProviderFailureKind(StrEnum):
 
     UNCLASSIFIED = "UNCLASSIFIED"
     TOOL_USE_FAILED = "TOOL_USE_FAILED"
+
+
+_GROQ_STRUCTURED_INTENT_MODELS = frozenset(
+    {
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+    }
+)
 
 
 class IntentProviderError(RuntimeError):
@@ -445,6 +458,30 @@ def envelope_from_call(
     if invalid_envelope or envelope is None:
         raise IntentProviderError("provider output failed local validation")
     return envelope
+
+
+def envelope_from_structured_output(
+    content: str,
+    allowed_function_ids: frozenset[str],
+) -> tuple[str, IntentEnvelope]:
+    """Validate one strict Structured Outputs candidate against the local catalog."""
+
+    if len(content) > 8_000:
+        raise IntentProviderError("structured intent output exceeds the local limit")
+    payload: object | None = None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        raise IntentProviderError("structured intent output is not valid JSON") from None
+    if not isinstance(payload, dict):
+        raise IntentProviderError("structured intent output must be an object")
+    function_id = payload.get("function_id")
+    if not isinstance(function_id, str):
+        raise IntentProviderError("structured intent output has no function_id")
+    tool_name = tool_name_for_function_id(function_id, allowed_function_ids)
+    if tool_name is None:
+        raise IntentProviderError("provider selected a non-exposed function_id")
+    return tool_name, envelope_from_call(tool_name, content, allowed_function_ids)
 
 
 class ResponsesIntentClient:
@@ -868,6 +905,7 @@ class _ChatCompletionsIntentClient:
         disable_parallel_tool_calls: bool,
         use_max_completion_tokens: bool,
         include_strict_tool_schema: bool,
+        use_structured_output: bool = False,
     ) -> None:
         if provider_name not in {"groq", "llama"}:
             raise ValueError("unsupported Chat Completions intent provider")
@@ -882,6 +920,7 @@ class _ChatCompletionsIntentClient:
         self._use_max_completion_tokens = use_max_completion_tokens
         self._closed = False
         self._include_strict_tool_schema = include_strict_tool_schema
+        self._use_structured_output = use_structured_output
 
     async def route(
         self, redacted_request: str, allowed_function_ids: frozenset[str]
@@ -898,13 +937,24 @@ class _ChatCompletionsIntentClient:
                 {"role": "system", "content": self._developer_prompt},
                 {"role": "user", "content": redacted_request},
             ],
-            "tools": _chat_completions_tools(
-                allowed_function_ids,
-                include_strict=self._include_strict_tool_schema,
-            ),
-            "tool_choice": "required",
             "n": 1,
         }
+        if self._use_structured_output:
+            request["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "bh_dic_intent_route",
+                    "strict": True,
+                    "schema": build_intent_response_schema(allowed_function_ids),
+                },
+            }
+            request["tool_choice"] = "none"
+        else:
+            request["tools"] = _chat_completions_tools(
+                allowed_function_ids,
+                include_strict=self._include_strict_tool_schema,
+            )
+            request["tool_choice"] = "required"
         token_limit_name = (
             "max_completion_tokens" if self._use_max_completion_tokens else "max_tokens"
         )
@@ -962,22 +1012,47 @@ class _ChatCompletionsIntentClient:
             choices = getattr(response, "choices", None)
             if not isinstance(choices, list) or len(choices) != 1:
                 raise IntentProviderError("provider must return exactly one completion choice")
-            if getattr(choices[0], "finish_reason", None) != "tool_calls":
-                raise IntentProviderError("provider did not complete with a tool call")
             message = getattr(choices[0], "message", None)
-            calls = getattr(message, "tool_calls", None)
-            if not isinstance(calls, list) or len(calls) != 1:
-                raise IntentProviderError("provider must return exactly one tool call")
-            call = calls[0]
-            if getattr(call, "type", None) != "function":
-                raise IntentProviderError("provider returned a non-function tool call")
-            function = getattr(call, "function", None)
-            name = getattr(function, "name", None)
-            arguments = getattr(function, "arguments", None)
-            if not isinstance(name, str) or not isinstance(arguments, str):
-                raise IntentProviderError("provider returned an invalid function call")
-
-            envelope = envelope_from_call(name, arguments, allowed_function_ids)
+            if self._use_structured_output:
+                if getattr(choices[0], "finish_reason", None) != "stop":
+                    raise IntentProviderError(
+                        "provider did not complete the structured intent output"
+                    )
+                calls = getattr(message, "tool_calls", None)
+                if calls is not None and (not isinstance(calls, list) or calls):
+                    raise IntentProviderError("provider returned unexpected tool calls")
+                executed_tools = getattr(message, "executed_tools", None)
+                if executed_tools is not None and (
+                    not isinstance(executed_tools, list) or executed_tools
+                ):
+                    raise IntentProviderError("provider executed an unexpected built-in tool")
+                response_tools = getattr(response, "executed_tools", None)
+                if response_tools is not None and (
+                    not isinstance(response_tools, list) or response_tools
+                ):
+                    raise IntentProviderError("provider executed an unexpected built-in tool")
+                content = getattr(message, "content", None)
+                if not isinstance(content, str):
+                    raise IntentProviderError("provider returned invalid structured content")
+                name, envelope = envelope_from_structured_output(
+                    content,
+                    allowed_function_ids,
+                )
+            else:
+                if getattr(choices[0], "finish_reason", None) != "tool_calls":
+                    raise IntentProviderError("provider did not complete with a tool call")
+                calls = getattr(message, "tool_calls", None)
+                if not isinstance(calls, list) or len(calls) != 1:
+                    raise IntentProviderError("provider must return exactly one tool call")
+                call = calls[0]
+                if getattr(call, "type", None) != "function":
+                    raise IntentProviderError("provider returned a non-function tool call")
+                function = getattr(call, "function", None)
+                name = getattr(function, "name", None)
+                arguments = getattr(function, "arguments", None)
+                if not isinstance(name, str) or not isinstance(arguments, str):
+                    raise IntentProviderError("provider returned an invalid function call")
+                envelope = envelope_from_call(name, arguments, allowed_function_ids)
             request_id = getattr(response, "_request_id", None)
         except IntentProviderError as exc:
             output_failure = _response_error_with_context(
@@ -1088,6 +1163,7 @@ class GroqChatCompletionsIntentClient(_ChatCompletionsIntentClient):
             disable_parallel_tool_calls=True,
             use_max_completion_tokens=True,
             include_strict_tool_schema=False,
+            use_structured_output=model in _GROQ_STRUCTURED_INTENT_MODELS,
         )
 
 

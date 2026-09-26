@@ -15,6 +15,9 @@ Additional integration scenarios verify:
 | Scenario | Expected boundary |
 | --- | --- |
 | “netto di Nora a luglio” | local name search, payroll entitlement, private result |
+| “stipendio Nora Collaudo” | exact local roster match and previous-month payroll, no model call |
+| “ultima busta di Nora” | exact local roster match and latest paid payroll, no clarification |
+| provider selects payroll but omits target | unique name recovered from the local roster |
 | ambiguous name → “il secondo” | local TTL context; no identity sent to provider |
 | contracts in 90 days without July payroll | three ordered read steps and complete attachment |
 | unrelated HR/general phrasing | public HR responder only; no DIC operation |
