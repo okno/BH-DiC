@@ -1084,7 +1084,14 @@ async def test_summary_read_uses_hydrated_live_form_labels_and_action_state() ->
     assert summary.workplace == "Laboratorio"
     assert summary.state is EmployeeState.ACTIVE
 
+    page.add("summary.activate", SyntheticNode(visible=False))
+    with_hidden_opposite_action = await EmployeeSummaryPage(
+        page, "https://secure.dipendentincloud.it"
+    ).read("EMP-SYNTH-001")
+    assert with_hidden_opposite_action.state is EmployeeState.ACTIVE
+
     page.root.children.pop("summary.deactivate")
+    page.root.children.pop("summary.activate")
     without_optional_state_action = await EmployeeSummaryPage(
         page, "https://secure.dipendentincloud.it"
     ).read("EMP-SYNTH-001")

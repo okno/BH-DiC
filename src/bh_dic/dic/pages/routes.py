@@ -791,13 +791,16 @@ class EmployeeSummaryPage(BaseDicPage):
             return state
         activate = await self.locate("summary.activate", required=False)
         deactivate = await self.locate("summary.deactivate", required=False)
-        activate_present = activate is not None
-        deactivate_present = deactivate is not None
-        if activate_present and deactivate_present:
+        try:
+            activate_visible = activate is not None and await activate.is_visible()
+            deactivate_visible = deactivate is not None and await deactivate.is_visible()
+        except Exception as exc:
+            raise DicUiChangedError("employee state control visibility is unavailable") from exc
+        if activate_visible and deactivate_visible:
             raise DicUiChangedError("employee state controls are ambiguous")
-        if activate_present:
+        if activate_visible:
             return EmployeeState.INACTIVE
-        if deactivate_present:
+        if deactivate_visible:
             return EmployeeState.ACTIVE
         return EmployeeState.UNKNOWN
 
