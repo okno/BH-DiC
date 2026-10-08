@@ -793,9 +793,13 @@ class EmployeeSummaryPage(BaseDicPage):
         deactivate = await self.locate("summary.deactivate", required=False)
         activate_present = activate is not None
         deactivate_present = deactivate is not None
-        if activate_present == deactivate_present:
-            raise DicUiChangedError("employee state controls are unavailable or ambiguous")
-        return EmployeeState.INACTIVE if activate_present else EmployeeState.ACTIVE
+        if activate_present and deactivate_present:
+            raise DicUiChangedError("employee state controls are ambiguous")
+        if activate_present:
+            return EmployeeState.INACTIVE
+        if deactivate_present:
+            return EmployeeState.ACTIVE
+        return EmployeeState.UNKNOWN
 
     async def read(self, employee_id: str) -> EmployeeSummary:
         await self.open(employee_id)

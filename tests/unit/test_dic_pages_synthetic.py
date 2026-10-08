@@ -1084,6 +1084,12 @@ async def test_summary_read_uses_hydrated_live_form_labels_and_action_state() ->
     assert summary.workplace == "Laboratorio"
     assert summary.state is EmployeeState.ACTIVE
 
+    page.root.children.pop("summary.deactivate")
+    without_optional_state_action = await EmployeeSummaryPage(
+        page, "https://secure.dipendentincloud.it"
+    ).read("EMP-SYNTH-001")
+    assert without_optional_state_action.state is EmployeeState.UNKNOWN
+
 
 @pytest.mark.asyncio
 async def test_summary_read_rejects_loader_as_a_successful_empty_profile() -> None:

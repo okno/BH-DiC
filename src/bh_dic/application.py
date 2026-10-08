@@ -40,6 +40,7 @@ from bh_dic.dic.models import (
     EmployeeListItem,
     EmployeeListQuery,
     EmployeeListResult,
+    EmployeeState,
     FunctionId,
     PayrollMetadata,
     ReconciliationState,
@@ -2690,6 +2691,11 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 raise ApplicationError("employee profile cannot be correlated to the DIC roster")
             roster_item = matching_items[0]
             summary = await self.dic.get_employee_summary(employee_id)
+            employee_state = (
+                roster_item.employee_state
+                if summary.state is EmployeeState.UNKNOWN
+                else summary.state
+            )
             first_name = (
                 roster_item.first_name.get_secret_value().strip()
                 if roster_item.first_name is not None
@@ -2724,7 +2730,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     ResultField("Indirizzo", summary.address_redacted or "—", True),
                     ResultField("Luogo", summary.workplace or "—", True),
                     ResultField("Note", summary.notes_redacted or "—", True),
-                    ResultField("Stato", summary.state.value, True),
+                    ResultField("Stato", employee_state.value, True),
                 ),
                 correlation_id=correlation_id,
             )

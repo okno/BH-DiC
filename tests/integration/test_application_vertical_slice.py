@@ -1931,6 +1931,9 @@ async def test_name_search_correlates_id_and_supports_opaque_profile_followup() 
             "last_name": SecretStr("Esempio"),
         }
     )
+    adapter._summaries["EMP-SYNTH-001"] = adapter._summaries["EMP-SYNTH-001"].model_copy(
+        update={"state": EmployeeState.UNKNOWN}
+    )
     coordinator, adapter, _ = await coordinator_for(
         router,  # type: ignore[arg-type]
         adapter_override=adapter,
@@ -1949,6 +1952,7 @@ async def test_name_search_correlates_id_and_supports_opaque_profile_followup() 
     profile_fields = {field.name: field.value for field in profile.fields}
     assert profile_fields["Nome"] == "Nora"
     assert profile_fields["Cognome"] == "Esempio"
+    assert profile_fields["Stato"] == "active"
 
 
 @pytest.mark.asyncio
