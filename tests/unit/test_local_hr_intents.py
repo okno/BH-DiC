@@ -138,6 +138,8 @@ def test_daily_employee_list_phrasings_stay_local(message: str, status: str) -> 
     [
         "C'è un dipendente che si chiama Nora?",
         "Esiste una dipendente chiamata Nora?",
+        "Esiste un dipende che si chiama Nora?",
+        "Verifica esistenza dipendente Nora",
         "Cerca il dipendente Nora",
     ],
 )
@@ -156,6 +158,10 @@ def test_employee_existence_and_search_keep_the_name_out_of_the_router(message: 
     ("message", "function_id", "target_query"),
     [
         ("Dimmi tutto su Nora", "EMP-READ-002", "Nora"),
+        ("Leggi i dati del dipendente Nora", "EMP-READ-002", "Nora"),
+        ("Dammi tutti i record del dipende 987654321", "EMP-READ-002", None),
+        ("Dati di 987654321", "EMP-READ-002", "987654321"),
+        ("Parlami di Nora", "EMP-READ-002", "Nora"),
         ("Quali sono i dati anagrafici di Nora?", "EMP-READ-002", "Nora"),
         ("Che contratto ha Nora?", "EMP-CONTRACT-001", "Nora"),
         ("Qual è lo stipendio di Nora a giugno?", "EMP-PAY-001", "Nora"),
@@ -177,14 +183,26 @@ def test_employee_existence_and_search_keep_the_name_out_of_the_router(message: 
 def test_realistic_targeted_hr_phrasings_remain_local(
     message: str,
     function_id: str,
-    target_query: str,
+    target_query: str | None,
 ) -> None:
     parsed = parse_local_operational_intent(message, today=TODAY)
 
     assert parsed is not None
     assert parsed.envelope.function_id == function_id
     assert parsed.target_query == target_query
+    if "dipende 987654321" in message:
+        assert parsed.envelope.employee_id == "987654321"
     assert is_operational_hr_request(message)
+
+
+def test_possessive_profile_followup_is_local_and_waits_for_context_target() -> None:
+    parsed = parse_local_operational_intent("Mostrami i suoi dati", today=TODAY)
+
+    assert parsed is not None
+    assert parsed.envelope.function_id == "EMP-READ-002"
+    assert parsed.envelope.employee_id is None
+    assert parsed.envelope.requires_clarification
+    assert parsed.target_query is None
 
 
 def test_bare_employee_search_and_status_only_count_are_closed_local_requests() -> None:

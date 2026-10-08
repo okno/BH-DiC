@@ -87,8 +87,13 @@ _BARE_EMPLOYEE_SEARCH = re.compile(
 )
 _EMPLOYEE_EXISTENCE_SEARCH = re.compile(
     r"(?is)^\s*(?:c(?:[\x27\u2019]\s*[èe]|e)|esiste)\s+(?:un(?:a|o)?\s+)?"
-    r"(?:dipendente|employee)\s+"
+    r"(?:dipend(?:ente|e|ete)|employee)\s+"
     r"(?:(?:che\s+)?(?:si\s+chiama|chiamat[oa])|di\s+nome)\s+(.+?)[?!.]*\s*$"
+)
+_EMPLOYEE_EXISTENCE_CHECK = re.compile(
+    r"(?is)^\s*(?:verifica|controlla|cerca)\s+(?:se\s+)?(?:l[\x27\u2019]\s*)?"
+    r"esistenza\s+(?:di\s+)?(?:un(?:a|o)?\s+)?"
+    r"(?:dipend(?:ente|e|ete)|employee)\s+(.+?)[?!.]*\s*$"
 )
 _EMPLOYEE_STATUS_LIST_FOLLOWUP = re.compile(
     r"(?i)^\s*(?:dimmi|mostrami|elencami|fammi\s+vedere)\s+(?:quelli|quelle)\s+"
@@ -189,7 +194,10 @@ _LATEST_PAY_TARGET = re.compile(
 )
 _PROFILE_TERM = re.compile(
     r"\b(?:profilo|anagrafica|dossier(?:\s+hr)?|tutti\s+i\s+dati|dati\s+disponibili|"
-    r"dati\s+anagrafic\w*|tutto\s+su|"
+    r"(?:i\s+suoi|le\s+sue)\s+(?:dati|informazioni)|la\s+sua\s+scheda|"
+    r"dati\s+anagrafic\w*|tutti\s+i\s+record|record\s+(?:del(?:la)?|di)\s+dipend\w*|"
+    r"dati\s+(?:del(?:la)?|di)\s+dipend\w*|scheda\s+(?:del(?:la)?|di)\s+dipend\w*|"
+    r"tutto\s+su|"
     r"tutte\s+le\s+informazioni(?:\s+disponibili)?|tutto\s+quello\s+che\s+sai)\b",
     re.IGNORECASE,
 )
@@ -241,11 +249,19 @@ _RESOURCE_OF_TARGET = re.compile(
 )
 _PROFILE_TARGET = re.compile(
     r"(?is)\b(?:profilo|anagrafica|dossier(?:\s+hr)?|tutti\s+i\s+dati|"
-    r"dati\s+disponibili|dati\s+anagrafic\w*|tutte\s+le\s+informazioni(?:\s+disponibili)?|"
+    r"tutti\s+i\s+record|dati\s+disponibili|dati\s+anagrafic\w*|"
+    r"dati|record|informazioni|dettagli|scheda|"
+    r"tutte\s+le\s+informazioni(?:\s+disponibili)?|"
     r"tutto(?:\s+quello\s+che\s+sai)?)(?:\s+complet[oa])?\s+"
     r"(?:di|del|della|su|per)\s+"
-    r"(?:il\s+dipendente\s+|la\s+dipendente\s+|dipendente\s+)?"
+    r"(?:(?:il|la)\s+)?(?:dipend(?:ente|e|ete)\s+|employee\s+)?"
     r"(.+?)(?=[?!.]|$)"
+)
+_CONVERSATIONAL_PROFILE_TARGET = re.compile(
+    r"(?is)^\s*(?:chi\s+(?:e|è)|parlami\s+(?:di|del|della)|"
+    r"cosa\s+sai\s+(?:di|su)|dimmi\s+qualcosa\s+(?:di|su))\s+"
+    r"(?:(?:il|la)\s+)?(?:dipend(?:ente|e|ete)\s+|employee\s+)?"
+    r"(.+?)[?!.]*\s*$"
 )
 _RESOURCE_FOR_TARGET = re.compile(
     r"(?is)\b(?:document[oi](?:\s+in\s+scadenza)?|ferie|permess\w*|"
@@ -522,6 +538,7 @@ def is_operational_hr_request(request: str) -> bool:
         _DIRECT_EMPLOYEE_SEARCH.search(request) is not None
         or _BARE_EMPLOYEE_SEARCH.search(request) is not None
         or _EMPLOYEE_EXISTENCE_SEARCH.search(request) is not None
+        or _EMPLOYEE_EXISTENCE_CHECK.search(request) is not None
         or _EMPLOYEE_STATUS_LIST_FOLLOWUP.search(request) is not None
         or _STATUS_ONLY_COUNT.search(request) is not None
         or _EMPLOYEE_SORT_REQUEST.search(request) is not None
@@ -543,7 +560,11 @@ def is_operational_hr_request(request: str) -> bool:
         return True
     if _NOTIFICATION_TERM.search(request) is not None:
         return True
-    if _PROFILE_TERM.search(request) is not None:
+    if (
+        _PROFILE_TERM.search(request) is not None
+        or _PROFILE_TARGET.search(request) is not None
+        or _CONVERSATIONAL_PROFILE_TARGET.search(request) is not None
+    ):
         return True
     if any(
         pattern.search(request) is not None
@@ -650,6 +671,7 @@ def _resource_target(request: str) -> str | None:
         _DOCUMENT_CONTEXT_TARGET,
         _RESOURCE_OF_TARGET,
         _PROFILE_TARGET,
+        _CONVERSATIONAL_PROFILE_TARGET,
         _LEAVE_BALANCE_TARGET,
         _LEAVE_BALANCE_SUMMARY_TARGET,
         _ROLE_SUBJECT_TARGET,
@@ -729,6 +751,7 @@ def parse_local_operational_intent(
 
     direct_employee_search = _DIRECT_EMPLOYEE_SEARCH.search(text)
     existence_employee_search = _EMPLOYEE_EXISTENCE_SEARCH.search(text)
+    existence_employee_check = _EMPLOYEE_EXISTENCE_CHECK.search(text)
     bare_employee_search = _BARE_EMPLOYEE_SEARCH.search(text)
     if bare_employee_search is not None:
         bare_query = bare_employee_search.group(1)
@@ -742,7 +765,12 @@ def parse_local_operational_intent(
             )
         ):
             bare_employee_search = None
-    employee_search = direct_employee_search or existence_employee_search or bare_employee_search
+    employee_search = (
+        direct_employee_search
+        or existence_employee_search
+        or existence_employee_check
+        or bare_employee_search
+    )
     if employee_search is not None:
         query = " ".join(employee_search.group(1).strip(" .,:;!?\"'").split())
         if not query or len(query) > 128 or _TECHNICAL_TARGET.search(query) is not None:
@@ -1015,7 +1043,11 @@ def parse_local_operational_intent(
         # not application permissions, while "maturati" describes the balance rather than a
         # separate maturations resource. Keep both historical meanings everywhere else.
         resource_matches = [match for match in resource_matches if match[0] == "EMP-BAL-001"]
-    profile_requested = _PROFILE_TERM.search(text) is not None
+    profile_requested = (
+        _PROFILE_TERM.search(text) is not None
+        or _PROFILE_TARGET.search(text) is not None
+        or _CONVERSATIONAL_PROFILE_TARGET.search(text) is not None
+    )
     resource_target_query = _resource_target(text)
     resource_read_requested = (
         len(resource_matches) == 1

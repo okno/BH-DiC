@@ -1053,6 +1053,51 @@ async def test_summary_read_redacts_fields_and_executes_allowlisted_controls() -
 
 
 @pytest.mark.asyncio
+async def test_summary_read_uses_hydrated_live_form_labels_and_action_state() -> None:
+    page = SyntheticPage()
+
+    def form_item(label: str, value: str, *, entity: bool = False) -> SyntheticNode:
+        item = SyntheticNode()
+        item.add("summary.profile_label", SyntheticNode(text=label))
+        item.add(
+            "summary.profile_entity" if entity else "summary.profile_control",
+            SyntheticNode(text=value) if entity else SyntheticNode(value=value),
+        )
+        return item
+
+    page.add(
+        "summary.profile_items",
+        form_item("Nome", "Nora"),
+        form_item("Cognome", "Esempio"),
+        form_item("Mansione", "Collaudatrice"),
+        form_item("Luogo di lavoro", "Laboratorio", entity=True),
+    )
+    page.add("summary.deactivate", SyntheticNode())
+
+    summary = await EmployeeSummaryPage(page, "https://secure.dipendentincloud.it").read(
+        "EMP-SYNTH-001"
+    )
+
+    assert summary.first_name_redacted == "N."
+    assert summary.last_name_redacted == "E."
+    assert summary.job_title == "Collaudatrice"
+    assert summary.workplace == "Laboratorio"
+    assert summary.state is EmployeeState.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_summary_read_rejects_loader_as_a_successful_empty_profile() -> None:
+    page = SyntheticPage()
+
+    with pytest.raises(DicUiChangedError, match="did not finish loading"):
+        await EmployeeSummaryPage(
+            page,
+            "https://secure.dipendentincloud.it",
+            timeout_ms=1,
+        ).read("EMP-SYNTH-001")
+
+
+@pytest.mark.asyncio
 async def test_roles_and_timestamp_pages_cover_native_and_aria_checkbox_states() -> None:
     page = _control_page(
         "roles.time.timestamping",

@@ -147,6 +147,18 @@ DicReconnectHandler = Callable[[], Awaitable[SessionStatus]]
 _MAX_INLINE_ASCII_CHUNKS = 10
 _MAX_WORKFORCE_PLAN_EMPLOYEES = 200
 _DIC_RECONNECT_FUNCTION_ID = "DIC-RECONNECT"
+_CURRENT_EMPLOYEE_READ_FUNCTIONS = frozenset(
+    {
+        "EMP-READ-002",
+        "EMP-DOC-001",
+        "EMP-RBAC-001",
+        "EMP-TIME-001",
+        "EMP-MAT-001",
+        "EMP-BAL-001",
+        "EMP-CONTRACT-001",
+        "EMP-PAY-001",
+    }
+)
 _EMPLOYEE_MENTION_STOPWORDS = frozenset(
     {
         "agosto",
@@ -498,12 +510,30 @@ class BHApplicationCoordinator(InteractionCoordinator):
             and target_query is None
         )
         if missing_target:
+            remembered_employee_id = (
+                self._conversation_context.current_employee(conversation_key)
+                if intent.action_class is ActionClass.READ
+                and intent.function_id in _CURRENT_EMPLOYEE_READ_FUNCTIONS
+                else None
+            )
             # A provider may correctly identify the HR operation while failing to recover the
             # redacted employee target. Never trust it with roster identities: match the original
             # request against the complete DIC roster locally and continue only for one exact,
             # unambiguous person. This also overrides an unnecessary model clarification.
-            inferred = await self._infer_unique_employee_mention(normalized_request)
-            if inferred is not None:
+            inferred = (
+                None
+                if remembered_employee_id is not None
+                else await self._infer_unique_employee_mention(normalized_request)
+            )
+            if remembered_employee_id is not None:
+                intent = intent.model_copy(
+                    update={
+                        "employee_id": remembered_employee_id,
+                        "requires_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+            elif inferred is not None:
                 resolved_item = inferred
                 intent = intent.model_copy(
                     update={
@@ -628,6 +658,14 @@ class BHApplicationCoordinator(InteractionCoordinator):
             result = await self._prepare_write(actor, correlation_id, intent)
         else:
             result = await self._dispatch_read(actor, correlation_id, intent, scope)
+        if (
+            intent.action_class is ActionClass.READ
+            and intent.employee_id is not None
+            and result.success
+        ):
+            self._conversation_context.remember_current_employee(
+                conversation_key, intent.employee_id
+            )
         await self._audit(
             actor,
             correlation_id,
@@ -2521,6 +2559,11 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     total=len(local_matches),
                     has_next=len(local_matches) > len(shown_matches),
                 )
+                if len(local_matches) == 1:
+                    self._conversation_context.remember_current_employee(
+                        ConversationKey(actor.user_id, actor.guild_id, actor.channel_id),
+                        local_matches[0].employee_id,
+                    )
             else:
                 result = (
                     await self.dic.list_all_employees(employee_query)
@@ -2632,13 +2675,37 @@ class BHApplicationCoordinator(InteractionCoordinator):
             )
         if function_id == "EMP-READ-002":
             employee_id = self._require_employee(intent)
+            roster = await self.dic.list_all_employees(
+                EmployeeListQuery(
+                    employee_filter=EmployeeFilter.ALL,
+                    sort_by="name",
+                    sort_direction=SortDirection.ASC,
+                    page=1,
+                    page_size=100,
+                ),
+                max_records=500,
+            )
+            matching_items = tuple(item for item in roster.items if item.employee_id == employee_id)
+            if len(matching_items) != 1:
+                raise ApplicationError("employee profile cannot be correlated to the DIC roster")
+            roster_item = matching_items[0]
             summary = await self.dic.get_employee_summary(employee_id)
+            first_name = (
+                roster_item.first_name.get_secret_value().strip()
+                if roster_item.first_name is not None
+                else summary.first_name_redacted
+            )
+            last_name = (
+                roster_item.last_name.get_secret_value().strip()
+                if roster_item.last_name is not None
+                else summary.last_name_redacted
+            )
             return InteractionResult(
-                title=f"Dipendente {summary.employee_id}",
-                description="Riepilogo redatto",
+                title=f"{self._employee_display_name(roster_item)} · ID {summary.employee_id}",
+                description="Anagrafica Dipendenti in Cloud verificata",
                 fields=(
-                    ResultField("Nome", summary.first_name_redacted or "—", True),
-                    ResultField("Cognome", summary.last_name_redacted or "—", True),
+                    ResultField("Nome", first_name or "—", True),
+                    ResultField("Cognome", last_name or "—", True),
                     ResultField(
                         "Matricola",
                         (
@@ -2648,8 +2715,15 @@ class BHApplicationCoordinator(InteractionCoordinator):
                         ),
                         True,
                     ),
+                    ResultField("Codice fiscale", summary.tax_code_redacted or "—", True),
+                    ResultField("Data di nascita", summary.birth_date_redacted or "—", True),
+                    ResultField("IBAN", summary.iban_redacted or "—", True),
                     ResultField("Mansione", summary.job_title or "—", True),
+                    ResultField("Telefono", summary.phone_redacted or "—", True),
+                    ResultField("Email", summary.business_email_redacted or "—", True),
+                    ResultField("Indirizzo", summary.address_redacted or "—", True),
                     ResultField("Luogo", summary.workplace or "—", True),
+                    ResultField("Note", summary.notes_redacted or "—", True),
                     ResultField("Stato", summary.state.value, True),
                 ),
                 correlation_id=correlation_id,

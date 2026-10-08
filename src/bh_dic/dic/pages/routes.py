@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import re
 from collections.abc import Awaitable, Callable
-from typing import Literal
+from typing import ClassVar, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from pydantic import JsonValue
@@ -708,23 +708,113 @@ class EmployeesListPage(BaseDicPage):
 class EmployeeSummaryPage(BaseDicPage):
     route_template = "/it/app/employees/info/{employee_id}/summary"
 
+    _HYDRATION_POLL_SECONDS = 0.05
+    _PROFILE_LABELS: ClassVar[dict[str, str]] = {
+        "nome": "first_name",
+        "cognome": "last_name",
+        "numero di matricola": "payroll_number",
+        "codice fiscale": "tax_code",
+        "data di nascita": "birth_date",
+        "iban": "iban",
+        "mansione": "job_title",
+        "numero di telefono": "phone",
+        "email aziendale": "business_email",
+        "indirizzo": "address",
+        "luogo di lavoro": "workplace",
+        "note": "notes",
+        "note sul dipendente": "notes",
+    }
+    _PROFILE_SELECTORS: ClassVar[dict[str, str]] = {
+        "first_name": "summary.first_name",
+        "last_name": "summary.last_name",
+        "payroll_number": "summary.payroll_number",
+        "tax_code": "summary.tax_code",
+        "birth_date": "summary.birth_date",
+        "iban": "summary.iban",
+        "job_title": "summary.job_title",
+        "phone": "summary.phone",
+        "business_email": "summary.email",
+        "address": "summary.address",
+        "workplace": "summary.workplace",
+        "notes": "summary.notes",
+    }
+
+    async def _semantic_profile_values(self) -> dict[str, str | None] | None:
+        items = await self.all_matches("summary.profile_items")
+        item_count = await items.count()
+        if item_count == 0:
+            return None
+        if item_count > 32:
+            raise DicUiChangedError("employee summary contains too many profile controls")
+        values: dict[str, str | None] = {}
+        for index in range(item_count):
+            item = items.nth(index)
+            label_value = await self.read_text("summary.profile_label", root=item)
+            if not label_value:
+                continue
+            normalized_label = " ".join(label_value.casefold().split())
+            field = self._PROFILE_LABELS.get(normalized_label)
+            if field is None:
+                continue
+            if field in values:
+                raise DicUiChangedError("employee summary profile field is ambiguous")
+            control_value = await self.read_text("summary.profile_control", root=item)
+            if control_value is None and field == "workplace":
+                control_value = await self.read_text("summary.profile_entity", root=item)
+            values[field] = control_value
+        return values
+
+    async def _profile_values(self) -> dict[str, str | None]:
+        """Wait for Angular hydration and reject a loader/partial profile as a valid read."""
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (self.timeout_ms / 1_000)
+        while True:
+            semantic = await self._semantic_profile_values()
+            if semantic is not None:
+                if semantic.get("first_name") and semantic.get("last_name"):
+                    return semantic
+            else:
+                legacy = {
+                    field: await self.read_text(selector)
+                    for field, selector in self._PROFILE_SELECTORS.items()
+                }
+                if legacy.get("first_name") and legacy.get("last_name"):
+                    return legacy
+            if loop.time() >= deadline:
+                raise DicUiChangedError("employee summary did not finish loading")
+            await asyncio.sleep(self._HYDRATION_POLL_SECONDS)
+
+    async def _profile_state(self) -> EmployeeState:
+        state = _employee_state(await self.read_text("summary.state"))
+        if state is not EmployeeState.UNKNOWN:
+            return state
+        activate = await self.locate("summary.activate", required=False)
+        deactivate = await self.locate("summary.deactivate", required=False)
+        activate_present = activate is not None
+        deactivate_present = deactivate is not None
+        if activate_present == deactivate_present:
+            raise DicUiChangedError("employee state controls are unavailable or ambiguous")
+        return EmployeeState.INACTIVE if activate_present else EmployeeState.ACTIVE
+
     async def read(self, employee_id: str) -> EmployeeSummary:
         await self.open(employee_id)
+        values = await self._profile_values()
         return EmployeeSummary(
             employee_id=employee_id,
-            first_name_redacted=self.redact_name(await self.read_text("summary.first_name")),
-            last_name_redacted=self.redact_name(await self.read_text("summary.last_name")),
-            payroll_number=await self.read_text("summary.payroll_number"),
-            tax_code_redacted=self.redact_tail(await self.read_text("summary.tax_code")),
-            birth_date_redacted=self.redact_tail(await self.read_text("summary.birth_date"), 2),
-            iban_redacted=self.redact_tail(await self.read_text("summary.iban")),
-            job_title=await self.read_text("summary.job_title"),
-            phone_redacted=self.redact_tail(await self.read_text("summary.phone")),
-            business_email_redacted=self.redact_email(await self.read_text("summary.email")),
-            address_redacted=("[REDACTED]" if await self.read_text("summary.address") else None),
-            workplace=await self.read_text("summary.workplace"),
-            notes_redacted=("[REDACTED]" if await self.read_text("summary.notes") else None),
-            state=_employee_state(await self.read_text("summary.state")),
+            first_name_redacted=self.redact_name(values.get("first_name")),
+            last_name_redacted=self.redact_name(values.get("last_name")),
+            payroll_number=values.get("payroll_number"),
+            tax_code_redacted=self.redact_tail(values.get("tax_code")),
+            birth_date_redacted=self.redact_tail(values.get("birth_date"), 2),
+            iban_redacted=self.redact_tail(values.get("iban")),
+            job_title=values.get("job_title"),
+            phone_redacted=self.redact_tail(values.get("phone")),
+            business_email_redacted=self.redact_email(values.get("business_email")),
+            address_redacted=("[REDACTED]" if values.get("address") else None),
+            workplace=values.get("workplace"),
+            notes_redacted=("[REDACTED]" if values.get("notes") else None),
+            state=await self._profile_state(),
         )
 
     async def verify_expected(
@@ -749,6 +839,7 @@ class EmployeeSummaryPage(BaseDicPage):
         if not parameters or set(parameters).difference(selectors):
             return None
         await self.open(employee_id)
+        await self._profile_values()
         for parameter, expected in parameters.items():
             if not isinstance(expected, str):
                 return None
@@ -762,6 +853,7 @@ class EmployeeSummaryPage(BaseDicPage):
             raise DicValidationError("employee_id is required")
         await self.open(action.employee_id)
         if action.function_id is FunctionId.EMP_UPDATE_001:
+            await self._profile_values()
             allowed = {
                 "first_name": "summary.first_name",
                 "last_name": "summary.last_name",

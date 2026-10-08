@@ -88,6 +88,12 @@ class PendingEmployeeTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentEmployeeContext:
+    employee_id: str
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
 class EmployeeSelectionContext:
     key: ConversationKey
     context: ConversationContext
@@ -116,6 +122,9 @@ class ConversationContextStore:
         self._clock = clock
         self._items: OrderedDict[ConversationKey, ConversationContext] = OrderedDict()
         self._pending_targets: OrderedDict[ConversationKey, PendingEmployeeTarget] = OrderedDict()
+        self._current_employees: OrderedDict[ConversationKey, CurrentEmployeeContext] = (
+            OrderedDict()
+        )
         self._selection_contexts: OrderedDict[str, EmployeeSelectionContext] = OrderedDict()
 
     @staticmethod
@@ -217,6 +226,28 @@ class ConversationContextStore:
     def clear_pending_target(self, key: ConversationKey) -> bool:
         return self._pending_targets.pop(key, None) is not None
 
+    def remember_current_employee(self, key: ConversationKey, employee_id: str) -> None:
+        """Remember only the opaque target ID for bounded pronoun/follow-up resolution."""
+
+        now = self._clock()
+        self._purge_expired(now)
+        self._current_employees[key] = CurrentEmployeeContext(
+            employee_id=validate_employee_id(employee_id),
+            expires_at=now + self._ttl_seconds,
+        )
+        self._current_employees.move_to_end(key)
+        while len(self._current_employees) > self._max_conversations:
+            self._current_employees.popitem(last=False)
+
+    def current_employee(self, key: ConversationKey) -> str | None:
+        now = self._clock()
+        self._purge_expired(now)
+        context = self._current_employees.get(key)
+        if context is None:
+            return None
+        self._current_employees.move_to_end(key)
+        return context.employee_id
+
     def selection(
         self, key: ConversationKey, request: str
     ) -> tuple[str, ConversationContext] | None:
@@ -295,6 +326,7 @@ class ConversationContextStore:
     def clear(self, key: ConversationKey) -> bool:
         candidate_removed = self._items.pop(key, None) is not None
         pending_removed = self._pending_targets.pop(key, None) is not None
+        current_removed = self._current_employees.pop(key, None) is not None
         selection_ids = [
             context_id
             for context_id, snapshot in self._selection_contexts.items()
@@ -302,7 +334,7 @@ class ConversationContextStore:
         ]
         for context_id in selection_ids:
             self._selection_contexts.pop(context_id, None)
-        return candidate_removed or pending_removed or bool(selection_ids)
+        return candidate_removed or pending_removed or current_removed or bool(selection_ids)
 
     def _purge_expired(self, now: float) -> None:
         expired = [key for key, value in self._items.items() if value.expires_at <= now]
@@ -313,6 +345,11 @@ class ConversationContextStore:
         ]
         for key in pending_expired:
             self._pending_targets.pop(key, None)
+        current_expired = [
+            key for key, value in self._current_employees.items() if value.expires_at <= now
+        ]
+        for key in current_expired:
+            self._current_employees.pop(key, None)
         expired_selections = [
             context_id
             for context_id, snapshot in self._selection_contexts.items()
@@ -326,6 +363,7 @@ __all__ = [
     "ConversationContext",
     "ConversationContextStore",
     "ConversationKey",
+    "CurrentEmployeeContext",
     "EmployeeSelectionContext",
     "PendingEmployeeTarget",
 ]

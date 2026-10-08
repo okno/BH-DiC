@@ -1569,7 +1569,7 @@ async def test_explicit_employee_id_is_restored_only_after_minimized_routing() -
     finally:
         await adapter.close()
 
-    assert result.title == "Dipendente EMP-SYNTH-001"
+    assert result.title == "A. E. · ID EMP-SYNTH-001"
     assert router.request is not None
     assert "Mario" not in router.request
     assert "Rossi" not in router.request
@@ -1900,8 +1900,7 @@ async def test_colloquial_standard_reads_resolve_locally_without_model_routing()
             requester,
             "ci sono documenti in scadenza per Nora?",
         )
-        dossier_question = await coordinator.ask(requester, "fammi il dossier HR completo")
-        profile = await coordinator.ask(requester, "Nora")
+        profile = await coordinator.ask(requester, "fammi il dossier HR completo")
         alerts = await coordinator.ask(requester, "leggi gli avvisi non letti")
     finally:
         await adapter.close()
@@ -1910,14 +1909,46 @@ async def test_colloquial_standard_reads_resolve_locally_without_model_routing()
     assert time_access.title == "Timbratura EMP-SYNTH-001"
     assert balance.title == "Bilancio EMP-SYNTH-001 — 2026"
     assert documents.title == "Metadati documenti EMP-SYNTH-001"
-    assert dossier_question.title == "Chiarimento necessario"
     assert profile.title == "Dossier HR completo — EMP-SYNTH-001"
     assert len(profile.fields) == 8
     assert profile.attachments[0].filename == "dossier_hr_EMP-SYNTH-001_2026.txt"
-    assert b"## Dipendente EMP-SYNTH-001" in profile.attachments[0].content
+    assert b"## Nora Esempio \xc2\xb7 ID EMP-SYNTH-001" in profile.attachments[0].content
     assert alerts.title == "Notifiche Dipendenti in Cloud"
     assert alerts.fields
     assert all("NON LETTA" in field.name for field in alerts.fields)
+
+
+@pytest.mark.asyncio
+async def test_name_search_correlates_id_and_supports_opaque_profile_followup() -> None:
+    router = FailingRouter(IntentProviderError("provider must not be called"))
+    adapter = MockDicAdapter()
+    item = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = item.model_copy(
+        update={
+            "display_name": SecretStr("Nora Esempio"),
+            "display_name_redacted": "Nora Esempio",
+            "first_name": SecretStr("Nora"),
+            "last_name": SecretStr("Esempio"),
+        }
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+    )
+    requester = actor(LogicalRole.HR_READ)
+    try:
+        found = await coordinator.ask(requester, "Verifica esistenza dipendente Nora")
+        profile = await coordinator.ask(requester, "Mostrami i suoi dati")
+    finally:
+        await adapter.close()
+
+    assert router.calls == 0
+    assert found.fields[0].name == "Nora Esempio"
+    assert "Employee ID: EMP-SYNTH-001" in found.fields[0].value
+    assert profile.title == "Nora Esempio · ID EMP-SYNTH-001"
+    profile_fields = {field.name: field.value for field in profile.fields}
+    assert profile_fields["Nome"] == "Nora"
+    assert profile_fields["Cognome"] == "Esempio"
 
 
 @pytest.mark.asyncio
@@ -2427,7 +2458,7 @@ async def test_contract_query_without_employee_id_is_allowed_and_paginated() -> 
             LogicalRole.HR_READ,
             "EMP-SYNTH-001",
             {},
-            "Dipendente EMP-SYNTH-001",
+            "A. E. · ID EMP-SYNTH-001",
         ),
         (
             "EMP-RBAC-001",

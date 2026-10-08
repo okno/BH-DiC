@@ -83,3 +83,25 @@ def test_pending_employee_target_does_not_consume_a_new_sentence() -> None:
     assert store.pending_target(key, "qual è lo stipendio di Utente?") is None
     assert store.pending_target(key, "mostra notifiche") is None
     assert store.pending_target(key, "EMP-SYNTH-001") is not None
+
+
+def test_current_employee_is_opaque_isolated_bounded_and_expires() -> None:
+    now = 100.0
+    store = ConversationContextStore(
+        ttl_seconds=30,
+        max_conversations=1,
+        clock=lambda: now,
+    )
+    first = ConversationKey(1, 10, 20)
+    second = ConversationKey(2, 10, 20)
+
+    store.remember_current_employee(first, "EMP-SYNTH-001")
+    assert store.current_employee(first) == "EMP-SYNTH-001"
+    assert store.current_employee(ConversationKey(1, 10, 21)) is None
+
+    store.remember_current_employee(second, "EMP-SYNTH-002")
+    assert store.current_employee(first) is None
+    assert store.current_employee(second) == "EMP-SYNTH-002"
+
+    now = 131.0
+    assert store.current_employee(second) is None
