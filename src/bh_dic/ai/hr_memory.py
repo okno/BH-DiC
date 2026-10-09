@@ -13,9 +13,10 @@ import json
 import re
 import threading
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import yaml
 
@@ -251,7 +252,11 @@ def _parse_yaml(value: str) -> dict[str, object]:
     except yaml.YAMLError as exc:
         raise HrMemoryFormatError("invalid YAML playbook") from exc
     finally:
-        loader.dispose()
+        # Older ``types-PyYAML`` releases expose ``dispose`` without a typed
+        # signature even though PyYAML guarantees this zero-argument method.
+        # Cast at this narrow compatibility boundary rather than weakening
+        # type checking for the complete module.
+        cast(Callable[[], None], loader.dispose)()
     if not isinstance(parsed, dict):
         raise HrMemoryFormatError("YAML playbook root must be a mapping")
     return parsed

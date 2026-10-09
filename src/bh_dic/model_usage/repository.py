@@ -198,7 +198,7 @@ class SqlAlchemyModelUsageRepository:
         )
 
     @staticmethod
-    def _by_key(key: ModelUsageKey) -> Select[ModelUsageEventRow]:
+    def _by_key(key: ModelUsageKey) -> Select[tuple[ModelUsageEventRow]]:
         return select(ModelUsageEventRow).where(
             ModelUsageEventRow.correlation_id == key.correlation_id,
             ModelUsageEventRow.purpose == key.purpose,
