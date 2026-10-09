@@ -51,13 +51,12 @@ o `da firmare` non possono diventare accidentalmente parte del nome cercato.
 
 Le richieste già riconosciute localmente non chiamano il provider. Per le restanti, il provider
 riceve soltanto termini canonici senza nomi, ID o testo DiC. Il filtro di famiglia espone al
-massimo tre Function ID read pertinenti (per esempio solo payroll o solo documenti), mai l'intero
-catalogo. Sui modelli Groq GPT-OSS supportati il classificatore usa uno Structured Output JSON
-stretto e `tool_choice=none`: il modello sceglie una Function ID consentita ma non dispone di tool
-né controlla il browser. Schema, catalogo, target, RBAC e parametri sono rivalidati localmente.
-Per altri modelli, un `tool_use_failed` su una famiglia chiusa può degradare a un chiarimento locale;
-non produce una write e non interrompe con un generico errore AI quando target o periodo possono
-essere richiesti in sicurezza.
+massimo otto Function ID read pertinenti nel bridge (tre nei router diretti legacy), mai l'intero
+catalogo. Codex usa lo schema di output chiuso; Ollama/LM Studio usano Structured Output JSON,
+`tool_choice=none` e temperatura zero. Il modello sceglie una Function ID consentita ma non dispone
+di tool né controlla il browser. Schema, catalogo, target, RBAC e parametri sono rivalidati
+localmente. Se il planner chiede inutilmente il nome su una famiglia target univoca, il resolver
+locale recupera o disambigua il dipendente senza inviare l'identità al bridge.
 
 ## Superfici DiC e discovery
 

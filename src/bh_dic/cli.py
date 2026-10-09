@@ -9,14 +9,18 @@ import socket
 import sys
 import tempfile
 from collections.abc import Awaitable, Callable, Coroutine
+from datetime import date
 from pathlib import Path
-from typing import Any, Never
+from typing import Annotated, Any, Never
 from urllib.parse import SplitResult, urlsplit
 
 import typer
 
 from bh_dic import __version__
+from bh_dic.ai.planning import PlanningRouter
 from bh_dic.audit.service import AuditService
+from bh_dic.bridge.service import serve_bridge
+from bh_dic.bridge.settings import BridgeHostSettings
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.database.migrations import run_migrations_async
@@ -41,7 +45,8 @@ from bh_dic.openai.providers import (
     llama_endpoint_is_loopback,
 )
 from bh_dic.policies.roles import LogicalRole
-from bh_dic.runtime import build_runtime
+from bh_dic.query.decision import SingleIntentDecision
+from bh_dic.runtime import _router, build_runtime
 
 app = typer.Typer(
     name="bh-dic",
@@ -236,6 +241,9 @@ def _provider_endpoint(settings: AppSettings) -> SplitResult:
         return urlsplit(OPENAI_RESPONSES_BASE_URL)
     if settings.model_provider == "groq":
         return urlsplit(GROQ_OPENAI_BASE_URL)
+    if settings.model_provider == "bridge":
+        host = f"[{settings.bridge_host}]" if ":" in settings.bridge_host else settings.bridge_host
+        return urlsplit(f"https://{host}:{settings.bridge_port}")
     return urlsplit(settings.llama_base_url)
 
 
@@ -245,6 +253,8 @@ def _model_check_offline(settings: AppSettings) -> dict[str, object]:
         endpoint_scope = (
             "loopback" if llama_endpoint_is_loopback(settings.llama_base_url) else "remote_https"
         )
+    elif settings.model_provider == "bridge":
+        endpoint_scope = "loopback_mtls_ssh"
     return {
         "status": "UNVERIFIED_OFFLINE",
         "live_contacted": False,
@@ -257,7 +267,35 @@ def _model_check_offline(settings: AppSettings) -> dict[str, object]:
 
 
 async def _model_check_live(settings: AppSettings) -> dict[str, object]:
-    """Verify authentication, model availability, and one closed synthetic tool call."""
+    """Verify authentication, model availability, and one closed synthetic decision."""
+
+    if settings.model_provider == "bridge":
+        router = _router(settings, force_mock_components=False)
+        if not isinstance(router, PlanningRouter):
+            raise RuntimeError("configured bridge did not build a planning router")
+        try:
+            routed_plan = await router.decide(
+                "request employee_headcount",
+                frozenset({"EMP-READ-001"}),
+                today=date.today(),
+            )
+        finally:
+            await router.close()
+        decision = routed_plan.decision.root
+        if not isinstance(decision, SingleIntentDecision):
+            raise RuntimeError("bridge did not return the closed synthetic decision")
+        if decision.intent.function_id != "EMP-READ-001":
+            raise RuntimeError("bridge selected an unexpected synthetic Function ID")
+        return {
+            "status": "LIVE_VERIFIED",
+            "live_contacted": True,
+            "provider": routed_plan.metadata.provider,
+            "model": routed_plan.metadata.model,
+            "decision": routed_plan.decision.kind,
+            "function_id": decision.intent.function_id,
+            "store": False,
+            "tool_execution": False,
+        }
 
     client = build_intent_client(
         settings,
@@ -333,6 +371,41 @@ def version_command() -> None:
     """Print the package version."""
 
     typer.echo(__version__)
+
+
+@app.command("bridge-serve")
+def bridge_serve(
+    env_file: Annotated[
+        Path,
+        typer.Option(
+            "--env-file",
+            help="Absolute private environment file for the standalone Mint bridge.",
+        ),
+    ],
+) -> None:
+    """Run the loopback-only mTLS planner bridge; does not load bot/DIC settings."""
+
+    try:
+        resolved = env_file.resolve(strict=True)
+        if (
+            not env_file.is_absolute()
+            or env_file.is_symlink()
+            or resolved != env_file
+            or not resolved.is_file()
+        ):
+            raise ValueError("bridge environment file must be a regular absolute file")
+        if os.name == "posix":
+            metadata = resolved.stat()
+            if metadata.st_uid != os.geteuid():
+                raise PermissionError("bridge environment file must be owned by the bridge account")
+            if metadata.st_mode & 0o077:
+                raise PermissionError("bridge environment file must have mode 0600 or stricter")
+        settings = BridgeHostSettings(_env_file=resolved)
+        _run(serve_bridge(settings))
+    except KeyboardInterrupt:
+        return
+    except Exception as exc:
+        _fail(f"Planner bridge non avviato ({type(exc).__name__}).")
 
 
 @app.command("validate-config")

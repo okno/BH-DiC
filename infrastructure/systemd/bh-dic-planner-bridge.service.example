@@ -1,0 +1,43 @@
+[Unit]
+Description=BH-DiC isolated planner bridge
+Documentation=https://github.com/OWNER/BH-DiC/blob/main/docs/CODEX_BRIDGE.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/bh-dic-bridge/bridge.env
+ConditionPathIsDirectory=/var/lib/bh-dic-bridge/codex/work
+
+[Service]
+Type=simple
+User=bh-dic-bridge
+Group=bh-dic-bridge
+WorkingDirectory=/var/lib/bh-dic-bridge/codex/work
+Environment=HOME=/nonexistent
+ExecStart=/opt/bh-dic-bridge/.venv/bin/bh-dic bridge-serve --env-file /etc/bh-dic-bridge/bridge.env
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/bh-dic-bridge /etc/bh-dic-bridge
+ReadWritePaths=/var/lib/bh-dic-bridge
+
+[Install]
+WantedBy=multi-user.target

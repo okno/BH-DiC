@@ -15,12 +15,20 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from bh_dic.ai.planning import PlanningRouter
 from bh_dic.application import ApplicationError, ApplicationScope, BHApplicationCoordinator
 from bh_dic.approvals.confirmation import ConfirmationHasher
 from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.approvals.service import ApprovalService
 from bh_dic.approvals.storage import ApprovalRepository, SqlAlchemyApprovalRepository
 from bh_dic.audit.service import AuditService
+from bh_dic.bridge.client import (
+    BridgeEndpoint,
+    JsonlBridgeClient,
+    build_client_ssl_context,
+)
+from bh_dic.bridge.planner import BridgePlanningRouter
+from bh_dic.bridge.public_hr import BridgePublicHrResponder
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage, DicSessionManager
@@ -59,6 +67,7 @@ from bh_dic.services.dic_service import DicService
 
 _MOCK_SECRET = b"BH-DiC synthetic mock key only!!"
 logger = logging.getLogger(__name__)
+ModelRouter = IntentRouter | PlanningRouter
 
 
 def _tesseract_ita_eng_available(executable: str) -> bool:
@@ -101,7 +110,7 @@ async def _cleanup_failed_runtime_build(
     *,
     adapter: DipendentiInCloudAdapter | None = None,
     browser_session: AsyncChromiumSession | None = None,
-    intent_router: IntentRouter | None = None,
+    intent_router: ModelRouter | None = None,
     public_hr_responder: PublicHrResponder | None = None,
 ) -> None:
     """Release every boundary acquired by a partially constructed runtime."""
@@ -152,7 +161,7 @@ class ApplicationRuntime:
     bot: BHDiCBot
     approval_repository: ApprovalRepository
     upload_repository: SqlAlchemyUploadRepository
-    intent_router: IntentRouter
+    intent_router: ModelRouter
     browser_session: AsyncChromiumSession | None = None
     session_manager: DicSessionManager | None = None
     public_hr_responder: PublicHrResponder | None = None
@@ -346,9 +355,37 @@ async def _adapter(
         raise
 
 
-def _router(settings: AppSettings, *, force_mock_components: bool) -> IntentRouter:
+def _bridge_transport(settings: AppSettings) -> JsonlBridgeClient:
+    if (
+        settings.bridge_ca_path is None
+        or settings.bridge_client_cert_path is None
+        or settings.bridge_client_key_path is None
+    ):
+        raise ValueError("planner bridge mTLS configuration is required")
+    tls = build_client_ssl_context(
+        ca_path=settings.bridge_ca_path,
+        client_cert_path=settings.bridge_client_cert_path,
+        client_key_path=settings.bridge_client_key_path,
+    )
+    return JsonlBridgeClient(
+        BridgeEndpoint(
+            host=settings.bridge_host,
+            port=settings.bridge_port,
+            server_hostname=settings.bridge_server_name,
+            ssl_context=tls,
+        )
+    )
+
+
+def _router(settings: AppSettings, *, force_mock_components: bool) -> ModelRouter:
     if settings.mock_mode or force_mock_components:
         return MockIntentRouter(settings.language_profile)
+    if settings.model_provider == "bridge":
+        return BridgePlanningRouter(
+            _bridge_transport(settings),
+            timeout_seconds=min(settings.model_timeout_seconds, 60.0),
+            configured_model=settings.bridge_model,
+        )
     return OpenAIIntentRouter(
         build_intent_client(
             settings,
@@ -580,11 +617,16 @@ async def build_runtime(
             mock=settings.mock_mode,
         )
         if settings.discord_interaction_mode == "channel" or settings.discord_allow_dms:
-            public_hr_responder = (
-                MockPublicHrResponder()
-                if settings.mock_mode or force_mock_components
-                else build_public_hr_responder(settings)
-            )
+            if settings.mock_mode or force_mock_components:
+                public_hr_responder = MockPublicHrResponder()
+            elif settings.model_provider == "bridge":
+                public_hr_responder = BridgePublicHrResponder(
+                    _bridge_transport(settings),
+                    timeout_seconds=min(settings.model_timeout_seconds, 60.0),
+                    configured_model=settings.bridge_model,
+                )
+            else:
+                public_hr_responder = build_public_hr_responder(settings)
 
         async def startup_status_probe() -> StartupStatusSnapshot:
             health = await adapter.health()

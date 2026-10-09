@@ -9,8 +9,9 @@ operativo privato.
 - Discord applica allowlist di guild/canale, ruolo corrente, capability e policy prima del dispatch.
 - Il planner locale risolve intenti HR, persone, periodi e passi ordinati senza inviare nomi,
   Employee ID o risultati DIC al provider AI.
-- Il provider sceglie soltanto fra un massimo di tre Function ID read compatibili con la famiglia
-  canonica; non riceve browser, credenziali, documenti o primitive di navigazione.
+- Il bridge sceglie soltanto fra un massimo di otto Function ID read compatibili con la famiglia
+  canonica (tre nei router diretti legacy); non riceve browser, credenziali, documenti o primitive
+  di navigazione.
 - L'adapter Playwright usa route e azioni UI registrate e osserva soltanto risposte first-party
   allowlisted con controlli di origine, schema, paginazione, dimensione e tenant.
 - I piani composti verificano ordine, budget di lettura, identità dei record e completezza prima di

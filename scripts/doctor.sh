@@ -178,15 +178,22 @@ from bh_dic.config import AppSettings
 from bh_dic.openai.providers import GROQ_OPENAI_BASE_URL, OPENAI_RESPONSES_BASE_URL
 
 settings = AppSettings()
-provider_url = {
-    "openai": OPENAI_RESPONSES_BASE_URL,
-    "groq": GROQ_OPENAI_BASE_URL,
-    "llama": settings.llama_base_url,
-}[settings.model_provider]
-parsed = urlsplit(provider_url)
+if settings.model_provider == "bridge":
+    provider_scheme = "mtls"
+    provider_host = settings.bridge_host
+    provider_url = ""
+else:
+    provider_url = {
+        "openai": OPENAI_RESPONSES_BASE_URL,
+        "groq": GROQ_OPENAI_BASE_URL,
+        "llama": settings.llama_base_url,
+    }[settings.model_provider]
+    parsed = urlsplit(provider_url)
+    provider_scheme = parsed.scheme
+    provider_host = parsed.hostname or ""
 print(settings.model_provider)
-print(parsed.scheme)
-print(parsed.hostname or "")
+print(provider_scheme)
+print(provider_host)
 print(provider_url)
 ' 2>/dev/null)" || die "validated model provider metadata could not be loaded"
   mapfile -t provider_parts <<<"${provider_metadata}"
@@ -194,15 +201,17 @@ print(provider_url)
   provider_scheme="${provider_parts[1]-}"
   provider_host="${provider_parts[2]-}"
   provider_url="${provider_parts[3]-}"
-  if [[ -z "${model_provider}" || -z "${provider_scheme}" || -z "${provider_host}" || -z "${provider_url}" ]]; then
+  if [[ -z "${model_provider}" || -z "${provider_scheme}" || -z "${provider_host}" ]] || \
+    [[ "${model_provider}" != "bridge" && -z "${provider_url}" ]]; then
     die "validated model provider metadata is incomplete"
   fi
-  for host in discord.com "${provider_host}" secure.dipendentincloud.it; do
+  provider_hosts=(discord.com secure.dipendentincloud.it)
+  if [[ "${model_provider}" != "bridge" ]]; then provider_hosts+=("${provider_host}"); fi
+  for host in "${provider_hosts[@]}"; do
     if getent ahosts "${host}" >/dev/null 2>&1; then pass "DNS resolves ${host}"; else fail "DNS failed for ${host}"; fi
   done
   for entry in \
     "Discord|https|https://discord.com" \
-    "selected model provider|${provider_scheme}|${provider_url}" \
     "Dipendenti in Cloud|https|https://secure.dipendentincloud.it"; do
     IFS='|' read -r label scheme url <<<"${entry}"
     curl_args=(--silent --show-error --head --max-time 10 --proto "=${scheme}")
@@ -214,6 +223,22 @@ print(provider_url)
       fail "HTTP connectivity check failed: ${label}"
     fi
   done
+  if [[ "${model_provider}" == "bridge" ]]; then
+    if "${python_bin}" -m bh_dic model-check --live >/dev/null 2>&1; then
+      pass "planner bridge mTLS endpoint and closed synthetic decision verified"
+    else
+      fail "planner bridge mTLS or synthetic model check failed"
+    fi
+  else
+    curl_args=(--silent --show-error --head --max-time 10 --proto "=${provider_scheme}")
+    if [[ "${provider_scheme}" == "https" ]]; then curl_args+=(--tlsv1.2); fi
+    if http_code="$(curl "${curl_args[@]}" --output /dev/null --write-out '%{http_code}' "${provider_url}" 2>/dev/null)" && \
+      [[ "${http_code}" =~ ^[1-5][0-9][0-9]$ ]]; then
+      pass "HTTP endpoint reachable: selected model provider"
+    else
+      fail "HTTP connectivity check failed: selected model provider"
+    fi
+  fi
 else
   info "online DNS/HTTPS checks skipped; use --online explicitly"
 fi
