@@ -121,12 +121,14 @@ class FakeMessage:
         content: str = "conteggio",
         channel_id: int = 20,
         author: FakeUser | None = None,
+        attachments: tuple[object, ...] = (),
     ) -> None:
         self.author = author or FakeUser()
         self.webhook_id: int | None = None
         self.guild: SimpleNamespace | None = SimpleNamespace(id=10)
         self.channel: object = FakeMessageChannel(channel_id)
         self.content = content
+        self.attachments = attachments
         self.mentions: list[FakeUser] = []
         self.replies: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
@@ -165,9 +167,16 @@ class FakeGuild:
 
 
 class FakeAttachment:
-    def __init__(self, content: bytes, *, size: int | None = None) -> None:
-        self.filename = "synthetic.pdf"
-        self.content_type = "application/pdf"
+    def __init__(
+        self,
+        content: bytes,
+        *,
+        size: int | None = None,
+        filename: str = "synthetic.pdf",
+        content_type: str = "application/pdf",
+    ) -> None:
+        self.filename = filename
+        self.content_type = content_type
         self.size = len(content) if size is None else size
         self._content = content
         self.read_calls: list[bool] = []

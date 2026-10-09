@@ -17,7 +17,7 @@ Registrare in un change ticket approvato, senza segreti:
 - amministratore responsabile, finestra e piano di rollback;
 - host, filesystem cifrato, backup e retention;
 - Guild ID, Channel ID e Role ID Discord approvati, conservati soltanto nella configurazione locale;
-- provider `openai`, `groq` o `llama`, modello e budget/limiti;
+- backend del planner bridge (`codex`, `ollama` o `lmstudio`), modello e budget/limiti;
 - tenant DIC atteso e identità di servizio a privilegi minimi;
 - gestore processo scelto: **systemd** oppure **script PID**, mai entrambi.
 
@@ -164,31 +164,17 @@ PLAYWRIGHT_TRACE_MODE=off
 Tutti i flag `ENABLE_*` specifici di write devono rimanere `false`. Vedere
 [Configuration](CONFIGURATION.md) per ruoli, chiavi di almeno 32 byte, database, DIC e persona.
 
-### Scegliere un provider
-
-OpenAI:
+### Collegare il planner bridge
 
 ```dotenv
-MODEL_PROVIDER=openai
-OPENAI_API_KEY=<SEGRETO_LOCALE>
-OPENAI_MODEL=<MODELLO_APPROVATO>
-```
-
-Groq:
-
-```dotenv
-MODEL_PROVIDER=groq
-GROQ_API_KEY=<SEGRETO_LOCALE>
-GROQ_MODEL=openai/gpt-oss-120b
-```
-
-llama locale OpenAI-compatible:
-
-```dotenv
-MODEL_PROVIDER=llama
-LLAMA_BASE_URL=http://127.0.0.1:11434/v1
-LLAMA_MODEL=<MODELLO_LOCALE_INSTALLATO>
-# LLAMA_API_KEY=<SEGRETO_OPZIONALE>
+MODEL_PROVIDER=bridge
+BRIDGE_HOST=127.0.0.1
+BRIDGE_PORT=9443
+BRIDGE_SERVER_NAME=bh-dic-planner.local
+BRIDGE_CA_PATH=/percorso/privato/server-ca.crt
+BRIDGE_CLIENT_CERT_PATH=/percorso/privato/client.crt
+BRIDGE_CLIENT_KEY_PATH=/percorso/privato/client.key
+BRIDGE_MODEL=workspace-default
 ```
 
 Parametri comuni:
@@ -202,10 +188,10 @@ MODEL_STORE=false
 MODEL_RESULT_RENDERING=deterministic
 ```
 
-Le base URL OpenAI e Groq sono fisse nel codice a `https://api.openai.com/v1` e
-`https://api.groq.com/openai/v1`. L'URL llama HTTP è ammessa soltanto su loopback, con path `/v1`;
-un endpoint HTTPS remoto richiede `LLAMA_API_KEY`. Configurazione, criteri e fonti ufficiali sono in
-[Provider di modello](OPENAI_SETUP.md).
+Il bridge Mint deve essere predisposto prima di avviare il bot: servizio non privilegiato,
+backend Codex/ChatGPT Work oppure Ollama/LM Studio, mTLS e tunnel inverso che espone la sola porta
+loopback su Ubiquiti. Non inserire `OPENAI_API_KEY` o `GROQ_API_KEY` nel `.env` del bot. Procedura,
+unità systemd di esempio e criteri sono in [Planner bridge Codex/local](CODEX_BRIDGE.md).
 
 ### Configurare la persona
 
@@ -270,11 +256,11 @@ sudo -u bh-dic -H ./scripts/doctor.sh --online
 sudo -u bh-dic -H .venv/bin/python -m bh_dic model-check --live
 ```
 
-Il doctor online seleziona l'host OpenAI/Groq/llama configurato ma prova soltanto DNS/HTTP, non
-l'autenticazione. `model-check --live` invia una sola richiesta sintetica senza PII, espone zero
-Function ID e accetta soltanto `unsupported_request`; non costruisce Discord, DIC o browser e non
-esegue tool. `LIVE_VERIFIED` vale esclusivamente per il provider/modello in quel momento. Nessuno
-dei due comandi prova login DIC, selettori live o deployment completo.
+Con `MODEL_PROVIDER=bridge`, il doctor online verifica anche tunnel, mTLS e una decisione
+sintetica chiusa `EMP-READ-001`; `model-check --live` esegue la stessa classe di prova senza PII,
+senza costruire Discord, DIC o browser e senza eseguire tool. `LIVE_VERIFIED` vale esclusivamente
+per bridge/backend/modello in quel momento. Nessuno dei due comandi prova login DIC, selettori live
+o deployment completo.
 
 Per la 0.3.0 la revisione Alembic corrente deve includere `0002_model_usage`. La tabella registra
 solo il ciclo di vita della chiamata e i contatori token esatti dichiarati dal provider; non
@@ -547,8 +533,8 @@ Rotazione pianificata:
 
 1. fermare il bot;
 2. creare backup che escluda `.env` e verificare audit;
-3. creare la nuova credenziale: `DISCORD_BOT_TOKEN`, `OPENAI_API_KEY`, `GROQ_API_KEY`,
-   `LLAMA_API_KEY` quando usata, oppure la credenziale DIC interessata;
+3. creare la nuova credenziale: `DISCORD_BOT_TOKEN`, certificato/chiave mTLS del bridge,
+   sessione ChatGPT Work del solo account bridge, oppure la credenziale DIC interessata;
 4. aggiornare `.env` localmente, modo `0600`;
 5. invalidare la sessione DIC quando pertinente;
 6. eseguire doctor, smoke e verifica log;
@@ -577,7 +563,7 @@ Per sintomi e percorsi di escalation vedere [Troubleshooting](TROUBLESHOOTING.md
 - [ ] Clone pubblico allo SHA approvato, remote senza credenziali.
 - [ ] `.venv`, Chromium e ClamAV verificati per l'utente di servizio.
 - [ ] `.env` `0600`, nessun segreto in Git/log/ticket.
-- [ ] Provider unico e `MODEL_STORE=false`; persona validata.
+- [ ] Bridge loopback+mTLS e backend unico verificati; `MODEL_STORE=false`; persona validata.
 - [ ] Guild ID, Channel ID e Role ID approvati presenti soltanto nella configurazione locale.
 - [ ] Comandi registrati solo nel guild; intent privilegiati off; permission bitfield `19456`.
 - [ ] `ENABLE_WRITE_ACTIONS=false`, live write test e tutti i flag specifici false.
@@ -589,10 +575,8 @@ Per sintomi e percorsi di escalation vedere [Troubleshooting](TROUBLESHOOTING.md
 
 ## Riferimenti ufficiali
 
-- OpenAI: [Responses e modelli](https://developers.openai.com/api/docs/guides/latest-model) e
-  [function calling](https://developers.openai.com/api/docs/guides/function-calling).
-- Groq: [compatibilità OpenAI](https://console.groq.com/docs/openai) e
-  [`openai/gpt-oss-120b`](https://console.groq.com/docs/model/openai/gpt-oss-120b).
+- OpenAI: [Codex App Server](https://learn.chatgpt.com/docs/app-server) e
+  [accesso ChatGPT per App Server](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server).
 - Discord: [creazione app/bot](https://docs.discord.com/developers/quick-start/getting-started),
   [OAuth2](https://docs.discord.com/developers/topics/oauth2),
   [permissions](https://docs.discord.com/developers/topics/permissions),

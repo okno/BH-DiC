@@ -12,6 +12,8 @@ import bh_dic.runtime as runtime_module
 from bh_dic.application import ApplicationError, BHApplicationCoordinator
 from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.approvals.storage import ApprovalRepository
+from bh_dic.bridge.client import JsonlBridgeClient
+from bh_dic.bridge.planner import BridgePlanningRouter
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage, DicSessionManager
@@ -122,6 +124,26 @@ def test_router_uses_mock_offline_and_requires_live_openai_configuration() -> No
     with pytest.raises(ValueError, match="OpenAI configuration"):
         runtime_module._router(missing, force_mock_components=False)
     assert isinstance(runtime_module._router(missing, force_mock_components=True), MockIntentRouter)
+
+
+def test_router_uses_mtls_bridge_without_a_provider_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge_client = cast(JsonlBridgeClient, SimpleNamespace(close=AsyncMock()))
+    monkeypatch.setattr(runtime_module, "_bridge_transport", lambda _settings: bridge_client)
+    settings = _live_settings().model_copy(
+        update={
+            "model_provider": "bridge",
+            "openai_api_key": None,
+            "openai_model": None,
+            "bridge_model": "workspace-default",
+        }
+    )
+
+    router = runtime_module._router(settings, force_mock_components=False)
+
+    assert isinstance(router, BridgePlanningRouter)
+    assert router._client is bridge_client
 
 
 def test_router_uses_closed_language_profile_without_sending_decorations(

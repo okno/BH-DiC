@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import SecretStr
 
+from bh_dic.ai.planning import RoutedPlanningDecision
 from bh_dic.application import (
     ApplicationError,
     ApplicationPolicyDenied,
@@ -64,6 +65,8 @@ from bh_dic.openai.schemas import (
 from bh_dic.policies.engine import PolicyEngine
 from bh_dic.policies.feature_flags import DEFAULT_FEATURE_FLAGS, RuntimeFeatureFlags
 from bh_dic.policies.roles import LogicalRole
+from bh_dic.query.decision import PlanningDecision
+from bh_dic.query.plan import HRQueryAction, HRQueryPlan, HRQueryStep, HRResource
 from bh_dic.security.cipher import PayloadCipher
 from bh_dic.services.dic_service import DicService
 
@@ -112,6 +115,37 @@ class CancellingRouter:
     async def route(self, request: str, allowed_function_ids: frozenset[str]) -> RoutedIntent:
         del request, allowed_function_ids
         raise asyncio.CancelledError
+
+
+class FixedPlanningRouter:
+    def __init__(self, decision: PlanningDecision) -> None:
+        self.decision = decision
+        self.calls = 0
+        self.request: str | None = None
+        self.exposed: frozenset[str] | None = None
+
+    async def decide(
+        self,
+        request: str,
+        allowed_function_ids: frozenset[str],
+        *,
+        today: date,
+    ) -> RoutedPlanningDecision:
+        del today
+        self.calls += 1
+        self.request = request
+        self.exposed = allowed_function_ids
+        return RoutedPlanningDecision(
+            decision=self.decision,
+            metadata=RouteMetadata(
+                provider="bridge",
+                model="synthetic-planner",
+                tool_name=f"planning_{self.decision.kind}",
+            ),
+        )
+
+    async def close(self) -> None:
+        return None
 
 
 class AmbiguousMockAdapter(MockDicAdapter):
@@ -1863,6 +1897,132 @@ async def test_latest_paid_net_keeps_pending_question_when_user_replies_with_nam
 
 
 @pytest.mark.asyncio
+async def test_bridge_planner_resolves_embedded_name_locally_and_offers_bound_menu() -> None:
+    decision = PlanningDecision.model_validate(
+        {
+            "kind": "single_intent",
+            "intent": {
+                "intent": "employee_payroll",
+                "function_id": "EMP-PAY-001",
+                "action_class": "READ",
+                "employee_id": None,
+                "query": None,
+                "parameters": {"year": 2026, "month": 6, "include_net": True},
+                "date_from": None,
+                "date_to": None,
+                "requires_clarification": False,
+                "clarification_question": None,
+                "sensitivity": "HIGH",
+                "confidence": 1.0,
+            },
+        }
+    )
+    router = FixedPlanningRouter(decision)
+    adapter = MockDicAdapter()
+    first = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = first.model_copy(
+        update={
+            "display_name": SecretStr("Monica Sintetica"),
+            "display_name_redacted": "Monica Sintetica",
+            "first_name": SecretStr("Monica"),
+            "last_name": SecretStr("Sintetica"),
+        }
+    )
+    second = first.model_copy(
+        update={
+            "employee_id": "EMP-SYNTH-002",
+            "display_name": SecretStr("Monica Collaudo"),
+            "display_name_redacted": "Monica Collaudo",
+            "first_name": SecretStr("Monica"),
+            "last_name": SecretStr("Collaudo"),
+        }
+    )
+    adapter._items[second.employee_id] = second
+    adapter._payrolls[second.employee_id] = [
+        PayrollMetadata(
+            payroll_id="PAY-SYNTH-BRIDGE",
+            employee_id=second.employee_id,
+            year=2026,
+            month=6,
+            net_cents=234_567,
+            published_at="2026-07-10",
+        )
+    ]
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 26),
+        model_provider="bridge",
+    )
+    requester = actor(LogicalRole.HR_READ)
+    try:
+        ambiguous = await coordinator.ask(
+            requester,
+            "Controlla la paga di Monica a giugno",
+        )
+        assert ambiguous.employee_selection_context_id is not None
+        result = await coordinator.select_employee(
+            requester,
+            ambiguous.employee_selection_context_id,
+            second.employee_id,
+        )
+    finally:
+        await adapter.close()
+
+    assert router.calls == 1
+    assert router.exposed == frozenset({"EMP-PAY-001", "EMP-PAY-002"})
+    assert router.request is not None
+    assert "Monica" not in router.request
+    assert ambiguous.title == "Risultato non univoco"
+    assert {option.employee_id for option in ambiguous.employee_selection} == {
+        "EMP-SYNTH-001",
+        "EMP-SYNTH-002",
+    }
+    assert result.fields[0].name == "06/2026"
+    assert "€ 2.345,67" in result.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_bridge_planner_target_clarification_is_recovered_by_local_roster() -> None:
+    decision = PlanningDecision.model_validate(
+        {
+            "kind": "clarification",
+            "question": "Quale dipendente devo consultare?",
+        }
+    )
+    router = FixedPlanningRouter(decision)
+    adapter = MockDicAdapter()
+    item = adapter._items["EMP-SYNTH-001"]
+    adapter._items["EMP-SYNTH-001"] = item.model_copy(
+        update={
+            "display_name": SecretStr("Nora Esempio"),
+            "display_name_redacted": "Nora Esempio",
+            "first_name": SecretStr("Nora"),
+            "last_name": SecretStr("Esempio"),
+        }
+    )
+    coordinator, adapter, _ = await coordinator_for(
+        router,  # type: ignore[arg-type]
+        adapter_override=adapter,
+        today_provider=lambda: date(2026, 8, 26),
+        model_provider="bridge",
+    )
+    try:
+        result = await coordinator.ask(
+            actor(LogicalRole.HR_READ),
+            "Permessi Nora Esempio",
+        )
+    finally:
+        await adapter.close()
+
+    assert router.calls == 1
+    assert router.exposed == frozenset({"EMP-RBAC-001"})
+    assert router.request is not None and "Nora" not in router.request
+    assert result.success
+    assert result.title == "Ruoli EMP-SYNTH-001"
+
+
+@pytest.mark.asyncio
 async def test_colloquial_standard_reads_resolve_locally_without_model_routing() -> None:
     router = FailingRouter(IntentProviderError("provider must not be called"))
     adapter = MockDicAdapter()
@@ -2656,6 +2816,87 @@ def _operator_router() -> FixedRouter:
             confidence=1.0,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_registered_read_plan_executes_bound_target_after_complete_preflight() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    plan = HRQueryPlan(
+        intent="employee_identity_and_roles",
+        resources=(HRResource.EMPLOYEE_SUMMARY, HRResource.ROLES),
+        target_entities=("EMPLOYEE_TARGET_1",),
+        sensitivity=Sensitivity.HIGH,
+        steps=(
+            HRQueryStep(
+                step_id="step_1",
+                function_id="EMP-READ-002",
+                resource=HRResource.EMPLOYEE_SUMMARY,
+                action=HRQueryAction.READ,
+                target_entity="EMPLOYEE_TARGET_1",
+            ),
+            HRQueryStep(
+                step_id="step_2",
+                function_id="EMP-RBAC-001",
+                resource=HRResource.ROLES,
+                action=HRQueryAction.READ,
+                depends_on=("step_1",),
+                target_entity="EMPLOYEE_TARGET_1",
+            ),
+        ),
+    )
+
+    result = await coordinator._execute_query_plan(
+        actor(LogicalRole.HR_READ),
+        "correlation-synthetic",
+        plan,
+        entity_bindings={"EMPLOYEE_TARGET_1": "EMP-SYNTH-001"},
+    )
+
+    assert result.success
+    assert result.title == "Risultato HR composito"
+    assert len(result.fields) == 2
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_registered_read_plan_denial_happens_before_any_dic_read() -> None:
+    coordinator, adapter, _ = await coordinator_for(_operator_router())
+    original_summary = adapter.get_employee_summary
+    adapter.get_employee_summary = AsyncMock(wraps=original_summary)  # type: ignore[method-assign]
+    plan = HRQueryPlan(
+        intent="employee_identity_and_documents",
+        resources=(HRResource.EMPLOYEE_SUMMARY, HRResource.DOCUMENTS),
+        target_entities=("EMPLOYEE_TARGET_1",),
+        sensitivity=Sensitivity.HIGH,
+        steps=(
+            HRQueryStep(
+                step_id="step_1",
+                function_id="EMP-READ-002",
+                resource=HRResource.EMPLOYEE_SUMMARY,
+                action=HRQueryAction.READ,
+                target_entity="EMPLOYEE_TARGET_1",
+            ),
+            HRQueryStep(
+                step_id="step_2",
+                function_id="EMP-DOC-001",
+                resource=HRResource.DOCUMENTS,
+                action=HRQueryAction.READ,
+                depends_on=("step_1",),
+                target_entity="EMPLOYEE_TARGET_1",
+            ),
+        ),
+    )
+
+    with pytest.raises(ApplicationPolicyDenied):
+        await coordinator._execute_query_plan(
+            actor(LogicalRole.HR_READ),
+            "correlation-synthetic",
+            plan,
+            entity_bindings={"EMPLOYEE_TARGET_1": "EMP-SYNTH-001"},
+        )
+
+    adapter.get_employee_summary.assert_not_awaited()  # type: ignore[attr-defined]
+    await adapter.close()
 
 
 @pytest.mark.parametrize(

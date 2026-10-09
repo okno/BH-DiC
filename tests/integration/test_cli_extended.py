@@ -11,11 +11,14 @@ from pydantic import SecretStr
 from typer.testing import CliRunner
 
 import bh_dic.cli as cli
+from bh_dic.ai.planning import RoutedPlanningDecision
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.files.antivirus import AntivirusResult, AntivirusVerdict
 from bh_dic.files.models import UploadRecord, UploadStatus
 from bh_dic.files.repository import SqlAlchemyUploadRepository
+from bh_dic.openai.schemas import ActionClass, IntentEnvelope, RouteMetadata, Sensitivity
+from bh_dic.query.decision import PlanningDecision, SingleIntentDecision
 
 runner = CliRunner()
 UPLOAD_ID = "a" * 32
@@ -84,6 +87,31 @@ def test_config_failure_and_both_init_db_modes(monkeypatch: pytest.MonkeyPatch) 
     migrations.assert_awaited_once_with("sqlite+aiosqlite:///:memory:")
 
 
+def test_bridge_serve_requires_private_owned_absolute_environment_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = tmp_path / "shared.env"
+    shared.write_text("BRIDGE_BACKEND=codex\n", encoding="utf-8")
+    shared.chmod(0o644)
+    rejected = runner.invoke(cli.app, ["bridge-serve", "--env-file", str(shared)])
+    assert rejected.exit_code == 1
+    assert "PermissionError" in rejected.output
+
+    private = tmp_path / "private.env"
+    private.write_text("BRIDGE_BACKEND=codex\n", encoding="utf-8")
+    private.chmod(0o600)
+    settings = SimpleNamespace()
+    serve = AsyncMock()
+    monkeypatch.setattr(cli, "BridgeHostSettings", lambda **_kwargs: settings)
+    monkeypatch.setattr(cli, "serve_bridge", serve)
+
+    accepted = runner.invoke(cli.app, ["bridge-serve", "--env-file", str(private)])
+
+    assert accepted.exit_code == 0, accepted.output
+    serve.assert_awaited_once_with(settings)
+
+
 @pytest.mark.asyncio
 async def test_model_check_uses_only_the_closed_synthetic_router(
     monkeypatch: pytest.MonkeyPatch,
@@ -121,6 +149,65 @@ async def test_model_check_uses_only_the_closed_synthetic_router(
         "provider": "groq",
         "model": "openai/gpt-oss-120b",
         "tool": "unsupported_request",
+        "store": False,
+        "tool_execution": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bridge_model_check_uses_closed_planning_decision_and_closes_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close = AsyncMock()
+
+    class FakePlanningRouter:
+        async def decide(
+            self,
+            request: str,
+            allowed_function_ids: frozenset[str],
+            *,
+            today: object,
+        ) -> RoutedPlanningDecision:
+            assert request == "request employee_headcount"
+            assert allowed_function_ids == frozenset({"EMP-READ-001"})
+            assert today is not None
+            return RoutedPlanningDecision(
+                decision=PlanningDecision(
+                    root=SingleIntentDecision(
+                        kind="single_intent",
+                        intent=IntentEnvelope(
+                            intent="employee_headcount",
+                            function_id="EMP-READ-001",
+                            action_class=ActionClass.READ,
+                            sensitivity=Sensitivity.LOW,
+                            confidence=1.0,
+                        ),
+                    )
+                ),
+                metadata=RouteMetadata(
+                    provider="codex",
+                    model="workspace-default",
+                    request_id="synthetic-request",
+                    tool_name="planning_single_intent",
+                ),
+            )
+
+        async def close(self) -> None:
+            await close()
+
+    settings = _settings().model_copy(update={"mock_mode": False, "model_provider": "bridge"})
+    monkeypatch.setattr(cli, "_router", lambda *_args, **_kwargs: FakePlanningRouter())
+
+    result = await cli._model_check_live(settings)
+
+    close.assert_awaited_once_with()
+    assert result == {
+        "status": "LIVE_VERIFIED",
+        "live_contacted": True,
+        "provider": "codex",
+        "model": "workspace-default",
+        "decision": "single_intent",
+        "function_id": "EMP-READ-001",
         "store": False,
         "tool_execution": False,
     }

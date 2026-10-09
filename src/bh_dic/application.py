@@ -21,6 +21,7 @@ from typing import Any, Literal, cast
 
 from pydantic import JsonValue
 
+from bh_dic.ai.planning import PlanningRouter, RoutedPlanningDecision
 from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.approvals.service import ApprovalService
 from bh_dic.approvals.storage import ApprovalRepository
@@ -117,8 +118,19 @@ from bh_dic.policies.engine import PolicyContext, PolicyEngine, PolicyPhase
 from bh_dic.policies.feature_flags import FeatureFlags
 from bh_dic.policies.roles import LogicalRole, normalize_roles
 from bh_dic.query.context import ConversationContext, ConversationContextStore, ConversationKey
-from bh_dic.query.execution import QueryPlanExecutionError, QueryPlanTracker
-from bh_dic.query.plan import FilterOperator, HRQueryPlan
+from bh_dic.query.decision import (
+    ClarificationDecision,
+    ReadPlanDecision,
+    SingleIntentDecision,
+    UnsupportedDecision,
+)
+from bh_dic.query.execution import (
+    QueryPlanExecutionError,
+    QueryPlanTracker,
+    ReadFunctionBinding,
+    registered_read_steps,
+)
+from bh_dic.query.plan import FilterOperator, HRQueryPlan, HRQueryStep
 from bh_dic.query.planner import build_local_hr_query_plan
 from bh_dic.query.routing_scope import (
     narrow_provider_routing_scope,
@@ -194,7 +206,7 @@ class BHApplicationCoordinator(InteractionCoordinator):
     def __init__(
         self,
         *,
-        router: IntentRouter,
+        router: IntentRouter | PlanningRouter,
         policy: PolicyEngine,
         flags: FeatureFlags,
         dic: DicService,
@@ -343,7 +355,11 @@ class BHApplicationCoordinator(InteractionCoordinator):
             provider_request, explicit_employee_id = minimize_hr_router_request(prepared_request)
             local_search_query = local_employee_search_query(prepared_request)
             contract_expiry_fallback_interval = None
-            provider_scope = narrow_provider_routing_scope(provider_request, visible)
+            provider_scope = narrow_provider_routing_scope(
+                provider_request,
+                visible,
+                max_functions=8 if isinstance(self.router, PlanningRouter) else 3,
+            )
             provider_visible = provider_scope.function_ids
             safe_failure_fallback = safe_provider_failure_fallback(
                 provider_scope,
@@ -372,8 +388,18 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     )
                 )
             usage_completed = False
+            planning_route: RoutedPlanningDecision | None = None
             try:
-                routed = await self.router.route(provider_request, provider_visible)
+                if isinstance(self.router, PlanningRouter):
+                    planning_route = await self.router.decide(
+                        provider_request,
+                        provider_visible,
+                        today=request_today,
+                    )
+                    route_metadata = planning_route.metadata
+                else:
+                    routed = await self.router.route(provider_request, provider_visible)
+                    route_metadata = routed.metadata
             except IntentProviderError as exc:
                 logger.warning(
                     "intent_route_provider_failed",
@@ -417,18 +443,21 @@ class BHApplicationCoordinator(InteractionCoordinator):
                         public_hr_fallback=True,
                     )
                     return await self._with_request_usage(result, correlation_id)
-                if (
-                    self._model_provider != "groq"
-                    or exc.provider != "groq"
-                    or exc.failure_kind is not ProviderFailureKind.TOOL_USE_FAILED
-                    or not exc.response_received
-                    or (contract_expiry_fallback_interval is None and safe_failure_fallback is None)
+                safe_failure_recovery = self._model_provider == "bridge" or (
+                    self._model_provider == "groq"
+                    and exc.provider == "groq"
+                    and exc.failure_kind is ProviderFailureKind.TOOL_USE_FAILED
+                    and exc.response_received
+                )
+                if not safe_failure_recovery or (
+                    contract_expiry_fallback_interval is None and safe_failure_fallback is None
                 ):
                     result = InteractionResult(
                         title="Interpretazione AI non completata",
                         description=(
-                            "Il provider non ha prodotto un routing valido. Nessuna operazione "
-                            "Dipendenti in Cloud è stata eseguita; riprova tra poco."
+                            "Il planner non ha prodotto una decisione valida e non esiste una "
+                            "rotta locale deterministica per questa formulazione. Nessuna "
+                            "operazione Dipendenti in Cloud è stata eseguita; riprova tra poco."
                         ),
                         correlation_id=correlation_id,
                         success=False,
@@ -442,7 +471,8 @@ class BHApplicationCoordinator(InteractionCoordinator):
                     )
                     fallback_tool = "get_contracts"
                 else:
-                    assert safe_failure_fallback is not None
+                    if safe_failure_fallback is None:
+                        raise ApplicationError("safe planner fallback is unavailable") from None
                     fallback_envelope = self._direct_intent(
                         safe_failure_fallback.function_id,
                     ).model_copy(
@@ -483,12 +513,95 @@ class BHApplicationCoordinator(InteractionCoordinator):
                         usage=None,
                     )
                 raise
+            if planning_route is None:
+                route_metadata = routed.metadata
             if self._model_usage is not None and not usage_completed:
                 await self._model_usage.complete(
                     usage_key,
                     response_received=True,
-                    usage=routed.metadata.usage,
+                    usage=route_metadata.usage,
                 )
+            if planning_route is not None:
+                planning_root = planning_route.decision.root
+                if isinstance(planning_root, ReadPlanDecision):
+                    entity_bindings: dict[str, str] = {}
+                    if planning_root.plan.target_entities:
+                        if len(planning_root.plan.target_entities) != 1:
+                            raise ApplicationError(
+                                "planner requested an unsupported number of local targets"
+                            )
+                        inferred_target = await self._infer_unique_employee_mention(
+                            normalized_request
+                        )
+                        if inferred_target is None:
+                            result = InteractionResult(
+                                title="Chiarimento necessario",
+                                description=(
+                                    "Non posso associare in modo univoco la persona indicata. "
+                                    "Scrivi nome e cognome oppure l'Employee ID; i dati restano "
+                                    "sul bot locale."
+                                ),
+                                correlation_id=correlation_id,
+                                success=False,
+                            )
+                            return await self._with_request_usage(result, correlation_id)
+                        entity_bindings[planning_root.plan.target_entities[0]] = (
+                            inferred_target.employee_id
+                        )
+                    result = await self._execute_query_plan(
+                        actor,
+                        correlation_id,
+                        planning_root.plan,
+                        entity_bindings=entity_bindings,
+                    )
+                    return await self._with_request_usage(result, correlation_id)
+                if isinstance(planning_root, ClarificationDecision):
+                    # A planner never sees employee names.  If local minimization already
+                    # narrowed the request to exactly one target-based read, do not echo a
+                    # spurious "which employee?" question: construct that catalog intent and
+                    # let the local roster resolver below recover or disambiguate the person.
+                    clarification_recovery: str | None = None
+                    if len(provider_visible) == 1:
+                        candidate_function_id = next(iter(provider_visible))
+                        candidate_spec = get_function_spec(candidate_function_id)
+                        if (
+                            candidate_spec is not None
+                            and candidate_spec.requires_target
+                            and not candidate_spec.is_write
+                        ):
+                            clarification_recovery = candidate_function_id
+                    if clarification_recovery is None:
+                        result = InteractionResult(
+                            title="Chiarimento necessario",
+                            description=planning_root.question,
+                            correlation_id=correlation_id,
+                            success=False,
+                        )
+                        return await self._with_request_usage(result, correlation_id)
+                    routed = RoutedIntent(
+                        envelope=self._direct_intent(clarification_recovery),
+                        metadata=RouteMetadata(
+                            provider="local_clarification_recovery",
+                            model="deterministic",
+                            tool_name="local_employee_resolution",
+                        ),
+                    )
+                elif isinstance(planning_root, UnsupportedDecision):
+                    result = InteractionResult(
+                        title="Conversazione HR",
+                        description="La richiesta non richiede una funzione operativa DiC.",
+                        correlation_id=correlation_id,
+                        success=False,
+                        public_hr_fallback=True,
+                    )
+                    return await self._with_request_usage(result, correlation_id)
+                elif not isinstance(planning_root, SingleIntentDecision):
+                    raise ApplicationError("planner returned an unsupported decision")
+                else:
+                    routed = RoutedIntent(
+                        envelope=planning_root.intent,
+                        metadata=planning_route.metadata,
+                    )
             # Provider identity/search fields are never trusted. Restore only local values.
             trusted_updates: dict[str, object] = {
                 "employee_id": explicit_employee_id,
@@ -521,11 +634,15 @@ class BHApplicationCoordinator(InteractionCoordinator):
             # redacted employee target. Never trust it with roster identities: match the original
             # request against the complete DIC roster locally and continue only for one exact,
             # unambiguous person. This also overrides an unnecessary model clarification.
-            inferred = (
-                None
-                if remembered_employee_id is not None
-                else await self._infer_unique_employee_mention(normalized_request)
-            )
+            inferred: EmployeeListItem | InteractionResult | None = None
+            if remembered_employee_id is None:
+                inferred = await self._resolve_employee_mention(
+                    normalized_request,
+                    correlation_id,
+                    actor=actor,
+                    function_id=intent.function_id,
+                    parameters=intent.parameters,
+                )
             if remembered_employee_id is not None:
                 intent = intent.model_copy(
                     update={
@@ -534,6 +651,8 @@ class BHApplicationCoordinator(InteractionCoordinator):
                         "clarification_question": None,
                     }
                 )
+            elif isinstance(inferred, InteractionResult):
+                return await self._with_request_usage(inferred, correlation_id)
             elif inferred is not None:
                 resolved_item = inferred
                 intent = intent.model_copy(
@@ -787,8 +906,15 @@ class BHApplicationCoordinator(InteractionCoordinator):
         actor: DiscordActor,
         correlation_id: str,
         plan: HRQueryPlan,
+        *,
+        entity_bindings: Mapping[str, str] | None = None,
     ) -> InteractionResult:
         """Execute only locally implemented, read-only multi-step plan shapes."""
+
+        try:
+            bindings = registered_read_steps(plan)
+        except QueryPlanExecutionError as exc:
+            raise ApplicationError("HR query plan has no safe local executor") from exc
 
         if plan.intent == "workforce_contract_payroll_table" and len(plan.steps) == 3:
             return await self._execute_workforce_contract_payroll_table(
@@ -797,7 +923,13 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 plan,
             )
         if plan.intent != "contract_expiry_payroll_comparison" or len(plan.steps) != 3:
-            raise ApplicationError("validated HR query plan is not locally executable")
+            return await self._execute_registered_read_plan(
+                actor,
+                correlation_id,
+                plan,
+                bindings,
+                entity_bindings=entity_bindings,
+            )
         required_functions = tuple(dict.fromkeys(step.function_id for step in plan.steps))
         for function_id in required_functions:
             spec = self._spec(function_id)
@@ -963,6 +1095,262 @@ class BHApplicationCoordinator(InteractionCoordinator):
             },
         )
         return result
+
+    async def _execute_registered_read_plan(
+        self,
+        actor: DiscordActor,
+        correlation_id: str,
+        plan: HRQueryPlan,
+        bindings: tuple[ReadFunctionBinding, ...],
+        *,
+        entity_bindings: Mapping[str, str] | None,
+    ) -> InteractionResult:
+        """Execute a registry-backed plan after one all-or-nothing policy preflight.
+
+        This executor supports bounded independent/composite reads.  Cross-employee
+        fan-out and joins remain dedicated application workflows so a model cannot
+        turn a dependency into an unbounded browser traversal.
+        """
+
+        bound_entities = dict(entity_bindings or {})
+        if set(bound_entities).difference(plan.target_entities):
+            raise ApplicationError("query plan received an undeclared entity binding")
+        intents: list[tuple[IntentEnvelope, str]] = []
+        for step, binding in zip(plan.steps, bindings, strict=True):
+            employee_id = (
+                bound_entities.get(step.target_entity) if step.target_entity is not None else None
+            )
+            if binding.requires_target and employee_id is None:
+                raise ApplicationError("query plan target was not resolved locally")
+            if binding.requires_target and step.target_entity is None and step.depends_on:
+                raise ApplicationError("generic query executor cannot fan out a target dependency")
+            intent, operation_scope = self._registered_step_intent(
+                plan,
+                step,
+                binding,
+                employee_id=employee_id,
+            )
+            intents.append((intent, operation_scope))
+
+        # No DIC read happens until every step has passed policy evaluation.
+        for intent, operation_scope in intents:
+            decision = self.policy.evaluate(
+                self._context(
+                    actor,
+                    intent.function_id,
+                    target_employee_id=intent.employee_id,
+                    operation_scope=operation_scope,
+                )
+            )
+            if not decision.allowed:
+                await self._audit_denial(actor, correlation_id, intent, decision)
+                raise ApplicationPolicyDenied(decision, correlation_id)
+
+        sections = [
+            await self._dispatch_read(actor, correlation_id, intent, operation_scope)
+            for intent, operation_scope in intents
+        ]
+        if len(sections) == 1:
+            result = sections[0]
+        else:
+            attachments = tuple(
+                attachment for section in sections for attachment in section.attachments
+            )
+            if len(attachments) > 9:
+                raise ApplicationError("query plan exceeds the attachment count limit")
+            result = InteractionResult(
+                title="Risultato HR composito",
+                description=(
+                    f"Piano `{plan.intent}` completato: {len(sections)} sezioni su "
+                    f"{len(plan.steps)}. Ogni lettura è stata autorizzata e risolta tramite "
+                    "il registry locale Dipendenti in Cloud."
+                ),
+                fields=tuple(
+                    ResultField(
+                        section.title,
+                        "\n".join(
+                            (
+                                section.description,
+                                *(f"{field.name}: {field.value}" for field in section.fields[:2]),
+                            )
+                        )[:1_024],
+                    )
+                    for section in sections
+                ),
+                messages=tuple(message for section in sections for message in section.messages),
+                attachments=attachments,
+                correlation_id=correlation_id,
+                success=all(section.success for section in sections),
+            )
+        await self._audit(
+            actor,
+            correlation_id,
+            "query_plan.completed",
+            plan.steps[-1].function_id,
+            AuditOutcome.SUCCESS if result.success else AuditOutcome.DENIED,
+            intents[-1][0].employee_id,
+            {
+                "plan_intent": plan.intent,
+                "step_count": len(plan.steps),
+                "registered_executor": True,
+                "complete": result.success,
+            },
+        )
+        return result
+
+    def _registered_step_intent(
+        self,
+        plan: HRQueryPlan,
+        step: HRQueryStep,
+        binding: ReadFunctionBinding,
+        *,
+        employee_id: str | None,
+    ) -> tuple[IntentEnvelope, str]:
+        """Translate only registry-owned DSL fields to one catalog intent."""
+
+        selected_filters = tuple(
+            item for item in (*plan.filters, *step.filters) if item.field in binding.filter_fields
+        )
+        values: dict[str, object] = {}
+        operators: dict[str, FilterOperator] = {}
+        for item in selected_filters:
+            if item.field in values and (
+                values[item.field] != item.value or operators[item.field] is not item.operator
+            ):
+                raise ApplicationError("query plan contains conflicting filters")
+            values[item.field] = item.value
+            operators[item.field] = item.operator
+
+        parameters: dict[str, object] = {}
+        date_from: date | None = None
+        date_to: date | None = None
+        operation_scope = "default"
+        function_id = step.function_id
+
+        if function_id in {
+            "EMP-READ-001",
+            "EMP-FILTER-001",
+            "EMP-SORT-001",
+            "EMP-PAGE-001",
+        }:
+            if "status" in values:
+                if operators["status"] is not FilterOperator.EQ or values["status"] not in {
+                    "active",
+                    "inactive",
+                    "all",
+                }:
+                    raise ApplicationError("query plan employee status filter is invalid")
+                parameters["status"] = values["status"]
+            if "group" in values:
+                if operators["group"] not in {
+                    FilterOperator.EQ,
+                    FilterOperator.CONTAINS,
+                } or not isinstance(values["group"], str):
+                    raise ApplicationError("query plan employee group filter is invalid")
+                parameters["group"] = values["group"]
+                parameters["include_all"] = True
+            parameters["page"] = plan.pagination.page
+            parameters["page_size"] = plan.pagination.page_size
+            if plan.pagination.require_complete:
+                parameters["include_all"] = True
+            if plan.sorting:
+                if len(plan.sorting) != 1:
+                    raise ApplicationError("query plan supports one employee sort field")
+                sort = plan.sorting[0]
+                if sort.field not in {"name", "payroll_number", "status", "contract"}:
+                    raise ApplicationError("query plan employee sort field is invalid")
+                parameters["sort_by"] = sort.field
+                parameters["sort_direction"] = sort.direction
+            if (step.aggregation or plan.aggregation) == "count":
+                operation_scope = "aggregate"
+        elif function_id == "EMP-SEARCH-001":
+            # Employee names/IDs are deliberately resolved outside the model plan.
+            raise ApplicationError("query plan search requires local entity resolution")
+        elif function_id == "EMP-CONTRACT-001" and "contract_end_date" in values:
+            raw_range = values["contract_end_date"]
+            if (
+                operators["contract_end_date"] is not FilterOperator.BETWEEN
+                or not isinstance(raw_range, list)
+                or len(raw_range) != 2
+                or not all(isinstance(item, str) for item in raw_range)
+            ):
+                raise ApplicationError("query plan contract range is invalid")
+            try:
+                date_from, date_to = (date.fromisoformat(item) for item in raw_range)
+            except ValueError as exc:
+                raise ApplicationError("query plan contract date is invalid") from exc
+        elif function_id == "EMP-BAL-001":
+            year = values.get("year", self._today().year)
+            if (
+                operators.get("year", FilterOperator.EQ) is not FilterOperator.EQ
+                or isinstance(year, bool)
+                or not isinstance(year, int)
+                or not 2000 <= year <= 2200
+            ):
+                raise ApplicationError("query plan balance year is invalid")
+            parameters["year"] = year
+        elif function_id in {"EMP-PAY-001", "EMP-PAY-002"}:
+            year = values.get("payroll_year")
+            month = values.get("payroll_month")
+            if year is not None:
+                if (
+                    operators["payroll_year"] is not FilterOperator.EQ
+                    or isinstance(year, bool)
+                    or not isinstance(year, int)
+                    or not 2000 <= year <= 2200
+                ):
+                    raise ApplicationError("query plan payroll year is invalid")
+                parameters["year"] = year
+            if month is not None:
+                if (
+                    operators["payroll_month"] is not FilterOperator.EQ
+                    or isinstance(month, bool)
+                    or not isinstance(month, int)
+                    or not 1 <= month <= 12
+                ):
+                    raise ApplicationError("query plan payroll month is invalid")
+                parameters["month"] = month
+            if (
+                function_id == "EMP-PAY-001"
+                and (step.aggregation or plan.aggregation) == "latest_paid"
+            ):
+                parameters["latest_paid"] = True
+            if function_id == "EMP-PAY-002":
+                if set(parameters) != {"year", "month"}:
+                    raise ApplicationError("payroll presence plan requires month and year")
+                payroll_filter = values.get("payroll")
+                if payroll_filter is not None and operators["payroll"] is not FilterOperator.EXISTS:
+                    raise ApplicationError("generic payroll absence requires a dedicated executor")
+        elif function_id == "EMP-DOC-001":
+            status = values.get("status", "all")
+            if operators.get(
+                "status", FilterOperator.EQ
+            ) is not FilterOperator.EQ or status not in {"uploaded", "pending", "all"}:
+                raise ApplicationError("query plan document status is invalid")
+            parameters["status"] = status
+            category = values.get("category")
+            if category is not None:
+                if operators["category"] not in {
+                    FilterOperator.EQ,
+                    FilterOperator.CONTAINS,
+                } or not isinstance(category, str):
+                    raise ApplicationError("query plan document category is invalid")
+                parameters["category"] = category
+        elif function_id == "EMP-NOTIF-001" and "read" in values:
+            if operators["read"] is not FilterOperator.EQ or values["read"] is not False:
+                raise ApplicationError("query plan notification filter is invalid")
+            parameters["unread_only"] = True
+
+        return (
+            self._direct_intent(
+                function_id,
+                employee_id=employee_id,
+                parameters=parameters,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            operation_scope,
+        )
 
     async def _execute_workforce_contract_payroll_table(
         self,
@@ -2218,9 +2606,6 @@ class BHApplicationCoordinator(InteractionCoordinator):
     async def _infer_unique_employee_mention(self, request: str) -> EmployeeListItem | None:
         """Find one unambiguous roster name in free-form text without provider disclosure."""
 
-        request_tokens = frozenset(self._normalized_person_tokens(request))
-        if not request_tokens:
-            return None
         roster = await self.dic.list_all_employees(
             EmployeeListQuery(
                 employee_filter=EmployeeFilter.ALL,
@@ -2231,25 +2616,102 @@ class BHApplicationCoordinator(InteractionCoordinator):
             ),
             max_records=500,
         )
+        candidates, suggestions_only = self._employee_mention_candidates(request, roster.items)
+        if len(candidates) == 1 and not suggestions_only:
+            return candidates[0]
+        return None
+
+    async def _resolve_employee_mention(
+        self,
+        request: str,
+        correlation_id: str,
+        *,
+        actor: DiscordActor,
+        function_id: str,
+        parameters: Mapping[str, object],
+    ) -> EmployeeListItem | InteractionResult | None:
+        """Resolve names embedded in free text and offer a bound menu when ambiguous."""
+
+        roster = await self.dic.list_all_employees(
+            EmployeeListQuery(
+                employee_filter=EmployeeFilter.ALL,
+                sort_by="name",
+                sort_direction=SortDirection.ASC,
+                page=1,
+                page_size=100,
+            ),
+            max_records=500,
+        )
+        candidates, suggestions_only = self._employee_mention_candidates(request, roster.items)
+        if not candidates:
+            return None
+        if len(candidates) == 1 and not suggestions_only:
+            return candidates[0]
+        return self._employee_selection_result(
+            candidates,
+            suggestions_only=suggestions_only,
+            correlation_id=correlation_id,
+            actor=actor,
+            function_id=function_id,
+            parameters=parameters,
+        )
+
+    @classmethod
+    def _employee_mention_candidates(
+        cls,
+        request: str,
+        items: Sequence[EmployeeListItem],
+    ) -> tuple[list[EmployeeListItem], bool]:
+        """Match roster tokens anywhere in a sentence; fuzzy matches require confirmation."""
+
+        request_tokens = frozenset(cls._normalized_person_tokens(request))
+        if not request_tokens:
+            return [], False
         full_name_matches: list[EmployeeListItem] = []
         token_matches: list[EmployeeListItem] = []
-        for item in roster.items:
-            name_tokens = self._normalized_person_tokens(self._employee_display_name(item))
+        meaningful_by_employee: list[tuple[EmployeeListItem, tuple[str, ...]]] = []
+        for item in items:
+            name_tokens = cls._normalized_person_tokens(cls._employee_display_name(item))
             meaningful = tuple(
                 token
                 for token in name_tokens
                 if len(token) >= 3 and token not in _EMPLOYEE_MENTION_STOPWORDS
             )
+            meaningful_by_employee.append((item, meaningful))
             if meaningful and all(token in request_tokens for token in meaningful):
                 full_name_matches.append(item)
                 continue
             if any(token in request_tokens for token in meaningful):
                 token_matches.append(item)
-        if len(full_name_matches) == 1:
-            return full_name_matches[0]
-        if not full_name_matches and len(token_matches) == 1:
-            return token_matches[0]
-        return None
+        if full_name_matches:
+            return full_name_matches, False
+        if token_matches:
+            return token_matches, False
+
+        fuzzy_input_tokens = tuple(
+            token
+            for token in request_tokens
+            if len(token) >= 4 and token not in _EMPLOYEE_MENTION_STOPWORDS
+        )
+        if not fuzzy_input_tokens:
+            return [], False
+        scored: list[tuple[float, EmployeeListItem]] = []
+        for item, name_tokens in meaningful_by_employee:
+            score = max(
+                (
+                    difflib.SequenceMatcher(None, request_token, name_token).ratio()
+                    for request_token in fuzzy_input_tokens
+                    for name_token in name_tokens
+                    if len(name_token) >= 4
+                ),
+                default=0.0,
+            )
+            scored.append((score, item))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        best = scored[0][0] if scored else 0.0
+        if best < 0.88:
+            return [], False
+        return [item for score, item in scored if score >= best - 0.04][:25], True
 
     async def _resolve_employee_target(
         self,
@@ -2299,54 +2761,73 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 success=False,
             )
         if len(candidates) > 1 or suggestions_only:
-            conversation_key = ConversationKey(actor.user_id, actor.guild_id, actor.channel_id)
-            selection_context_id = self._conversation_context.remember_candidates(
-                conversation_key,
-                tuple(item.employee_id for item in candidates[:100]),
-                function_id=function_id,
-                parameters=parameters,
-            )
-            # A bare surname/name follow-up is resolved again inside DIC and never persisted in
-            # this opaque context. Direct IDs and ordinals remain membership-checked above.
-            self._conversation_context.remember_pending_target(
-                conversation_key,
-                function_id=function_id,
-                parameters=parameters,
-            )
-            return InteractionResult(
-                title=(
-                    "Conferma il dipendente simile"
-                    if suggestions_only and len(candidates) == 1
-                    else "Risultato non univoco"
-                ),
-                description=(
-                    f"Ho trovato {len(candidates)} possibil"
-                    f"{'e corrispondenza' if len(candidates) == 1 else 'i corrispondenze'}. "
-                    "Conferma dal menu oppure rispondi con il cognome, l'Employee ID o un "
-                    "ordinale come `il secondo`."
-                ),
-                fields=tuple(
-                    ResultField(
-                        self._employee_display_name(item),
-                        f"ID: {item.employee_id} · stato: {item.employee_state.value}",
-                    )
-                    for item in candidates[:25]
-                ),
-                employee_selection=tuple(
-                    EmployeeSelectionOption(
-                        employee_id=item.employee_id,
-                        label=(
-                            f"{self._employee_display_name(item)} · ID {item.employee_id} · "
-                            f"{item.employee_state.value}"
-                        ),
-                    )
-                    for item in candidates[:25]
-                ),
-                employee_selection_context_id=selection_context_id,
+            return self._employee_selection_result(
+                candidates,
+                suggestions_only=suggestions_only,
                 correlation_id=correlation_id,
-                success=False,
+                actor=actor,
+                function_id=function_id,
+                parameters=parameters,
             )
         return candidates[0]
+
+    def _employee_selection_result(
+        self,
+        candidates: Sequence[EmployeeListItem],
+        *,
+        suggestions_only: bool,
+        correlation_id: str,
+        actor: DiscordActor,
+        function_id: str,
+        parameters: Mapping[str, object],
+    ) -> InteractionResult:
+        conversation_key = ConversationKey(actor.user_id, actor.guild_id, actor.channel_id)
+        selection_context_id = self._conversation_context.remember_candidates(
+            conversation_key,
+            tuple(item.employee_id for item in candidates[:100]),
+            function_id=function_id,
+            parameters=parameters,
+        )
+        # Names never enter this context. The immutable menu stores only opaque candidate IDs,
+        # the catalog Function ID, and bounded scalar operation parameters.
+        self._conversation_context.remember_pending_target(
+            conversation_key,
+            function_id=function_id,
+            parameters=parameters,
+        )
+        return InteractionResult(
+            title=(
+                "Conferma il dipendente simile"
+                if suggestions_only and len(candidates) == 1
+                else "Risultato non univoco"
+            ),
+            description=(
+                f"Ho trovato {len(candidates)} possibil"
+                f"{'e corrispondenza' if len(candidates) == 1 else 'i corrispondenze'}. "
+                "Conferma dal menu oppure rispondi con il cognome, l'Employee ID o un "
+                "ordinale come `il secondo`."
+            ),
+            fields=tuple(
+                ResultField(
+                    self._employee_display_name(item),
+                    f"ID: {item.employee_id} · stato: {item.employee_state.value}",
+                )
+                for item in candidates[:25]
+            ),
+            employee_selection=tuple(
+                EmployeeSelectionOption(
+                    employee_id=item.employee_id,
+                    label=(
+                        f"{self._employee_display_name(item)} · ID {item.employee_id} · "
+                        f"{item.employee_state.value}"
+                    ),
+                )
+                for item in candidates[:25]
+            ),
+            employee_selection_context_id=selection_context_id,
+            correlation_id=correlation_id,
+            success=False,
+        )
 
     @staticmethod
     def _normalized_person_tokens(value: str) -> tuple[str, ...]:
@@ -3110,7 +3591,25 @@ class BHApplicationCoordinator(InteractionCoordinator):
                 normalized_document_status = "uploaded"
             elif document_status == "pending":
                 normalized_document_status = "pending"
-            document_query = DocumentQuery(state=normalized_document_status)
+            document_category_raw = intent.parameters.get("category")
+            document_category: str | None = None
+            if document_category_raw is not None:
+                if not isinstance(document_category_raw, str):
+                    raise ApplicationError("document category must be a supported string")
+                try:
+                    document_category = normalize_text(
+                        document_category_raw,
+                        max_length=128,
+                        allow_newlines=False,
+                    )
+                except InputValidationError as exc:
+                    raise ApplicationError("document category is invalid") from exc
+                if not document_category:
+                    raise ApplicationError("document category is invalid")
+            document_query = DocumentQuery(
+                state=normalized_document_status,
+                category=document_category,
+            )
             document_records = await self.dic.get_document_metadata(employee_id, document_query)
             shown_documents = document_records[:25]
             document_attachments: tuple[ResponseAttachment, ...] = ()

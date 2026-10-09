@@ -63,8 +63,10 @@ _WRITE_MARKERS = frozenset(
 def narrow_provider_routing_scope(
     minimized_request: str,
     visible_function_ids: frozenset[str],
+    *,
+    max_functions: int = 3,
 ) -> ProviderRoutingScope:
-    """Return at most three locally relevant and policy-visible Function IDs.
+    """Return a bounded set of locally relevant, policy-visible Function IDs.
 
     The input is the canonical, identity-free representation produced by
     :func:`minimize_hr_router_request`.  Exact write semantics stay in the deterministic local
@@ -72,6 +74,8 @@ def narrow_provider_routing_scope(
     the small generic employee-read family rather than every enabled write and DIC resource.
     """
 
+    if not 1 <= max_functions <= 8:
+        raise ValueError("provider routing scope must contain between one and eight functions")
     terms = frozenset(minimized_request.split())
     selected: set[str] = set()
     families: list[str] = []
@@ -88,9 +92,9 @@ def narrow_provider_routing_scope(
         families.append("generic_employee_read")
         selected.update(_SAFE_GENERIC_EMPLOYEE_READS)
 
-    allowed = frozenset(sorted(selected.intersection(visible_function_ids))[:3])
+    allowed = frozenset(sorted(selected.intersection(visible_function_ids))[:max_functions])
     return ProviderRoutingScope(
-        family="+".join(families[:3]),
+        family="+".join(families[:max_functions]),
         function_ids=allowed,
     )
 

@@ -463,6 +463,11 @@ def _canonical_router_terms() -> dict[str, str]:
 
 
 _ROUTER_CANONICAL_TERMS = _canonical_router_terms()
+_ROUTER_PROJECTED_TOKENS = frozenset(_CANONICAL_TERM_GROUPS) | {
+    "[TERM_REDACTED]",
+    "[LOCAL_SEARCH_REDACTED]",
+    _ROUTER_EMPLOYEE_PLACEHOLDER,
+}
 _CONTRACT_EXPIRY_REQUIRED_TERMS = frozenset({"employment_contract", "contract_deadline"})
 _CONTRACT_EXPIRY_ALLOWED_TERMS = frozenset(
     {
@@ -934,7 +939,8 @@ def parse_local_operational_intent(
             "include_net": True,
         }
         if not latest_paid:
-            assert period is not None
+            if period is None:
+                raise RuntimeError("payroll period normalization failed")
             payroll_parameters = {
                 "year": period[0],
                 "month": period[1],
@@ -1190,6 +1196,20 @@ def minimize_hr_router_request(request: str) -> tuple[str, str | None]:
     if not projected:
         raise HrRequestInputError("request contains no routable HR terms")
     return " ".join(projected), explicit_employee_id
+
+
+def is_minimized_hr_router_request(request: str) -> bool:
+    """Prove that a planner request contains only canonical, identity-free tokens."""
+
+    tokens = request.split()
+    return (
+        bool(tokens)
+        and len(request) <= 4_000
+        and all(
+            token in _ROUTER_PROJECTED_TOKENS or _ISO_DATE_TOKEN.fullmatch(token) is not None
+            for token in tokens
+        )
+    )
 
 
 def local_employee_search_query(request: str) -> str | None:
@@ -1469,6 +1489,7 @@ __all__ = [
     "HrRequestInputError",
     "SeniorHrPresenter",
     "is_employee_aggregate_request",
+    "is_minimized_hr_router_request",
     "is_payroll_presence_request",
     "local_contract_expiry_fallback_interval",
     "local_employee_search_query",

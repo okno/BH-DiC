@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
+import os
+import stat
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -121,6 +124,17 @@ class AppSettings(BaseSettings):
     llama_base_url: str = DEFAULT_LLAMA_BASE_URL
     llama_model: str | None = Field(default=None, min_length=1, max_length=120)
     llama_api_key: SecretStr | None = None
+
+    bridge_host: str = "127.0.0.1"
+    bridge_port: int = Field(default=9443, ge=1, le=65_535)
+    bridge_server_name: str = Field(
+        default="bh-dic-planner.local",
+        pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$",
+    )
+    bridge_ca_path: Path | None = None
+    bridge_client_cert_path: Path | None = None
+    bridge_client_key_path: Path | None = None
+    bridge_model: str = Field(default="workspace-default", min_length=1, max_length=128)
 
     dic_base_url: str = "https://secure.dipendentincloud.it"
     dic_username: str | None = Field(default=None, max_length=320)
@@ -304,6 +318,20 @@ class AppSettings(BaseSettings):
     def validate_local_model_base_url(cls, value: str) -> str:
         return validate_llama_base_url(value)
 
+    @field_validator("bridge_host")
+    @classmethod
+    def validate_bridge_host(cls, value: str) -> str:
+        candidate = value.strip().casefold()
+        if candidate == "localhost":
+            return candidate
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError as exc:
+            raise ValueError("BRIDGE_HOST must be a loopback literal or localhost") from exc
+        if not address.is_loopback:
+            raise ValueError("BRIDGE_HOST must remain loopback behind the SSH tunnel")
+        return str(address)
+
     @field_validator("database_url")
     @classmethod
     def validate_async_database_url(cls, value: str) -> str:
@@ -349,6 +377,8 @@ class AppSettings(BaseSettings):
             and self._is_missing(self.llama_api_key)
         ):
             raise ValueError("LLAMA_API_KEY is required for a remote LLAMA_BASE_URL")
+        if self.model_provider == "bridge" and not self.mock_mode:
+            self._validate_bridge_tls_files()
 
         if self.mock_mode and self.app_env not in {"test", "development", "mock"}:
             raise ValueError("MOCK_MODE may only be used with APP_ENV=test, development, or mock")
@@ -463,11 +493,43 @@ class AppSettings(BaseSettings):
                     "GROQ_MODEL": self.groq_model,
                 }
             )
-        else:
+        elif self.model_provider == "llama":
             required["LLAMA_MODEL"] = self.llama_model
             if not llama_endpoint_is_loopback(self.llama_base_url):
                 required["LLAMA_API_KEY"] = self.llama_api_key
+        else:
+            required.update(
+                {
+                    "BRIDGE_CA_PATH": self.bridge_ca_path,
+                    "BRIDGE_CLIENT_CERT_PATH": self.bridge_client_cert_path,
+                    "BRIDGE_CLIENT_KEY_PATH": self.bridge_client_key_path,
+                    "BRIDGE_MODEL": self.bridge_model,
+                }
+            )
         return sorted(name for name, value in required.items() if self._is_missing(value))
+
+    def _validate_bridge_tls_files(self) -> None:
+        paths = {
+            "BRIDGE_CA_PATH": self.bridge_ca_path,
+            "BRIDGE_CLIENT_CERT_PATH": self.bridge_client_cert_path,
+            "BRIDGE_CLIENT_KEY_PATH": self.bridge_client_key_path,
+        }
+        for name, path in paths.items():
+            if path is None:
+                continue
+            if not path.is_absolute():
+                raise ValueError(f"{name} must be an absolute path")
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise ValueError(f"{name} is unavailable") from exc
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(f"{name} must be a regular non-symlink file")
+            if name == "BRIDGE_CLIENT_KEY_PATH":
+                if metadata.st_uid != os.geteuid():
+                    raise ValueError("BRIDGE_CLIENT_KEY_PATH must be owned by the bot account")
+                if metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                    raise ValueError("BRIDGE_CLIENT_KEY_PATH must have mode 0600 or stricter")
 
     @staticmethod
     def _is_missing(value: object | None) -> bool:
@@ -500,6 +562,7 @@ class AppSettings(BaseSettings):
             "GROQ_MODEL": self.groq_model,
             "LLAMA_API_KEY": self.llama_api_key,
             "LLAMA_MODEL": self.llama_model,
+            "BRIDGE_MODEL": self.bridge_model,
             "DIC_USERNAME": self.dic_username,
             "DIC_PASSWORD": self.dic_password,
             "DIC_SESSION_ENCRYPTION_KEY": self.dic_session_encryption_key,
@@ -555,6 +618,14 @@ class AppSettings(BaseSettings):
             "model_provider": self.model_provider,
             "model_configured": self.selected_model is not None,
             "model_store": self.model_store,
+            "bridge_loopback": self.bridge_host in {"127.0.0.1", "::1", "localhost"},
+            "bridge_mtls_configured": all(
+                (
+                    self.bridge_ca_path,
+                    self.bridge_client_cert_path,
+                    self.bridge_client_key_path,
+                )
+            ),
             "openai_model_configured": bool(self.openai_model),
             "openai_store": self.openai_store,
             "dic_expected_tenant_configured": bool(self.dic_expected_tenant_id),
@@ -575,7 +646,9 @@ class AppSettings(BaseSettings):
             return self.openai_model
         if self.model_provider == "groq":
             return self.groq_model
-        return self.llama_model
+        if self.model_provider == "llama":
+            return self.llama_model
+        return self.bridge_model
 
 
 Settings = AppSettings

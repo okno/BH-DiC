@@ -136,12 +136,16 @@ def test_runtime_cache_is_confined_to_runtime_data() -> None:
     assert 'export XDG_CACHE_HOME="${data_dir}/cache"' in library
 
 
-def test_doctor_checks_only_the_selected_model_endpoint() -> None:
+def test_doctor_checks_only_the_selected_model_endpoint_or_mtls_bridge() -> None:
     doctor = _read("doctor.sh")
     assert "from bh_dic.config import AppSettings" in doctor
     assert "OPENAI_RESPONSES_BASE_URL" in doctor
     assert "GROQ_OPENAI_BASE_URL" in doctor
     assert "settings.llama_base_url" in doctor
+    assert 'settings.model_provider == "bridge"' in doctor
+    assert 'provider_scheme = "mtls"' in doctor
+    assert "model-check --live" in doctor
+    assert "planner bridge mTLS endpoint and closed synthetic decision verified" in doctor
     assert "read_env_value LLAMA_BASE_URL" not in doctor
     assert 'runtime_config_valid}" != "true"' in doctor
     assert "--proto" in doctor

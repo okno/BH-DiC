@@ -1,11 +1,11 @@
 # BH-DiC
 
 BH-DiC è un assistente Discord Senior HR per flussi autorizzati nell'area Dipendenti di
-Dipendenti in Cloud. Negli slash command il provider selezionato (`openai`, `groq` o `llama`)
-propone soltanto un intento strutturato e l'applicazione deterministica applica scope, RBAC,
-feature flag, approvazioni e controlli prima di invocare l'adapter browser. La modalità opzionale
-`channel` inoltra le richieste operative riconosciute allo stesso coordinator di `/bh` e usa un
-responder stateless senza tool soltanto per l'orientamento HR generale.
+Dipendenti in Cloud. La configurazione raccomandata usa un planner bridge isolato su Mint con
+Codex/ChatGPT Work oppure Ollama/LM Studio locale. Il planner restituisce soltanto JSON tipizzato;
+l'applicazione su Ubiquiti applica scope, RBAC, feature flag, approvazioni e controlli prima di
+invocare l'adapter browser. La modalità `channel` inoltra le richieste operative allo stesso
+coordinator di `/bh` e usa un responder senza tool soltanto per l'orientamento HR generale.
 
 La repository pubblica non contiene stato, revisioni, host, ruoli o risultati del deployment
 reale. Ogni ambiente deve produrre e conservare privatamente la propria evidenza di rollout; gli
@@ -20,11 +20,12 @@ committare `.env`, token, sessioni browser, documenti, screenshot, trace o dump.
 ## Architettura
 
 ```text
-Discord /bh o richiesta operativa nel canale -> scope/RBAC -> parser/router -> policy -> DIC
-Discord domanda HR generale -> scope/RBAC -> redazione -> modello senza tool -> risposta pubblica
+Discord -> Ubiquiti: scope/RBAC + identità locale + policy + adapter DiC
+        -> loopback/mTLS/tunnel SSH -> bridge Mint -> Codex App Server o modello locale
 ```
 
-Il provider non riceve credenziali, file, primitive browser o facoltà di autorizzazione.
+Il planner non riceve credenziali, nomi, Employee ID, file, risultati DiC, primitive browser o
+facoltà di autorizzazione. Codex e i modelli locali non navigano il tenant e non eseguono shell.
 `MODEL_STORE=false` vieta la persistenza richiesta dall'applicazione; i Function ID esposti sono
 filtrati prima della richiesta e l'output viene validato nuovamente. La fonte normativa per
 Function ID, ruoli, flag e approvazioni è
@@ -33,16 +34,18 @@ ma la persona non modifica policy o superficie operativa.
 
 Il testo destinato al router viene trasformato in etichette di categoria semantica chiuse, non
 inoltrato come vocaboli grezzi. Nomi, valori di ricerca ed Employee ID vengono rimossi o sostituiti
-prima di OpenAI/Groq/llama; eventuali ID espliciti e query di ricerca vengono conservati soltanto
-nel confine locale. Risultati DIC, righe dipendente, DOM e scadenze non vengono mai reinviati al
-modello. La risposta amichevole è costruita da un presenter locale sui soli risultati tipizzati
-dell'adapter.
+prima del bridge; eventuali ID espliciti e query di ricerca vengono conservati soltanto nel
+confine locale. Risultati DIC, righe dipendente, DOM e scadenze non vengono mai reinviati al
+modello. La risposta con dati reali è costruita localmente sui soli risultati tipizzati
+dell'adapter. Vedere [Planner bridge Codex/local](docs/CODEX_BRIDGE.md).
 
 ## Caratteristiche implementate
 
 - catalogo di 32 Function ID e policy fail-closed;
-- router multi-provider OpenAI/Groq/llama limitato all'intento, con minimizzazione identità,
-  tuning comune e rendering deterministico locale;
+- planner bridge mTLS con Codex App Server su stdio oppure Ollama/LM Studio su loopback, schema
+  chiuso, minimizzazione identità e rendering deterministico locale;
+- memoria HR condivisa validata e contesto operativo per utente contenente soltanto riferimenti
+  opachi con TTL;
 - responder HR pubblico opzionale, stateless e senza tool per il solo canale allowlistato, con
   input/output redatti, rate limit e limite di concorrenza separati dagli slash command;
 - parser locale chiuso per conteggi, tabella ASCII completa, export e attiva/disattiva: nomi e ID
@@ -81,7 +84,8 @@ percorsi read bounded verificati live da tutte le altre modalità ancora da vali
 - Chromium gestito da Playwright;
 - ClamAV per gli upload;
 - Tesseract con language pack `ita` e `eng` per l'OCR locale opzionale;
-- accesso autorizzato a Discord, al provider scelto e a Dipendenti in Cloud;
+- accesso autorizzato a Discord e Dipendenti in Cloud; per il planner, bridge Mint raggiungibile
+  sul solo endpoint loopback autenticato;
 - SQLite locale o PostgreSQL tramite driver async.
 
 ## Installazione rapida per sviluppo isolato
@@ -223,7 +227,7 @@ Approfondimenti: [architettura di sicurezza](docs/SECURITY_ARCHITECTURE.md),
 [gestione file](docs/FILE_HANDLING.md) e [troubleshooting](docs/TROUBLESHOOTING.md).
 
 Setup e confini delle integrazioni: [autenticazione DIC](docs/DIC_AUTHENTICATION.md),
-[Discord](docs/DISCORD_SETUP.md), [provider di modello](docs/OPENAI_SETUP.md) e
+[Discord](docs/DISCORD_SETUP.md), [planner bridge Codex/local](docs/CODEX_BRIDGE.md) e
 [threat model](docs/THREAT_MODEL.md). Per la manutenzione dell'adapter consultare
 [baseline di ricognizione](docs/RECONNAISSANCE_BASELINE.md),
 [manutenzione selettori](docs/SELECTOR_MAINTENANCE.md),

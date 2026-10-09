@@ -27,6 +27,7 @@ class HRResource(StrEnum):
     BALANCES = "balances"
     PAYROLLS = "payrolls"
     DOCUMENTS = "documents"
+    NOTIFICATIONS = "notifications"
 
 
 class HRQueryAction(StrEnum):
