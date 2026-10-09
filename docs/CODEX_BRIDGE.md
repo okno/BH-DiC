@@ -70,6 +70,10 @@ nomi o le buste paga e scompare al riavvio.
    directory di stato e lavoro devono essere di proprietà dell'account, modo `0700`, fuori da
    home utente e checkout Git; la directory lavoro deve essere vuota all'avvio.
 2. Installare il progetto e le versioni da `requirements.lock` in un virtualenv dedicato.
+   In alternativa, dopo aver verificato un checkout pulito e il runtime Python 3.12, usare
+   `scripts/provision-bridge-host.sh` come root con `--source-dir`, `--python-runtime` e il
+   `--expected-commit` completo. Lo script crea soltanto account, directory, installazione e unità:
+   non genera credenziali, non abilita/avvia servizi e non modifica SSH o rete.
 3. Copiare `config/bridge.env.example` fuori dal repository, impostare modo `0600` e compilare
    soltanto i percorsi necessari.
 4. Generare una CA applicativa dedicata e certificati distinti server/client. Le chiavi devono

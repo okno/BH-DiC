@@ -14,6 +14,7 @@ SERVICE = ROOT / "infrastructure" / "systemd" / "bh-dic.service.example"
 
 REQUIRED_SCRIPTS = {
     "install.sh",
+    "provision-bridge-host.sh",
     "update.sh",
     "init-config.sh",
     "doctor.sh",
@@ -216,6 +217,21 @@ def test_systemd_example_is_hardened_and_not_self_enabling() -> None:
     assert "ConditionPathIsRegularFile=" not in text
     assert "systemctl enable" not in text
     assert "systemctl start" not in text
+
+
+def test_bridge_host_provisioning_is_exact_and_never_starts_services() -> None:
+    script = _read("provision-bridge-host.sh")
+
+    assert '[[ "$(effective_user_id)" == "0" ]]' in script
+    assert "--expected-commit must be a full SHA" in script
+    assert "source checkout must be clean" in script
+    assert 'readonly INSTALL_ROOT="/opt/bh-dic-bridge"' in script
+    assert 'readonly CONFIG_ROOT="/etc/bh-dic-bridge"' in script
+    assert 'readonly STATE_ROOT="/var/lib/bh-dic-bridge"' in script
+    assert "systemctl daemon-reload" in script
+    assert "systemctl enable" not in script
+    assert "systemctl start" not in script
+    assert "systemctl restart" not in script
 
 
 def test_all_bash_scripts_parse() -> None:
