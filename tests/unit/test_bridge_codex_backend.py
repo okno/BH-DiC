@@ -80,13 +80,20 @@ def _private_directory(path: Path) -> Path:
     return path
 
 
+def _safe_executable(tmp_path: Path) -> Path:
+    executable = tmp_path / "codex-test-runtime"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    return executable
+
+
 def _backend(tmp_path: Path, factory: _Factory) -> CodexPlannerBackend:
     state = _private_directory(tmp_path / "state")
     work = _private_directory(state / "work")
     return CodexPlannerBackend(
         state_root=state,
         isolated_work_root=work,
-        executable=Path("/usr/bin/true"),
+        executable=_safe_executable(tmp_path),
         output_model=BridgeModelOutput,
         system_instruction="Synthetic closed planner instruction.",
         session_factory=factory,
@@ -150,7 +157,7 @@ def test_codex_backend_rejects_state_inside_home_or_repository(tmp_path: Path) -
         CodexPlannerBackend(
             state_root=Path.home(),
             isolated_work_root=tmp_path,
-            executable=Path("/usr/bin/true"),
+            executable=_safe_executable(tmp_path),
             output_model=BridgeModelOutput,
             system_instruction="Synthetic instruction.",
             session_factory=factory,
@@ -196,7 +203,7 @@ async def test_codex_preflight_uses_exact_isolated_environment(tmp_path: Path) -
     backend = CodexPlannerBackend(
         state_root=state,
         isolated_work_root=work,
-        executable=Path("/usr/bin/true"),
+        executable=_safe_executable(tmp_path),
         output_model=BridgeModelOutput,
         system_instruction="Synthetic instruction.",
         session_factory=_Factory(_Thread()),
@@ -230,7 +237,7 @@ async def test_codex_preflight_classifies_missing_dedicated_login(tmp_path: Path
     backend = CodexPlannerBackend(
         state_root=state,
         isolated_work_root=work,
-        executable=Path("/usr/bin/true"),
+        executable=_safe_executable(tmp_path),
         output_model=BridgeModelOutput,
         system_instruction="Synthetic instruction.",
         session_factory=_Factory(_Thread()),
@@ -258,7 +265,7 @@ async def test_codex_preflight_does_not_misclassify_cli_failure_as_login(
     backend = CodexPlannerBackend(
         state_root=state,
         isolated_work_root=work,
-        executable=Path("/usr/bin/true"),
+        executable=_safe_executable(tmp_path),
         output_model=BridgeModelOutput,
         system_instruction="Synthetic instruction.",
         session_factory=_Factory(_Thread()),
