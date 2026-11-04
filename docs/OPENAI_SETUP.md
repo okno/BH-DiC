@@ -1,9 +1,9 @@
-# Provider di modello: OpenAI, Groq e llama locale
+# Provider diretti legacy: OpenAI, Groq e llama
 
-> Il nome del file è mantenuto per compatibilità con i link esistenti. La configurazione è ora
-> multi-provider. Groq `openai/gpt-oss-120b` ha evidenza di un probe live chiuso separato;
-> OpenAI, llama e lo smoke del trasporto Discord restano verifiche indipendenti. Il deployment e
-> il gate applicativo bounded della 0.3.0 sono documentati separatamente nello stato live.
+> Il nome del file è mantenuto per compatibilità con i link esistenti. Questi provider restano nel
+> codice soltanto per rollback/migrazione; non sono il percorso raccomandato e nessuna evidenza di
+> deployment è pubblicata qui. I nuovi ambienti usano `MODEL_PROVIDER=bridge`, senza API key cloud
+> sul bot, come descritto in [Planner bridge Codex/local](CODEX_BRIDGE.md).
 
 Negli slash command il modello è usato esclusivamente come router di intento. In modalità Discord
 `channel`, lo stesso provider produce anche una risposta HR generale stateless sul messaggio
@@ -17,7 +17,7 @@ inviati al provider.
 
 ## Contratto comune
 
-Selezionare un solo provider e usare le variabili canoniche `MODEL_*`:
+Per un ambiente legacy selezionare un solo provider e usare le variabili canoniche `MODEL_*`:
 
 ```dotenv
 MODEL_PROVIDER=openai
@@ -29,7 +29,7 @@ MODEL_STORE=false
 MODEL_RESULT_RENDERING=deterministic
 ```
 
-Valori ammessi per `MODEL_PROVIDER`: `openai`, `groq`, `llama`. `MODEL_STORE=false` e
+Valori accettati dal parser: `bridge`, `openai`, `groq`, `llama`. `MODEL_STORE=false` e
 `MODEL_RESULT_RENDERING=deterministic` sono invarianti di sicurezza; non abilitarne la modifica
 per accomodare un provider. Timeout, retry e limite output valgono per tutti i provider. Un retry
 del router non autorizza mai il retry di una write DIC.

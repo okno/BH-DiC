@@ -79,16 +79,16 @@ Non usare employee ID reale come chiave di ricerca nei log.
 
 ### Errori del provider di modello
 
-- verificare `MODEL_PROVIDER`, `MODEL_STORE=false`, credenziale/modello specifici, timeout e quota;
-- per Groq non introdurre una base URL configurabile: deve restare
-  `https://api.groq.com/openai/v1`;
-- per llama verificare servizio loopback, `LLAMA_BASE_URL` e `LLAMA_MODEL` senza pubblicare
-  prompt o output;
+- verificare `MODEL_PROVIDER=bridge`, `MODEL_STORE=false`, certificati mTLS, server name, timeout
+  e modello dichiarato;
+- verificare separatamente servizio bridge Mint, tunnel inverso e backend Codex/Ollama/LM Studio,
+  senza esporre App Server o la porta del modello sulla VLAN;
 - usare prima `.venv/bin/python -m bh_dic model-check`, che è offline;
-- usare `doctor.sh --online` e `model-check --live` solo se rete/costo sono autorizzati; il primo
-  non autentica, il secondo fa una sola richiesta sintetica chiusa e non esegue tool;
+- usare `doctor.sh --online` e `model-check --live` solo se rete/costo sono autorizzati; entrambi
+  provano il bridge con una sola decisione sintetica chiusa e non eseguono tool;
 - correlare request ID redatto senza loggare prompt o risposta completa;
-- un errore provider deve fallire chiuso, non bypassare il router.
+- un errore bridge/backend deve fallire chiuso, aprire il circuit breaker dopo errori ripetuti e
+  non bypassare il planner.
 
 Se `/bh status` mostra contatori mancanti, distinguere `UNAVAILABLE` (risposta completata senza
 usage) da `UNKNOWN` (esito remoto incerto). Non ricostruire o stimare token dal testo e non

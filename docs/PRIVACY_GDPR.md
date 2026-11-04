@@ -41,9 +41,9 @@ documents, payrolls, passwords, plaintext cookies or full HR prompts.
 
 ## Model-provider privacy boundary
 
-OpenAI, Groq or the configured llama endpoint classifies supported `/bh` requests. In optional
-`channel` mode it also generates general HR guidance from one redacted current message, without
-tools, DIC data or conversation history.
+The isolated Mint bridge classifies supported `/bh` requests through Codex/ChatGPT Work or a
+loopback Ollama/LM Studio backend. In optional `channel` mode it also generates general HR guidance
+from one redacted current message, without tools, DIC data or conversation history.
 For the operational intent router shared by `/bh` and recognized channel requests, the following
 are forbidden provider inputs:
 
@@ -67,9 +67,9 @@ cannot serve as general-purpose natural-language named-entity recognition. Outpu
 the same public redactor and mention neutralizer. Automated redaction is not a substitute for
 channel policy: users must not post personal or special-category data in the public channel.
 
-`MODEL_STORE=false` is mandatory. OpenAI/Groq requests apply the supported storage control; the
-llama chat-compatible request omits unsupported storage and conversation-state parameters.
-Persistent conversations and HR use of provider-side conversation identifiers are prohibited.
+`MODEL_STORE=false` is mandatory. Codex requests use fresh ephemeral threads; local compatible
+requests omit conversation-state parameters. Persistent conversations and HR use of provider-side
+conversation identifiers are prohibited.
 The `deterministic` rendering mode constructs DIC results locally. Any future `redacted_ai` mode
 requires a separate privacy review and may receive only data already redacted by deterministic
 code.

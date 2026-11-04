@@ -1,0 +1,40 @@
+[Unit]
+Description=BH-DiC reverse SSH tunnel from Mint planner bridge to bot host
+Documentation=https://github.com/OWNER/BH-DiC/blob/main/docs/CODEX_BRIDGE.md
+Wants=network-online.target bh-dic-planner-bridge.service
+After=network-online.target bh-dic-planner-bridge.service
+ConditionPathExists=/etc/bh-dic-bridge/tunnel_ed25519
+ConditionPathExists=/etc/bh-dic-bridge/known_hosts
+
+[Service]
+Type=simple
+User=bh-dic-bridge
+Group=bh-dic-bridge
+ExecStart=/usr/bin/ssh -NT -R 127.0.0.1:9443:127.0.0.1:9443 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/bh-dic-bridge/known_hosts -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /etc/bh-dic-bridge/tunnel_ed25519 planner-tunnel@bot-host.example.invalid
+Restart=always
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/etc/bh-dic-bridge
+
+[Install]
+WantedBy=multi-user.target

@@ -6,7 +6,15 @@ import pytest
 from pydantic import ValidationError
 
 from bh_dic.openai.redaction import prepare_provider_input
-from bh_dic.openai.schemas import Sensitivity
+from bh_dic.openai.schemas import ActionClass, IntentEnvelope, Sensitivity
+from bh_dic.query.decision import (
+    ClarificationDecision,
+    PlanningDecision,
+    ReadPlanDecision,
+    SingleIntentDecision,
+    UnsupportedDecision,
+)
+from bh_dic.query.execution import QueryPlanExecutionError, registered_read_steps
 from bh_dic.query.plan import (
     DeliveryMode,
     EntityResolutionMode,
@@ -200,6 +208,110 @@ def test_plan_rejects_writes_real_entity_values_and_unordered_dependencies() -> 
                 ),
             ),
         )
+
+
+def test_planning_decision_is_a_strict_discriminated_contract() -> None:
+    intent = IntentEnvelope(
+        intent="employee_count",
+        function_id="EMP-READ-001",
+        action_class=ActionClass.READ,
+        sensitivity=Sensitivity.LOW,
+        confidence=1.0,
+    )
+    single = PlanningDecision.model_validate({"kind": "single_intent", "intent": intent})
+    clarification = PlanningDecision.model_validate(
+        {"kind": "clarification", "question": "Quale periodo devo consultare?"}
+    )
+    unsupported = PlanningDecision.model_validate(
+        {
+            "kind": "unsupported",
+            "code": "outside_catalog",
+            "reason": "La funzione non appartiene al catalogo autorizzato.",
+        }
+    )
+
+    assert isinstance(single.root, SingleIntentDecision)
+    assert isinstance(clarification.root, ClarificationDecision)
+    assert isinstance(unsupported.root, UnsupportedDecision)
+    assert single.model_dump() == {"kind": "single_intent", "intent": intent.model_dump()}
+
+    with pytest.raises(ValidationError):
+        PlanningDecision.model_validate(
+            {
+                "kind": "clarification",
+                "question": "Quale dipendente?",
+                "intent": intent,
+            }
+        )
+    with pytest.raises(ValidationError):
+        PlanningDecision.model_validate(
+            {
+                "kind": "unsupported",
+                "code": "INVALID CODE",
+                "reason": "Non eseguibile.",
+            }
+        )
+
+
+def test_planning_decision_accepts_only_non_clarifying_read_plans() -> None:
+    planned = build_local_hr_query_plan(
+        "Stampa una tabella con nomi, contratti e netto mensile di tutti i dipendenti",
+        today=TODAY,
+    )
+    assert planned is not None
+
+    decision = PlanningDecision.model_validate({"kind": "read_plan", "plan": planned.plan})
+
+    assert isinstance(decision.root, ReadPlanDecision)
+    assert decision.root.plan.intent == "workforce_contract_payroll_table"
+
+
+def test_read_registry_binds_functions_to_exact_resources_and_rejects_local_ocr() -> None:
+    planned = build_local_hr_query_plan(
+        "Stampa una tabella con nomi, contratti e netto mensile di tutti i dipendenti",
+        today=TODAY,
+    )
+    assert planned is not None
+    bindings = registered_read_steps(planned.plan)
+    assert [binding.service_method.value for binding in bindings] == [
+        "list_employees",
+        "get_contracts",
+        "get_payroll_metadata",
+    ]
+
+    mismatched = HRQueryPlan(
+        intent="synthetic_read",
+        resources=(HRResource.EMPLOYEES,),
+        sensitivity=Sensitivity.LOW,
+        steps=(
+            HRQueryStep(
+                step_id="step_1",
+                function_id="EMP-PAY-001",
+                resource=HRResource.EMPLOYEES,
+                action=HRQueryAction.READ,
+                target_entity="EMPLOYEE_TARGET_1",
+            ),
+        ),
+        target_entities=("EMPLOYEE_TARGET_1",),
+    )
+    with pytest.raises(QueryPlanExecutionError, match="resource"):
+        registered_read_steps(mismatched)
+
+    local_ocr = HRQueryPlan(
+        intent="synthetic_ocr",
+        resources=(HRResource.EMPLOYEES,),
+        sensitivity=Sensitivity.HIGH,
+        steps=(
+            HRQueryStep(
+                step_id="step_1",
+                function_id="EMP-ONBOARD-001",
+                resource=HRResource.EMPLOYEES,
+                action=HRQueryAction.READ,
+            ),
+        ),
+    )
+    with pytest.raises(QueryPlanExecutionError, match="no registered read executor"):
+        registered_read_steps(local_ocr)
 
 
 def _conversational_corpus() -> list[tuple[str, str]]:

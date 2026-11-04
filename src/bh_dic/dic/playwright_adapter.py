@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import stat
@@ -18,17 +19,24 @@ from playwright.async_api import Error as PlaywrightError
 from pydantic import JsonValue
 
 from bh_dic.dic.auth import (
+    DicAuthCaptchaRequiredError,
+    DicAuthMfaRequiredError,
     DicAuthOutcomeUnknownError,
+    DicAuthPasswordExpiredError,
     DicAuthStage,
+    DicAuthUiChangedError,
     PlaywrightAuthenticator,
 )
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
     DicAuthenticationError,
+    DicAuthorizationError,
+    DicCircuitOpenError,
     DicConfigurationError,
     DicError,
     DicNotFoundError,
     DicReconciliationRequiredError,
+    DicSessionVaultError,
     DicUiChangedError,
     DicValidationError,
     DicWriteDisabledError,
@@ -81,6 +89,7 @@ from bh_dic.dic.values import canonical_decimal_text
 from bh_dic.services.browser_runtime import BrowserCoordinator
 
 T = TypeVar("T")
+logger = logging.getLogger("bh_dic.browser.adapter")
 
 _DOCUMENT_EXECUTION_ONLY_PARAMETERS = frozenset(
     {"safe_local_path", "safe_local_sha256", "safe_local_size", "detected_mime"}
@@ -226,7 +235,15 @@ class PlaywrightDicAdapter:
             )
         try:
             status = await self.session_status()
-        except (DicError, TimeoutError):
+        except (DicError, TimeoutError) as exc:
+            metadata = {
+                "reason": self._health_failure_reason(exc),
+                "exception_type": type(exc).__name__,
+            }
+            stage = getattr(exc, "stage", None)
+            if isinstance(stage, DicAuthStage):
+                metadata["stage"] = stage.value
+            logger.warning("dic_health_probe_failed", extra=metadata)
             return HealthStatus(
                 ready=False,
                 authenticated=False,
@@ -234,6 +251,11 @@ class PlaywrightDicAdapter:
                 detail="browser ready; authenticated tenant is unavailable",
             )
         authenticated = status.state is SessionState.AUTHENTICATED
+        if not authenticated:
+            logger.warning(
+                "dic_health_probe_unverified",
+                extra={"reason": "SESSION_STATE", "session_state": status.state.value},
+            )
         return HealthStatus(
             ready=authenticated,
             authenticated=authenticated,
@@ -244,6 +266,32 @@ class PlaywrightDicAdapter:
                 else "browser ready; authenticated tenant is unavailable"
             ),
         )
+
+    @staticmethod
+    def _health_failure_reason(exc: Exception) -> str:
+        """Return a closed, non-sensitive reason suitable for structured logs."""
+
+        if isinstance(exc, DicCircuitOpenError):
+            return "CIRCUIT_OPEN"
+        if isinstance(exc, DicSessionVaultError):
+            return "SESSION_PERSISTENCE"
+        if isinstance(exc, DicAuthorizationError):
+            return "TENANT_ATTESTATION"
+        if isinstance(exc, DicAuthCaptchaRequiredError):
+            return "CAPTCHA_REQUIRED"
+        if isinstance(exc, DicAuthMfaRequiredError):
+            return "MFA_REQUIRED"
+        if isinstance(exc, DicAuthPasswordExpiredError):
+            return "PASSWORD_EXPIRED"
+        if isinstance(exc, DicAuthUiChangedError):
+            return "AUTH_UI_CHANGED"
+        if isinstance(exc, DicAuthenticationError):
+            return "AUTHENTICATION"
+        if isinstance(exc, DicUiChangedError):
+            return "DIC_UI_CHANGED"
+        if isinstance(exc, TimeoutError):
+            return "TIMEOUT"
+        return "DIC_ERROR"
 
     async def ensure_authenticated(
         self, credentials: DicCredentials | None = None

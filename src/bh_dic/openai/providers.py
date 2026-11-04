@@ -6,7 +6,7 @@ import ipaddress
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
-ModelProvider = Literal["openai", "groq", "llama"]
+ModelProvider = Literal["openai", "groq", "llama", "bridge"]
 
 OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1"
 GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"

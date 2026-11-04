@@ -16,7 +16,7 @@ import subprocess  # nosec B404
 import unicodedata
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
@@ -486,10 +486,8 @@ def _clean_line(value: str) -> str:
 def _labeled_value(
     lines: Sequence[str],
     labels: Sequence[str],
-    validator: object,
+    validator: Callable[[str], str | None],
 ) -> str | None:
-    validate = validator
-    assert callable(validate)
     for index, line in enumerate(lines):
         for label in labels:
             match = re.fullmatch(rf"{label}\s*[:\-]?\s*(.*)", line, re.I)
@@ -497,11 +495,11 @@ def _labeled_value(
                 continue
             inline = match.group(1).strip()
             if inline:
-                candidate = validate(inline)
+                candidate = validator(inline)
                 if isinstance(candidate, str) and candidate:
                     return candidate
             if index + 1 < len(lines):
-                candidate = validate(lines[index + 1])
+                candidate = validator(lines[index + 1])
                 if isinstance(candidate, str) and candidate:
                     return candidate
     return None

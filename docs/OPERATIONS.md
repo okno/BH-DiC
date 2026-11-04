@@ -104,10 +104,9 @@ sudo -u bh-dic -H env PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '
 '
 ```
 
-Il doctor online prova DNS/HTTP senza autenticazione. Il model-check live esegue una singola
-richiesta sintetica con zero Function ID ammessi, non costruisce DIC/Discord/browser e non esegue
-tool. Il suo `LIVE_VERIFIED` osservato attesta soltanto Groq e il modello selezionato, non DIC o
-Discord.
+Con il bridge, il doctor online verifica tunnel, mTLS e una decisione sintetica chiusa; il
+model-check live non costruisce DIC/Discord/browser e non esegue tool. `LIVE_VERIFIED` attesta
+soltanto bridge e backend selezionato in quell'istante, non DIC o Discord.
 
 ### Autenticazione DIC
 

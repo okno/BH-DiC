@@ -70,10 +70,10 @@ nuovi test live automatici, lo smoke Discord o alcuna write.
 
 ## Copertura richiesta
 
-- configurazione multi-provider fail-closed e `MODEL_STORE=true` rifiutato;
-- schema provider strict e Function ID non esposto rifiutato;
+- configurazione bridge/multi-provider fail-closed, loopback+mTLS e `MODEL_STORE=true` rifiutato;
+- schema planner strict, Function ID non esposto, tool output e richiesta non minimizzata rifiutati;
 - minimizzazione pre-provider per categorie semantiche: nomi anche collidenti con parole HR,
-  Employee ID, query di ricerca e risultati DIC non attraversano OpenAI/Groq/llama;
+  Employee ID, query di ricerca e risultati DIC non attraversano il bridge o i provider legacy;
 - uso token exact-only per Responses/chat, stati `REPORTED`/`UNAVAILABLE`/`UNKNOWN`, idempotenza e
   migrazione `0002_model_usage` da database foundation;
 - `model-check` offline per default e probe live simulato con zero Function ID/tool execution;

@@ -12,9 +12,16 @@ import bh_dic.runtime as runtime_module
 from bh_dic.application import ApplicationError, BHApplicationCoordinator
 from bh_dic.approvals.models import ActionStatus, PendingAction
 from bh_dic.approvals.storage import ApprovalRepository
+from bh_dic.bridge.client import JsonlBridgeClient
+from bh_dic.bridge.planner import BridgePlanningRouter
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
-from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage, DicSessionManager
+from bh_dic.dic.auth import (
+    DicAuthOutcomeUnknownError,
+    DicAuthStage,
+    DicAuthUiChangedError,
+    DicSessionManager,
+)
 from bh_dic.dic.browser import AsyncChromiumSession
 from bh_dic.dic.errors import DicSessionVaultError
 from bh_dic.dic.mock import MockDicAdapter
@@ -122,6 +129,26 @@ def test_router_uses_mock_offline_and_requires_live_openai_configuration() -> No
     with pytest.raises(ValueError, match="OpenAI configuration"):
         runtime_module._router(missing, force_mock_components=False)
     assert isinstance(runtime_module._router(missing, force_mock_components=True), MockIntentRouter)
+
+
+def test_router_uses_mtls_bridge_without_a_provider_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge_client = cast(JsonlBridgeClient, SimpleNamespace(close=AsyncMock()))
+    monkeypatch.setattr(runtime_module, "_bridge_transport", lambda _settings: bridge_client)
+    settings = _live_settings().model_copy(
+        update={
+            "model_provider": "bridge",
+            "openai_api_key": None,
+            "openai_model": None,
+            "bridge_model": "workspace-default",
+        }
+    )
+
+    router = runtime_module._router(settings, force_mock_components=False)
+
+    assert isinstance(router, BridgePlanningRouter)
+    assert router._client is bridge_client
 
 
 def test_router_uses_closed_language_profile_without_sending_decorations(
@@ -280,6 +307,7 @@ async def test_adapter_mock_and_live_composition_never_start_real_browser(
 @pytest.mark.asyncio
 async def test_passive_verified_session_persistence_is_serialized_and_secret_safe(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     adapter_options: dict[str, object] = {}
     active_persists = 0
@@ -341,11 +369,20 @@ async def test_passive_verified_session_persistence_is_serialized_and_secret_saf
 
     manager = session_managers[0]
     manager.fail = True
-    with pytest.raises(DicSessionVaultError, match="verified DIC session") as caught:
+    with (
+        caplog.at_level("WARNING", logger="bh_dic.browser.runtime"),
+        pytest.raises(DicSessionVaultError, match="verified DIC session") as caught,
+    ):
         await callback()
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert sensitive not in str(caught.value)
+    record = next(
+        record for record in caplog.records if record.message == "dic_session_persist_failed"
+    )
+    assert record.reason == "PASSIVE_VERIFIED_SESSION"
+    assert record.exception_type == "RuntimeError"
+    assert sensitive not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -436,7 +473,7 @@ async def test_invalid_session_vault_degrades_passive_gateway_but_blocks_explici
     monkeypatch.setattr(runtime_module, "AsyncChromiumSession", FakeBrowser)
     monkeypatch.setattr(runtime_module, "PlaywrightDicAdapter", FakeLiveAdapter)
 
-    with caplog.at_level("WARNING", logger="bh_dic.runtime"):
+    with caplog.at_level("WARNING", logger="bh_dic.browser.runtime"):
         adapter, browser, manager = await runtime_module._adapter(
             _live_settings(),
             force_mock_components=False,
@@ -865,6 +902,58 @@ async def test_startup_probe_never_retries_an_unknown_credential_submit(
         await reconnect()
 
     assert snapshot.adapter_ready is snapshot.dic_authenticated is False
+    adapter.ensure_authenticated.assert_awaited_once()
+    manager.persist.assert_not_awaited()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_attempts_reconnect_only_once_after_deterministic_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnected = HealthStatus(
+        ready=False,
+        authenticated=False,
+        browser_available=True,
+        detail="synthetic disconnected session",
+    )
+    adapter = SimpleNamespace(
+        health=AsyncMock(return_value=disconnected),
+        ensure_authenticated=AsyncMock(side_effect=DicAuthUiChangedError(DicAuthStage.DIC_EMAIL)),
+        session_status=AsyncMock(),
+        close=AsyncMock(),
+    )
+    browser = SimpleNamespace(close=AsyncMock())
+    manager = SimpleNamespace(persist=AsyncMock())
+
+    async def fake_adapter(
+        _settings: AppSettings,
+        *,
+        force_mock_components: bool,
+        state_digest_key: bytes,
+        authenticate_dic: bool,
+    ) -> tuple[DipendentiInCloudAdapter, AsyncChromiumSession, DicSessionManager]:
+        return (
+            cast(DipendentiInCloudAdapter, adapter),
+            cast(AsyncChromiumSession, browser),
+            cast(DicSessionManager, manager),
+        )
+
+    monkeypatch.setattr(runtime_module, "_adapter", fake_adapter)
+    monkeypatch.setattr(
+        runtime_module,
+        "_router",
+        lambda _settings, *, force_mock_components: MockIntentRouter(),
+    )
+    settings = _live_settings().model_copy(
+        update={"enable_dic_reconnect": True, "dic_reconnect_on_startup": True}
+    )
+    runtime = await runtime_module.build_runtime(settings)
+
+    first = await runtime.bot.startup_status_probe()
+    second = await runtime.bot.startup_status_probe()
+
+    assert first.dic_authenticated is second.dic_authenticated is False
     adapter.ensure_authenticated.assert_awaited_once()
     manager.persist.assert_not_awaited()
     await runtime.close()

@@ -76,6 +76,22 @@ def test_unknown_request_never_reopens_the_full_catalog() -> None:
     assert scope.function_ids == frozenset({"EMP-READ-001", "EMP-READ-002", "EMP-SEARCH-001"})
 
 
+def test_richer_planner_scope_remains_bounded_to_eight_policy_visible_reads() -> None:
+    minimized, _ = minimize_hr_router_request(
+        "Mostra profilo, contratti, buste paga, documenti, ruoli, timbrature, ferie e notifiche"
+    )
+
+    scope = narrow_provider_routing_scope(minimized, VISIBLE, max_functions=8)
+
+    assert 4 <= len(scope.function_ids) <= 8
+    assert scope.function_ids.issubset(VISIBLE)
+    assert "EMP-UPDATE-001" not in scope.function_ids
+    assert "EMP-DELETE-001" not in scope.function_ids
+
+    with pytest.raises(ValueError, match="between one and eight"):
+        narrow_provider_routing_scope(minimized, VISIBLE, max_functions=9)
+
+
 def test_payroll_tool_failure_has_a_safe_local_clarification() -> None:
     minimized, _ = minimize_hr_router_request("Mostra i cedolini disponibili")
     scope = narrow_provider_routing_scope(minimized, VISIBLE)

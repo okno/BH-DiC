@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -185,6 +187,64 @@ def test_llama_runtime_requires_model_but_allows_an_absent_api_key() -> None:
         **{**remote, "llama_api_key": "synthetic-remote-key"}, _env_file=None
     )
     assert remote_settings.llama_api_key is not None
+
+
+def test_bridge_runtime_replaces_provider_api_keys_with_loopback_mtls(
+    tmp_path: Path,
+) -> None:
+    ca = tmp_path / "ca.crt"
+    cert = tmp_path / "client.crt"
+    key = tmp_path / "client.key"
+    for path in (ca, cert, key):
+        path.write_text("synthetic test material", encoding="utf-8")
+    key.chmod(0o600)
+    values = valid_runtime_values()
+    values.pop("openai_api_key")
+    values.pop("openai_model")
+    values.update(
+        model_provider="bridge",
+        bridge_host="localhost",
+        bridge_ca_path=ca,
+        bridge_client_cert_path=cert,
+        bridge_client_key_path=key,
+        bridge_model="workspace-default",
+    )
+
+    settings = AppSettings(**values, _env_file=None)
+
+    assert settings.openai_api_key is None
+    assert settings.groq_api_key is None
+    assert settings.model_provider == "bridge"
+    assert settings.safe_summary()["bridge_mtls_configured"] is True
+    assert settings.selected_model == "workspace-default"
+
+    with pytest.raises(ValidationError, match="BRIDGE_HOST"):
+        AppSettings(**{**values, "bridge_host": "192.0.2.10"}, _env_file=None)
+
+
+def test_bridge_runtime_rejects_missing_or_shared_client_key(tmp_path: Path) -> None:
+    ca = tmp_path / "ca.crt"
+    cert = tmp_path / "client.crt"
+    key = tmp_path / "client.key"
+    for path in (ca, cert, key):
+        path.write_text("synthetic test material", encoding="utf-8")
+    values = valid_runtime_values()
+    values.pop("openai_api_key")
+    values.pop("openai_model")
+    values.update(
+        model_provider="bridge",
+        bridge_ca_path=ca,
+        bridge_client_cert_path=cert,
+        bridge_client_key_path=key,
+    )
+
+    key.chmod(0o640)
+    with pytest.raises(ValidationError, match="0600"):
+        AppSettings(**values, _env_file=None)
+
+    key.chmod(0o600)
+    with pytest.raises(ValidationError, match="BRIDGE_CA_PATH"):
+        AppSettings(**{**values, "bridge_ca_path": tmp_path / "missing.crt"}, _env_file=None)
 
 
 @pytest.mark.parametrize(

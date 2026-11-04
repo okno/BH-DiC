@@ -141,11 +141,12 @@ semantica, permessi e postcondizioni.
 
 ## Provider di modello e persona
 
-- Il router supporta OpenAI, Groq e llama/OpenAI-compatible. Disponibilità, quota e latenza del
-  provider configurato devono essere verificate nell'ambiente senza promuovere automaticamente
-  DIC o Discord a disponibili.
-- Il runtime llama locale, il modello e la protezione della porta sono responsabilità
-  dell'operatore e non vengono installati da BH-DiC.
+- Il percorso raccomandato usa il planner bridge mTLS con Codex/ChatGPT Work oppure
+  Ollama/LM Studio su loopback. Disponibilità, quota e latenza del backend devono essere verificate
+  senza promuovere automaticamente DIC o Discord a disponibili. I provider API diretti restano
+  soltanto compatibilità legacy.
+- Il runtime locale, il modello, il servizio Mint e il tunnel sono responsabilità dell'operatore e
+  non vengono predisposti automaticamente da BH-DiC.
 - Il provider vede categorie semantiche canoniche, sole date ISO necessarie e segnaposto; ogni
   numero standalone viene redatto. Non vede vocaboli utente grezzi, nomi, Employee ID, query di
   ricerca o risultati DIC. Espressioni non mappabili

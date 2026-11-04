@@ -23,8 +23,14 @@ from bh_dic.discord.checks import (
 )
 from bh_dic.discord.commands import BHCommandGroup
 from bh_dic.discord.embeds import result_embed
-from bh_dic.discord.interactions import InteractionCoordinator
+from bh_dic.discord.interactions import (
+    AttachmentPayload,
+    InteractionCoordinator,
+    InteractionResult,
+    ResponseSensitivity,
+)
 from bh_dic.errors import ApplicationPolicyDenied
+from bh_dic.files.mime import canonical_mime
 from bh_dic.hr_assistant import (
     HrRequestInputError,
 )
@@ -36,6 +42,7 @@ from bh_dic.model_usage import (
     ModelUsageStart,
     ModelUsageTotals,
 )
+from bh_dic.onboarding.intent import is_explicit_employee_onboarding_request
 from bh_dic.openai.client import IntentProviderError, PublicHrProviderError, PublicHrResponder
 from bh_dic.openai.redaction import UnsafePromptError, prepare_public_hr_input
 from bh_dic.security.rate_limit import SlidingWindowRateLimiter
@@ -48,6 +55,7 @@ _STARTUP_DIC_UNAVAILABLE_MESSAGE = (
     "Stato Dipendenti in Cloud: NON DISPONIBILE. Un amministratore autorizzato può eseguire "
     "`/bh dic reconnect`; nessun tentativo viene ripetuto dopo un esito incerto."
 )
+_ONBOARDING_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +124,7 @@ class BHDiCBot(commands.Bot):
             rate_limiter=self.rate_limiter,
             language_profile=language_profile,
         )
+        self._upload_max_bytes = upload_max_bytes
         self.language_profile = language_profile
         if (interaction_mode == "channel" or gate.allow_dms) and public_hr_responder is None:
             raise ValueError("conversational message mode requires a public HR responder")
@@ -340,6 +349,14 @@ class BHDiCBot(commands.Bot):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
+            if getattr(message, "attachments", ()):
+                await self._dispatch_message_attachments(
+                    message,
+                    request,
+                    actor,
+                    private_transport=private_transport,
+                )
+                return
             if self.interaction_mode == "channel" or private_transport:
                 result = await self.coordinator.ask(actor, request)
                 if result.public_hr_fallback:
@@ -391,6 +408,7 @@ class BHDiCBot(commands.Bot):
                 )
             except Exception:
                 return
+
         except ApplicationPolicyDenied as exc:
             logger.info(
                 "discord_message_policy_denied",
@@ -480,6 +498,125 @@ class BHDiCBot(commands.Bot):
             except Exception:
                 return
 
+    async def _dispatch_message_attachments(
+        self,
+        message: discord.Message,
+        request: str,
+        actor: DiscordActor,
+        *,
+        private_transport: bool,
+    ) -> None:
+        """Route explicit image onboarding requests without exposing bytes to a model."""
+
+        attachments = tuple(message.attachments)
+        if not is_explicit_employee_onboarding_request(request):
+            await self._reply_with_result(
+                message,
+                self._onboarding_transport_result(
+                    "Allegati non elaborati",
+                    "Per avviare la bozza scrivi chiaramente `Aggiungi nuovo dipendente` "
+                    "insieme a uno-quattro documenti JPEG o PNG.",
+                ),
+                private_transport=private_transport,
+            )
+            return
+        if not 1 <= len(attachments) <= 4:
+            await self._reply_with_result(
+                message,
+                self._onboarding_transport_result(
+                    "Numero di documenti non valido",
+                    "Invia da uno a quattro documenti JPEG o PNG per ogni bozza.",
+                ),
+                private_transport=private_transport,
+            )
+            return
+
+        declared_sizes: list[int] = []
+        for attachment in attachments:
+            size = attachment.size
+            if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+                await self._reply_with_result(
+                    message,
+                    self._onboarding_transport_result(
+                        "Documento non valido",
+                        "La dimensione dichiarata di un documento non è valida.",
+                    ),
+                    private_transport=private_transport,
+                )
+                return
+            declared_sizes.append(size)
+        if any(size > self._upload_max_bytes for size in declared_sizes):
+            await self._reply_with_result(
+                message,
+                self._onboarding_transport_result(
+                    "Allegato troppo grande",
+                    "Un documento supera il limite di upload configurato.",
+                ),
+                private_transport=private_transport,
+            )
+            return
+        if sum(declared_sizes) > self._upload_max_bytes:
+            await self._reply_with_result(
+                message,
+                self._onboarding_transport_result(
+                    "Allegati troppo grandi",
+                    "La dimensione cumulativa supera il limite di upload configurato.",
+                ),
+                private_transport=private_transport,
+            )
+            return
+        if any(
+            canonical_mime(attachment.content_type) not in _ONBOARDING_IMAGE_MIME_TYPES
+            for attachment in attachments
+        ):
+            await self._reply_with_result(
+                message,
+                self._onboarding_transport_result(
+                    "Formato documento non supportato",
+                    "Per la bozza onboarding sono accettati esclusivamente JPEG e PNG.",
+                ),
+                private_transport=private_transport,
+            )
+            return
+
+        payloads: list[AttachmentPayload] = []
+        for attachment, declared_size in zip(attachments, declared_sizes, strict=True):
+            content = await attachment.read(use_cached=True)
+            if len(content) != declared_size or len(content) > self._upload_max_bytes:
+                await self._reply_with_result(
+                    message,
+                    self._onboarding_transport_result(
+                        "Documento non valido",
+                        "La dimensione ricevuta non coincide con quella dichiarata.",
+                    ),
+                    private_transport=private_transport,
+                )
+                return
+            payloads.append(
+                AttachmentPayload(
+                    original_filename=attachment.filename,
+                    content_type=canonical_mime(attachment.content_type),
+                    declared_size=declared_size,
+                    content=content,
+                )
+            )
+
+        result = await self.coordinator.onboard_documents(actor, tuple(payloads))
+        await self._reply_with_result(
+            message,
+            result,
+            private_transport=private_transport,
+        )
+
+    @staticmethod
+    def _onboarding_transport_result(title: str, description: str) -> InteractionResult:
+        return InteractionResult(
+            title=title,
+            description=description,
+            sensitivity=ResponseSensitivity.PUBLIC_AGGREGATE,
+            success=False,
+        )
+
     async def _reply_with_result(
         self,
         message: discord.Message,
@@ -487,8 +624,6 @@ class BHDiCBot(commands.Bot):
         *,
         private_transport: bool = False,
     ) -> None:
-        from bh_dic.discord.interactions import InteractionResult
-
         if not isinstance(result, InteractionResult):
             raise TypeError("coordinator returned an invalid interaction result")
         if (

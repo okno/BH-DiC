@@ -120,21 +120,21 @@ Loss of connection, timeout or missing postcondition produces
 
 ## Model-provider isolation
 
-The selected OpenAI, Groq or llama provider receives only tools compatible with the already
-evaluated user context. Read-only users do not receive write schemas, and high-risk destructive
-functions are hidden from model exposure.
-There are no browser, URL, HTTP, JavaScript, filesystem, shell or direct execution tools.
+The recommended Mint bridge receives at most eight policy-visible Function IDs and only canonical,
+identity-free request labels. Its Codex, Ollama or LM Studio backend has no browser, URL, HTTP,
+JavaScript, project-filesystem, shell or direct-execution tool. Read-only users never receive write
+schemas, and high-risk destructive functions are hidden from model exposure.
 
 The user request is reduced locally to canonical semantic-category labels, bounded dates/numbers
 and placeholders. Raw recognized vocabulary, search values, names and Employee IDs are not sent;
 the search span is removed before categorization so a name that collides with an HR term cannot
 cross the boundary. Explicit local targets are restored only after routing and policy recheck.
 
-`MODEL_STORE=false` forbids application-requested persistence. OpenAI/Groq requests apply the
-supported storage control; the llama chat-compatible request omits unsupported storage and
-conversation-state parameters. Full documents, payrolls, credentials, cookies, storage state,
-IBAN and full tax identifiers are forbidden. `MODEL_RESULT_RENDERING=deterministic` keeps DIC
-results local and renders Discord output through Python templates.
+`MODEL_STORE=false` forbids application-requested persistence. Codex uses a fresh ephemeral thread;
+local compatible backends receive no conversation identifier. Full documents, payrolls,
+credentials, cookies, storage state, IBAN and full tax identifiers are forbidden.
+`MODEL_RESULT_RENDERING=deterministic` keeps DIC results local and renders Discord output through
+Python templates.
 
 The employee-list projection may hold the clear display name transiently as `SecretStr`. Only the
 `SENSITIVE`/ephemeral `HR_READ` list and expiry renderers unwrap it. Public aggregates, provider

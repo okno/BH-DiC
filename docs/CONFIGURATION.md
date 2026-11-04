@@ -14,8 +14,9 @@ ${EDITOR:-nano} .env
 ```
 
 Non inviare `.env` in chat, ticket o log. In produzione sono obbligatori gli identificativi di
-scope, le credenziali del provider scelto e DIC e chiavi di almeno 32 byte per audit, payload e
-sessione DIC. Usare un secret manager o un canale amministrativo sicuro.
+scope, i certificati client del bridge, le credenziali DIC e chiavi di almeno 32 byte per audit,
+payload e sessione DIC. La sessione ChatGPT Work o il modello locale appartengono esclusivamente
+al bridge Mint. Usare un secret manager o un canale amministrativo sicuro.
 
 ## Gruppi di variabili
 
@@ -25,7 +26,7 @@ sessione DIC. Usare un secret manager o un canale amministrativo sicuro.
 | Persistenza | `DATABASE_URL`, `AUDIT_HMAC_KEY`, `ENCRYPTION_KEY` | solo `sqlite+aiosqlite` o `postgresql+asyncpg` |
 | Discord | token, application/guild/channel ID, role ID | DM false; guild e canale obbligatori |
 | Modello | `MODEL_PROVIDER`, tuning `MODEL_*` | provider unico; storage sempre false |
-| Credenziali modello | `OPENAI_*`, `GROQ_*` oppure `LLAMA_*` | valorizzare soltanto il provider selezionato |
+| Planner bridge | `BRIDGE_HOST`, porta, server name, CA/certificato/chiave client, modello | solo loopback via tunnel e mTLS; nessuna API key cloud sul bot |
 | Persona | `BOT_LANGUAGE`, `BOT_TONE`, `BOT_ADDRESS_STYLE`, `BOT_VERBOSITY`, `BOT_EMOJI_MODE`, testi | cambia la resa, mai policy o autorizzazioni |
 | DIC | URL, user, password, TOTP riservato, tenant, session key | origine HTTPS fissata; tenant numerico obbligatorio; MFA live fail-closed |
 | Write | kill switch e flag specifici | tutti false; non abilitare nel rilascio corrente |
@@ -37,7 +38,7 @@ sessione DIC. Usare un secret manager o un canale amministrativo sicuro.
 Configurazione comune canonica:
 
 ```dotenv
-MODEL_PROVIDER=openai
+MODEL_PROVIDER=bridge
 MODEL_TIMEOUT_SECONDS=60
 MODEL_MAX_RETRIES=2
 MODEL_MAX_OUTPUT_TOKENS=1200
@@ -46,28 +47,27 @@ MODEL_STORE=false
 MODEL_RESULT_RENDERING=deterministic
 ```
 
-`MODEL_PROVIDER` accetta `openai`, `groq` o `llama`. Aggiungere le sole variabili specifiche:
+Il deployment raccomandato usa `bridge`:
 
 ```dotenv
-# OpenAI
-OPENAI_API_KEY=<SEGRETO_LOCALE>
-OPENAI_MODEL=<MODELLO_APPROVATO>
-
-# Groq
-GROQ_API_KEY=<SEGRETO_LOCALE>
-GROQ_MODEL=openai/gpt-oss-120b
-
-# llama locale/OpenAI-compatible
-LLAMA_BASE_URL=http://127.0.0.1:11434/v1
-LLAMA_MODEL=<MODELLO_LOCALE>
-# LLAMA_API_KEY=<SEGRETO_OPZIONALE>
+BRIDGE_HOST=127.0.0.1
+BRIDGE_PORT=9443
+BRIDGE_SERVER_NAME=bh-dic-planner.local
+BRIDGE_CA_PATH=/percorso/privato/server-ca.crt
+BRIDGE_CLIENT_CERT_PATH=/percorso/privato/client.crt
+BRIDGE_CLIENT_KEY_PATH=/percorso/privato/client.key
+BRIDGE_MODEL=workspace-default
 ```
 
-Le base URL OpenAI e Groq sono fisse rispettivamente a `https://api.openai.com/v1` e
-`https://api.groq.com/openai/v1` e non sono configurabili. Per `llama`, HTTP è ammesso soltanto su
-loopback; il solo path `/v1` viene normalizzato e userinfo, query e fragment sono rifiutati.
-`LLAMA_API_KEY` è opzionale soltanto su loopback e obbligatoria per un endpoint HTTPS remoto.
-Dettagli e fonti ufficiali in [Provider di modello](OPENAI_SETUP.md).
+`BRIDGE_HOST` accetta soltanto loopback: la raggiungibilità del Mint viene fornita dal tunnel SSH,
+non da una porta App Server esposta. La chiave client deve essere un file regolare non symlink,
+di proprietà dell'account bot e modo `0600` o più restrittivo. Codex/ChatGPT Work, Ollama o LM
+Studio si scelgono nel file privato del bridge Mint; il bot non conserva le loro credenziali.
+Dettagli in [Planner bridge Codex/local](CODEX_BRIDGE.md).
+
+Il parser accetta ancora `openai`, `groq` e `llama` per rollback compatibile. Non inserirli in un
+nuovo deployment e non conservare `OPENAI_API_KEY` o `GROQ_API_KEY` quando il provider è `bridge`.
+La configurazione legacy è descritta in [Provider diretti legacy](OPENAI_SETUP.md).
 
 Gli alias legacy `OPENAI_STORE`, `OPENAI_TIMEOUT_SECONDS`, `OPENAI_MAX_RETRIES`,
 `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_REASONING_EFFORT` e `OPENAI_RESULT_RENDERING` servono soltanto
@@ -250,7 +250,7 @@ La minimizzazione della 0.3.0 proietta la domanda su categorie semantiche canoni
 utente grezzi. Nomi, valori di ricerca, Employee ID e termini liberi vengono rimossi o sostituiti
 prima del trasporto, anche quando un nome coincide con una parola HR o un mese. Query di ricerca e
 ID espliciti rimangono locali e vengono riassociati soltanto dopo il routing. Risposte DIC, DOM,
-righe dipendente e analisi contrattuali non vengono mai inviate a OpenAI, Groq o llama.
+righe dipendente e analisi contrattuali non vengono mai inviate al bridge né ai provider legacy.
 
 ## Telemetria token locale
 
