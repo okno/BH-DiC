@@ -24,7 +24,7 @@ dependencies = [
   "openai>=3,<4",
   "openai-codex>=0.162,<0.163",
   "openpyxl>=3.1.5,<4",
-  "Pillow>=12.3,<13",
+  "Pillow>=13.0,<14",
   "playwright>=1.62,<2",
   "pydantic>=2.13,<3",
   "pydantic-settings>=2.15,<3",
@@ -48,7 +48,7 @@ dev = [
   "pip-audit>=2.10,<3",
   "pytest>=9.0.3,<10",
   "pytest-asyncio>=0.26,<2",
-  "pypdf>=6.16.1,<7",
+  "pypdf>=6.21.4,<7",
   "ruff>=0.16,<1",
   "types-PyYAML>=6.0.12",
 ]

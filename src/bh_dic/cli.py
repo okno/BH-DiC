@@ -19,6 +19,7 @@ import typer
 from bh_dic import __version__
 from bh_dic.ai.planning import PlanningRouter
 from bh_dic.audit.service import AuditService
+from bh_dic.bridge.diagnostics import BridgePreflightError, check_bridge_host
 from bh_dic.bridge.service import serve_bridge
 from bh_dic.bridge.settings import BridgeHostSettings
 from bh_dic.config import AppSettings
@@ -96,6 +97,26 @@ def _dic_auth_failure(exc: Exception, *, code: int | None = None) -> Never:
             )
         ),
     )
+
+
+def _bridge_host_settings(env_file: Path) -> BridgeHostSettings:
+    """Load one private bridge environment without exposing its path or contents."""
+
+    resolved = env_file.resolve(strict=True)
+    if (
+        not env_file.is_absolute()
+        or env_file.is_symlink()
+        or resolved != env_file
+        or not resolved.is_file()
+    ):
+        raise ValueError("bridge environment file must be a regular absolute file")
+    if os.name == "posix":
+        metadata = resolved.stat()
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError("bridge environment file must be owned by the bridge account")
+        if metadata.st_mode & 0o077:
+            raise PermissionError("bridge environment file must have mode 0600 or stricter")
+    return BridgeHostSettings(_env_file=resolved)
 
 
 def _validate_local_dic_session(session: StoredBrowserSession) -> None:
@@ -386,26 +407,69 @@ def bridge_serve(
     """Run the loopback-only mTLS planner bridge; does not load bot/DIC settings."""
 
     try:
-        resolved = env_file.resolve(strict=True)
-        if (
-            not env_file.is_absolute()
-            or env_file.is_symlink()
-            or resolved != env_file
-            or not resolved.is_file()
-        ):
-            raise ValueError("bridge environment file must be a regular absolute file")
-        if os.name == "posix":
-            metadata = resolved.stat()
-            if metadata.st_uid != os.geteuid():
-                raise PermissionError("bridge environment file must be owned by the bridge account")
-            if metadata.st_mode & 0o077:
-                raise PermissionError("bridge environment file must have mode 0600 or stricter")
-        settings = BridgeHostSettings(_env_file=resolved)
+        settings = _bridge_host_settings(env_file)
         _run(serve_bridge(settings))
     except KeyboardInterrupt:
         return
     except Exception as exc:
         _fail(f"Planner bridge non avviato ({type(exc).__name__}).")
+
+
+@app.command("bridge-check")
+def bridge_check(
+    env_file: Annotated[
+        Path,
+        typer.Option(
+            "--env-file",
+            help="Absolute private environment file for the standalone Mint bridge.",
+        ),
+    ],
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Run one schema-bound synthetic inference without Discord or DIC.",
+    ),
+) -> None:
+    """Check Mint bridge bootstrap locally; inference remains explicitly opt-in."""
+
+    try:
+        settings = _bridge_host_settings(env_file)
+    except Exception:
+        _emit(
+            {
+                "status": "BLOCKED",
+                "reason": "CONFIGURATION_INVALID",
+                "live_contacted": False,
+                "store": False,
+                "tool_execution": False,
+            }
+        )
+        raise typer.Exit(1) from None
+    try:
+        report = _run(check_bridge_host(settings, live=live))
+    except BridgePreflightError as exc:
+        _emit(
+            {
+                "status": "BLOCKED",
+                "reason": exc.code.value,
+                "live_contacted": exc.live_contacted,
+                "store": False,
+                "tool_execution": False,
+            }
+        )
+        raise typer.Exit(1) from None
+    except Exception:
+        _emit(
+            {
+                "status": "BLOCKED",
+                "reason": "INTERNAL_CHECK_FAILED",
+                "live_contacted": False,
+                "store": False,
+                "tool_execution": False,
+            }
+        )
+        raise typer.Exit(1) from None
+    _emit(report.model_dump(mode="json"))
 
 
 @app.command("validate-config")

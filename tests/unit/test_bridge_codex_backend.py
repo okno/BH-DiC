@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,12 @@ from openai_codex import ApprovalMode, CodexConfig, Sandbox
 
 from bh_dic.bridge.backends.codex import CodexPlannerBackend, CodexSession
 from bh_dic.bridge.contracts import BoundedJsonObject, BridgeRequest
-from bh_dic.bridge.errors import BackendOutputError
+from bh_dic.bridge.errors import (
+    BackendOutputError,
+    BackendUnavailableError,
+    CodexAuthenticationRequiredError,
+    CodexRuntimeSecurityError,
+)
 from bh_dic.bridge.model_output import BridgeModelOutput
 
 REQUEST_ID = UUID("00000000-0000-4000-8000-000000000003")
@@ -116,6 +122,8 @@ async def test_codex_backend_uses_app_server_ephemeral_deny_all_and_clean_enviro
     assert config.launch_args_override is not None
     argv = config.launch_args_override
     assert argv[:2] == ("/usr/bin/env", "-i")
+    assert "HOME=/nonexistent" in argv
+    assert f"CODEX_HOME={tmp_path / 'state'}" in argv
     assert "shell_tool" in argv
     assert argv[-3:] == ("app-server", "--listen", "stdio://")
     assert factory.session.thread_start_kwargs["approval_mode"] is ApprovalMode.deny_all
@@ -147,3 +155,115 @@ def test_codex_backend_rejects_state_inside_home_or_repository(tmp_path: Path) -
             system_instruction="Synthetic instruction.",
             session_factory=factory,
         )
+
+
+def test_codex_backend_rejects_group_writable_pinned_runtime(tmp_path: Path) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o775)
+    state = _private_directory(tmp_path / "state")
+    work = _private_directory(state / "work")
+
+    with pytest.raises(CodexRuntimeSecurityError, match="group/world writable"):
+        CodexPlannerBackend(
+            state_root=state,
+            isolated_work_root=work,
+            executable=executable,
+            output_model=BridgeModelOutput,
+            system_instruction="Synthetic instruction.",
+            session_factory=_Factory(_Thread()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_preflight_uses_exact_isolated_environment(tmp_path: Path) -> None:
+    state = _private_directory(tmp_path / "state")
+    work = _private_directory(state / "work")
+    observed: dict[str, object] = {}
+
+    async def login_status(
+        executable: Path,
+        environment: Mapping[str, str],
+        cwd: Path,
+    ) -> int:
+        observed.update(
+            executable=executable,
+            environment=dict(environment),
+            cwd=cwd,
+        )
+        return 0
+
+    backend = CodexPlannerBackend(
+        state_root=state,
+        isolated_work_root=work,
+        executable=Path("/usr/bin/true"),
+        output_model=BridgeModelOutput,
+        system_instruction="Synthetic instruction.",
+        session_factory=_Factory(_Thread()),
+        login_status_runner=login_status,
+    )
+
+    await backend.preflight()
+
+    assert observed["cwd"] == work
+    assert observed["environment"] == {
+        "HOME": "/nonexistent",
+        "CODEX_HOME": str(state),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_codex_preflight_classifies_missing_dedicated_login(tmp_path: Path) -> None:
+    state = _private_directory(tmp_path / "state")
+    work = _private_directory(state / "work")
+
+    async def not_logged_in(
+        _executable: Path,
+        _environment: Mapping[str, str],
+        _cwd: Path,
+    ) -> int:
+        return 1
+
+    backend = CodexPlannerBackend(
+        state_root=state,
+        isolated_work_root=work,
+        executable=Path("/usr/bin/true"),
+        output_model=BridgeModelOutput,
+        system_instruction="Synthetic instruction.",
+        session_factory=_Factory(_Thread()),
+        login_status_runner=not_logged_in,
+    )
+
+    with pytest.raises(CodexAuthenticationRequiredError):
+        await backend.preflight()
+
+
+@pytest.mark.asyncio
+async def test_codex_preflight_does_not_misclassify_cli_failure_as_login(
+    tmp_path: Path,
+) -> None:
+    state = _private_directory(tmp_path / "state")
+    work = _private_directory(state / "work")
+
+    async def incompatible_cli(
+        _executable: Path,
+        _environment: Mapping[str, str],
+        _cwd: Path,
+    ) -> int:
+        return 2
+
+    backend = CodexPlannerBackend(
+        state_root=state,
+        isolated_work_root=work,
+        executable=Path("/usr/bin/true"),
+        output_model=BridgeModelOutput,
+        system_instruction="Synthetic instruction.",
+        session_factory=_Factory(_Thread()),
+        login_status_runner=incompatible_cli,
+    )
+
+    with pytest.raises(BackendUnavailableError, match="command failed"):
+        await backend.preflight()

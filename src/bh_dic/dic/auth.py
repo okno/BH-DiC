@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -39,6 +40,8 @@ from bh_dic.dic.pages import (
 )
 from bh_dic.dic.session_vault import FernetSessionVault
 from bh_dic.dic.tenant_attestation import ResponseEventSource, TenantResponseCapture
+
+logger = logging.getLogger("bh_dic.browser.auth")
 
 _DIC_ORIGIN = "https://secure.dipendentincloud.it"
 _TEAMSYSTEM_ORIGIN = "https://identity.teamsystem.com"
@@ -1216,9 +1219,18 @@ class DicSessionManager:
 
     def load_session(self) -> StoredBrowserSession | None:
         try:
-            return self.vault.load()
+            session = self.vault.load()
         except DicSessionExpiredError:
+            logger.warning(
+                "dic_session_restore_state",
+                extra={"reason": "SESSION_EXPIRED"},
+            )
             return None
+        logger.info(
+            "dic_session_restore_state",
+            extra={"reason": "SESSION_MISSING" if session is None else "SESSION_RESTORED"},
+        )
+        return session
 
     def load_storage_state(self) -> dict[str, JsonValue] | None:
         """Compatibility helper for callers that need only Playwright storage_state."""

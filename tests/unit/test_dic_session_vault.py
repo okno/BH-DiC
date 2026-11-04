@@ -318,6 +318,29 @@ async def test_session_manager_persists_loads_expires_and_invalidates(tmp_path) 
     assert expired_manager.load_storage_state() is None
 
 
+def test_session_manager_logs_only_closed_restore_states(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    path = (tmp_path / "restore-state.enc").resolve()
+    vault = FernetSessionVault(path, FernetSessionVault.generate_key(), clock=lambda: now)
+    manager = DicSessionManager(vault, clock=lambda: now)
+
+    with caplog.at_level("INFO", logger="bh_dic.browser.auth"):
+        assert manager.load_session() is None
+        vault.save(session(now, now + timedelta(hours=1)))
+        assert manager.load_session() is not None
+        vault.save(session(now - timedelta(hours=2), now - timedelta(hours=1)))
+        assert manager.load_session() is None
+
+    states = [
+        record.reason for record in caplog.records if record.message == "dic_session_restore_state"
+    ]
+    assert states == ["SESSION_MISSING", "SESSION_RESTORED", "SESSION_EXPIRED"]
+    assert str(path) not in caplog.text
+
+
 def test_session_manager_rejects_non_positive_lifetime(tmp_path) -> None:
     vault = FernetSessionVault(
         (tmp_path / "manager.enc").resolve(), FernetSessionVault.generate_key()

@@ -80,6 +80,7 @@ def build_planner_backend(settings: BridgeHostSettings) -> PlannerBackend:
 async def serve_bridge(settings: BridgeHostSettings) -> None:
     """Serve until cancelled; all owned resources are closed deterministically."""
 
+    ssl_context = build_server_ssl_context(settings)
     backend = build_planner_backend(settings)
     host = JsonlBridgeHost(
         backend,
@@ -87,10 +88,12 @@ async def serve_bridge(settings: BridgeHostSettings) -> None:
     )
     server: asyncio.Server | None = None
     try:
+        # Never expose an mTLS listener backed by a known-unusable local session.
+        await backend.preflight()
         server = await host.start_server(
             host=settings.bridge_bind_host,
             port=settings.bridge_bind_port,
-            ssl_context=build_server_ssl_context(settings),
+            ssl_context=ssl_context,
         )
         async with server:
             await server.serve_forever()

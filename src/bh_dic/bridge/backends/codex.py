@@ -14,7 +14,7 @@ import json
 import os
 import stat
 import tempfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -23,11 +23,18 @@ from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
 from pydantic import BaseModel, ValidationError
 
 from bh_dic.bridge.contracts import BackendResult, BoundedJsonObject, BridgeRequest
-from bh_dic.bridge.errors import BackendOutputError, BackendUnavailableError
+from bh_dic.bridge.errors import (
+    BackendOutputError,
+    BackendUnavailableError,
+    CodexAuthenticationRequiredError,
+    CodexRuntimeSecurityError,
+)
 from bh_dic.bridge.model_output import output_model_for_task
 from bh_dic.openai.schemas import ProviderTokenUsage
 
 _MAX_PROMPT_CHARACTERS = 48_000
+_LOGIN_STATUS_TIMEOUT_SECONDS = 10.0
+_ISOLATED_HOME = "/nonexistent"
 _SAFE_ITEM_TYPES = frozenset({"agentMessage", "reasoning"})
 _DISABLED_CODEX_FEATURES = (
     "apps",
@@ -83,6 +90,10 @@ class CodexSession(Protocol):
 
 
 type CodexSessionFactory = Callable[[CodexConfig], AbstractAsyncContextManager[CodexSession]]
+type CodexLoginStatusRunner = Callable[
+    [Path, Mapping[str, str], Path],
+    Awaitable[int],
+]
 
 
 def _validate_private_directory(path: Path, *, label: str) -> Path:
@@ -111,16 +122,18 @@ def _validate_private_directory(path: Path, *, label: str) -> Path:
 
 def _validate_executable(path: Path) -> Path:
     if not path.is_absolute():
-        raise ValueError("Codex executable path must be absolute")
+        raise CodexRuntimeSecurityError("Codex executable path must be absolute")
     try:
-        metadata = path.stat()
+        metadata = path.lstat()
         resolved = path.resolve(strict=True)
     except OSError as exc:
-        raise ValueError("Codex executable is unavailable") from exc
+        raise CodexRuntimeSecurityError("Codex executable is unavailable") from exc
+    if stat.S_ISLNK(metadata.st_mode) or resolved != path:
+        raise CodexRuntimeSecurityError("Codex executable must not use symlink indirection")
     if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved, os.X_OK):
-        raise ValueError("Codex executable is not executable")
+        raise CodexRuntimeSecurityError("Codex executable is not executable")
     if metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise ValueError("Codex executable must not be group/world writable")
+        raise CodexRuntimeSecurityError("Codex executable must not be group/world writable")
     return resolved
 
 
@@ -130,11 +143,47 @@ def _default_codex_executable() -> Path:
 
         return Path(bundled_codex_path())
     except (ImportError, OSError):
-        raise ValueError("the pinned Codex App Server runtime is unavailable") from None
+        raise CodexRuntimeSecurityError(
+            "the pinned Codex App Server runtime is unavailable"
+        ) from None
 
 
 def _session_factory(config: CodexConfig) -> AbstractAsyncContextManager[CodexSession]:
     return cast(AbstractAsyncContextManager[CodexSession], AsyncCodex(config))
+
+
+async def _login_status_runner(
+    executable: Path,
+    environment: Mapping[str, str],
+    cwd: Path,
+) -> int:
+    """Inspect only the dedicated CODEX_HOME; suppress every CLI output byte."""
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            str(executable),
+            "login",
+            "status",
+            cwd=str(cwd),
+            env=dict(environment),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        raise BackendUnavailableError("Codex login status process is unavailable") from None
+    try:
+        async with asyncio.timeout(_LOGIN_STATUS_TIMEOUT_SECONDS):
+            return_code = await process.wait()
+    except TimeoutError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        await process.wait()
+        raise BackendUnavailableError("Codex login status check timed out") from None
+    return return_code
 
 
 def _item_type(item: object) -> str | None:
@@ -190,6 +239,7 @@ class CodexPlannerBackend:
         model: str = "workspace-default",
         executable: Path | None = None,
         session_factory: CodexSessionFactory = _session_factory,
+        login_status_runner: CodexLoginStatusRunner = _login_status_runner,
     ) -> None:
         if not model.strip() or len(model) > 128 or "\x00" in model:
             raise ValueError("invalid Codex model name")
@@ -218,16 +268,37 @@ class CodexPlannerBackend:
         self._instruction = instruction
         self._model = model
         self._session_factory = session_factory
+        self._login_status_runner = login_status_runner
+
+    def _isolated_environment(self) -> dict[str, str]:
+        return {
+            "HOME": _ISOLATED_HOME,
+            "CODEX_HOME": str(self._state_root),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+        }
+
+    async def preflight(self) -> None:
+        """Require a dedicated login without treating it as live model verification."""
+
+        return_code = await self._login_status_runner(
+            self._executable,
+            self._isolated_environment(),
+            self._work_root,
+        )
+        if return_code == 0:
+            return
+        if return_code == 1:
+            raise CodexAuthenticationRequiredError("dedicated Codex authentication is required")
+        raise BackendUnavailableError("Codex login status command failed")
 
     def _app_server_config(self, request_directory: Path) -> CodexConfig:
+        environment = self._isolated_environment()
         arguments: list[str] = [
             "/usr/bin/env",
             "-i",
-            f"HOME={self._state_root}",
-            f"CODEX_HOME={self._state_root}",
-            "LANG=C.UTF-8",
-            "LC_ALL=C.UTF-8",
-            "PATH=/usr/bin:/bin",
+            *(f"{name}={value}" for name, value in environment.items()),
             str(self._executable),
         ]
         for feature in _DISABLED_CODEX_FEATURES:
@@ -339,6 +410,7 @@ class CodexPlannerBackend:
 
 
 __all__ = [
+    "CodexLoginStatusRunner",
     "CodexPlannerBackend",
     "CodexSession",
     "CodexSessionFactory",

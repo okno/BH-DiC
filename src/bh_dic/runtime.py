@@ -67,6 +67,7 @@ from bh_dic.services.dic_service import DicService
 
 _MOCK_SECRET = b"BH-DiC synthetic mock key only!!"
 logger = logging.getLogger(__name__)
+dic_logger = logging.getLogger("bh_dic.browser.runtime")
 ModelRouter = IntentRouter | PlanningRouter
 
 
@@ -286,7 +287,7 @@ async def _adapter(
         except DicSessionVaultError:
             if authenticate_dic:
                 raise
-            logger.warning(
+            dic_logger.warning(
                 "dic_session_restore_unavailable",
                 extra={"reason": "SESSION_VAULT_INVALID"},
             )
@@ -304,7 +305,14 @@ async def _adapter(
                     await session_manager.persist(browser_session)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                dic_logger.warning(
+                    "dic_session_persist_failed",
+                    extra={
+                        "reason": "PASSIVE_VERIFIED_SESSION",
+                        "exception_type": type(exc).__name__,
+                    },
+                )
                 persist_failed = True
             if persist_failed:
                 raise DicSessionVaultError("verified DIC session could not be persisted safely")
@@ -344,8 +352,19 @@ async def _adapter(
             try:
                 await session_manager.persist(browser_session)
             except asyncio.CancelledError:
+                dic_logger.warning(
+                    "dic_session_persist_failed",
+                    extra={"reason": "EXPLICIT_AUTH_BUILD_CANCELLED"},
+                )
                 persist_failed = True
-            except Exception:
+            except Exception as exc:
+                dic_logger.warning(
+                    "dic_session_persist_failed",
+                    extra={
+                        "reason": "EXPLICIT_AUTH_BUILD",
+                        "exception_type": type(exc).__name__,
+                    },
+                )
                 persist_failed = True
             if persist_failed:
                 raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT)
@@ -543,8 +562,19 @@ async def build_runtime(
                 try:
                     await session_manager.persist(browser_session)
                 except asyncio.CancelledError:
+                    dic_logger.warning(
+                        "dic_session_persist_failed",
+                        extra={"reason": "EXPLICIT_AUTH_CANCELLED"},
+                    )
                     raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT) from None
-                except Exception:
+                except Exception as exc:
+                    dic_logger.warning(
+                        "dic_session_persist_failed",
+                        extra={
+                            "reason": "EXPLICIT_AUTH",
+                            "exception_type": type(exc).__name__,
+                        },
+                    )
                     raise DicAuthOutcomeUnknownError(DicAuthStage.CREDENTIAL_SUBMIT) from None
             except DicAuthOutcomeUnknownError:
                 dic_reconnect_outcome_unknown = True
@@ -628,31 +658,36 @@ async def build_runtime(
             else:
                 public_hr_responder = build_public_hr_responder(settings)
 
+        startup_reconnect_attempted = False
+
         async def startup_status_probe() -> StartupStatusSnapshot:
+            nonlocal startup_reconnect_attempted
             health = await adapter.health()
             if (
                 settings.dic_reconnect_on_startup
                 and not settings.mock_mode
                 and not force_mock_components
                 and not (health.ready and health.authenticated)
+                and not startup_reconnect_attempted
             ):
-                logger.warning("dic_startup_reconnect_started")
+                startup_reconnect_attempted = True
+                dic_logger.warning("dic_startup_reconnect_started")
                 try:
                     await reconnect_dic_session()
                 except asyncio.CancelledError:
                     raise
                 except DicAuthOutcomeUnknownError as exc:
-                    logger.error(
+                    dic_logger.error(
                         "dic_startup_reconnect_outcome_unknown",
                         extra={"stage": exc.stage.value},
                     )
                 except Exception as exc:
-                    logger.warning(
+                    dic_logger.warning(
                         "dic_startup_reconnect_failed",
                         extra={"exception_type": type(exc).__name__},
                     )
                 else:
-                    logger.info("dic_startup_reconnect_completed")
+                    dic_logger.info("dic_startup_reconnect_completed")
                 health = await adapter.health()
             return StartupStatusSnapshot(
                 adapter_ready=health.ready and health.authenticated,

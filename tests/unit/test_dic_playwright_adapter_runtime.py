@@ -14,7 +14,11 @@ import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import JsonValue, SecretStr
 
-from bh_dic.dic.auth import DicAuthOutcomeUnknownError, DicAuthStage
+from bh_dic.dic.auth import (
+    DicAuthOutcomeUnknownError,
+    DicAuthStage,
+    DicAuthUiChangedError,
+)
 from bh_dic.dic.catalog import MUTATING_FUNCTIONS
 from bh_dic.dic.errors import (
     DicAmbiguousWriteOutcomeError,
@@ -181,29 +185,57 @@ async def test_health_authentication_and_close_are_fail_closed() -> None:
 
 
 @pytest.mark.parametrize(
-    "failure",
+    ("failure", "expected_reason"),
     [
-        DicUiChangedError("private-ui-drift-marker"),
-        DicCircuitOpenError("private-circuit-marker"),
-        TimeoutError("private-timeout-marker"),
+        (DicUiChangedError("private-ui-drift-marker"), "DIC_UI_CHANGED"),
+        (DicCircuitOpenError("private-circuit-marker"), "CIRCUIT_OPEN"),
+        (TimeoutError("private-timeout-marker"), "TIMEOUT"),
     ],
     ids=("ui-drift", "circuit-open", "timeout"),
 )
 @pytest.mark.asyncio
 async def test_health_reports_safe_degraded_status_for_expected_dic_failures(
     failure: Exception,
+    expected_reason: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     adapter, _ = _adapter()
     adapter._auth = _auth()
     adapter._auth.status = AsyncMock(side_effect=failure)
 
-    health = await adapter.health()
+    with caplog.at_level("WARNING", logger="bh_dic.browser.adapter"):
+        health = await adapter.health()
 
     assert health.ready is False
     assert health.authenticated is False
     assert health.browser_available is True
     assert health.detail == "browser ready; authenticated tenant is unavailable"
     assert "private" not in repr(health).casefold()
+    records = [record for record in caplog.records if record.message == "dic_health_probe_failed"]
+    assert len(records) == 1
+    assert records[0].reason == expected_reason
+    assert records[0].exception_type == type(failure).__name__
+    assert "private" not in caplog.text.casefold()
+
+
+@pytest.mark.asyncio
+async def test_health_logs_only_closed_auth_stage_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    adapter, _ = _adapter()
+    adapter._auth = _auth()
+    adapter._auth.status = AsyncMock(side_effect=DicAuthUiChangedError(DicAuthStage.SESSION_PROBE))
+
+    with caplog.at_level("WARNING", logger="bh_dic.browser.adapter"):
+        health = await adapter.health()
+
+    assert health.ready is False
+    record = next(
+        record for record in caplog.records if record.message == "dic_health_probe_failed"
+    )
+    assert record.reason == "AUTH_UI_CHANGED"
+    assert record.stage == "SESSION_PROBE"
+    assert record.exception_type == "DicAuthUiChangedError"
 
 
 @pytest.mark.asyncio

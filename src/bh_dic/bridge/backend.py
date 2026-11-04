@@ -10,6 +10,9 @@ from bh_dic.bridge.contracts import BackendResult, BridgeRequest
 class PlannerBackend(Protocol):
     """A backend may classify/plan only; it receives no operational capability."""
 
+    async def preflight(self) -> None:
+        """Validate local bootstrap prerequisites without running inference."""
+
     async def plan(self, request: BridgeRequest) -> BackendResult: ...
 
     async def close(self) -> None: ...

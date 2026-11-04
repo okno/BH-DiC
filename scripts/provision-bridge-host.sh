@@ -131,6 +131,17 @@ PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \
 "${INSTALL_ROOT}/.venv/bin/python" -m pip check
 chown -R root:root -- "${INSTALL_ROOT}"
 chmod -R u=rwX,go=rX -- "${INSTALL_ROOT}"
+codex_runtime="$(
+  "${INSTALL_ROOT}/.venv/bin/python" -c \
+    'from codex_cli_bin import bundled_codex_path; print(bundled_codex_path())'
+)"
+[[ "${codex_runtime}" == "${INSTALL_ROOT}/.venv/"* ]] \
+  || die "pinned Codex runtime escaped the bridge virtualenv"
+[[ -f "${codex_runtime}" && ! -L "${codex_runtime}" ]] \
+  || die "pinned Codex runtime is not a regular in-tree file"
+# Package archives can preserve a developer group-write bit. Normalize rather than
+# weakening the runtime validator used by the service account.
+chmod 0755 -- "${codex_runtime}"
 
 install -d -m 0750 -o root -g "${BRIDGE_GROUP}" "${CONFIG_ROOT}"
 install -d -m 0700 -o "${BRIDGE_USER}" -g "${BRIDGE_GROUP}" \
@@ -145,3 +156,4 @@ systemctl daemon-reload
 info "bridge host installed from ${expected_commit}"
 info "no credential was created and no service was enabled or started"
 info "next: provision private mTLS files and ${CONFIG_ROOT}/bridge.env"
+info "then run bh-dic bridge-check offline and with explicit --live"

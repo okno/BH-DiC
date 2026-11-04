@@ -74,6 +74,10 @@ nomi o le buste paga e scompare al riavvio.
    `scripts/provision-bridge-host.sh` come root con `--source-dir`, `--python-runtime` e il
    `--expected-commit` completo. Lo script crea soltanto account, directory, installazione e unità:
    non genera credenziali, non abilita/avvia servizi e non modifica SSH o rete.
+   Il provisioning rende l'albero applicativo root-owned e normalizza il solo binario Codex
+   bloccato a `0755`. Un binario `0775` resta volutamente rifiutato perché modificabile dal
+   gruppo: non usare quel virtualenv di sviluppo come runtime del servizio e non allentare il
+   validatore.
 3. Copiare `config/bridge.env.example` fuori dal repository, impostare modo `0600` e compilare
    soltanto i percorsi necessari.
 4. Generare una CA applicativa dedicata e certificati distinti server/client. Le chiavi devono
@@ -84,16 +88,37 @@ nomi o le buste paga e scompare al riavvio.
    di servizio:
 
    ```bash
-   env HOME=/nonexistent CODEX_HOME=/var/lib/bh-dic-bridge/codex \
-     /opt/bh-dic-bridge/.venv/lib/python3.12/site-packages/codex_cli_bin/bin/codex \
-     login --device-auth
+   runuser --user bh-dic-bridge -- \
+     env -i HOME=/nonexistent CODEX_HOME=/var/lib/bh-dic-bridge/codex \
+       LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin \
+       /opt/bh-dic-bridge/.venv/lib/python3.12/site-packages/codex_cli_bin/bin/codex \
+       login --device-auth
    ```
 
-   Verificare poi `login status` nello stesso ambiente. Non usare `--with-api-key`. La sessione
-   e il suo rinnovo sono un prerequisito operativo separato; non vanno copiati dal profilo
-   desktop né inseriti nel repository.
-6. Avviare `bh-dic bridge-serve --env-file /percorso/assoluto/bridge.env`. Il bind non-loopback
-   viene rifiutato dal validatore.
+   Non usare `--with-api-key`. La sessione e il suo rinnovo sono un prerequisito operativo
+   separato; non vanno copiati dal profilo desktop né inseriti nel repository. Il login effettuato
+   nell'app Codex desktop non autentica automaticamente questo `CODEX_HOME` isolato.
+6. Eseguire il preflight senza inferenza:
+
+   ```bash
+   /opt/bh-dic-bridge/.venv/bin/bh-dic bridge-check \
+     --env-file /etc/bh-dic-bridge/bridge.env
+   ```
+
+   Il comando convalida file env, mTLS, permessi, runtime, directory vuota e `login status`
+   usando lo stesso `HOME=/nonexistent` e lo stesso `CODEX_HOME` del servizio. Non stampa
+   percorsi, output del provider o contenuti delle credenziali. `READY_OFFLINE` significa soltanto
+   sessione presente ma non verifica disponibilità/entitlement del modello.
+7. Solo dopo, autorizzare una singola inferenza sintetica schema-bound:
+
+   ```bash
+   /opt/bh-dic-bridge/.venv/bin/bh-dic bridge-check \
+     --env-file /etc/bh-dic-bridge/bridge.env --live
+   ```
+
+   Solo `LIVE_VERIFIED` prova un turno completato. Non contatta Discord o DiC e non contiene PII.
+8. Avviare `bh-dic bridge-serve --env-file /etc/bh-dic-bridge/bridge.env`. Il bind non-loopback
+   viene rifiutato dal validatore e il servizio non apre il listener se il preflight Codex fallisce.
 
 L'unità di esempio `infrastructure/systemd/bh-dic-planner-bridge.service.example` applica
 `ProtectHome`, filesystem read-only salvo lo state root, nessuna capability e nessun privilegio.
@@ -133,8 +158,9 @@ configurati soltanto su Ubiquiti; il file Mint non deve contenerne i segreti.
 
 ## Verifiche e rollout
 
-1. `bh-dic validate-config` su Ubiquiti e avvio isolato del bridge su Mint.
-2. `bh-dic model-check --live`: esegue una sola decisione sintetica, senza PII e senza DiC.
+1. `bh-dic bridge-check --env-file ...` e poi lo stesso comando con `--live` su Mint.
+2. `bh-dic validate-config` e `bh-dic model-check --live` su Ubiquiti: il secondo attraversa
+   tunnel e mTLS con una sola decisione sintetica, senza PII e senza DiC.
 3. Test automatici e gate statici completi.
 4. Shadow/canary su richieste sintetiche; verificare fallback locale, contatori e log privi di
    prompt/PII.

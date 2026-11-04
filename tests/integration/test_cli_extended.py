@@ -12,6 +12,11 @@ from typer.testing import CliRunner
 
 import bh_dic.cli as cli
 from bh_dic.ai.planning import RoutedPlanningDecision
+from bh_dic.bridge.diagnostics import (
+    BridgeCheckReport,
+    BridgePreflightCode,
+    BridgePreflightError,
+)
 from bh_dic.config import AppSettings
 from bh_dic.database.engine import Database
 from bh_dic.files.antivirus import AntivirusResult, AntivirusVerdict
@@ -110,6 +115,45 @@ def test_bridge_serve_requires_private_owned_absolute_environment_file(
 
     assert accepted.exit_code == 0, accepted.output
     serve.assert_awaited_once_with(settings)
+
+
+def test_bridge_check_is_offline_by_default_and_reports_sanitized_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace()
+    check = AsyncMock(
+        return_value=BridgeCheckReport(
+            status="READY_OFFLINE",
+            backend="codex",
+            model="workspace-default",
+            live_contacted=False,
+            bootstrap="CODEX_SESSION_PRESENT_UNVERIFIED",
+        )
+    )
+    monkeypatch.setattr(cli, "_bridge_host_settings", lambda _path: settings)
+    monkeypatch.setattr(cli, "check_bridge_host", check)
+
+    offline = runner.invoke(
+        cli.app,
+        ["bridge-check", "--env-file", "/synthetic/private.env"],
+    )
+
+    assert offline.exit_code == 0, offline.output
+    assert json.loads(offline.stdout)["status"] == "READY_OFFLINE"
+    check.assert_awaited_once_with(settings, live=False)
+
+    check.reset_mock()
+    check.side_effect = BridgePreflightError(BridgePreflightCode.CODEX_AUTHENTICATION_REQUIRED)
+    blocked = runner.invoke(
+        cli.app,
+        ["bridge-check", "--env-file", "/synthetic/private.env", "--live"],
+    )
+
+    assert blocked.exit_code == 1
+    payload = json.loads(blocked.stdout)
+    assert payload["reason"] == "CODEX_AUTHENTICATION_REQUIRED"
+    assert payload["live_contacted"] is False
+    assert "private.env" not in blocked.stdout
 
 
 @pytest.mark.asyncio

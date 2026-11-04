@@ -35,6 +35,14 @@ class BackendOutputError(BackendError):
     """The backend returned an invalid structured decision."""
 
 
+class CodexAuthenticationRequiredError(BackendUnavailableError):
+    """The dedicated isolated Codex state has no usable login session."""
+
+
+class CodexRuntimeSecurityError(ValueError):
+    """The pinned Codex executable failed a local integrity/permission check."""
+
+
 __all__ = [
     "BackendError",
     "BackendOutputError",
@@ -44,4 +52,6 @@ __all__ = [
     "BridgeOverloadedError",
     "BridgeProtocolError",
     "BridgeReplayError",
+    "CodexAuthenticationRequiredError",
+    "CodexRuntimeSecurityError",
 ]

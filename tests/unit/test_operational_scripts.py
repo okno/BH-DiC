@@ -232,6 +232,8 @@ def test_bridge_host_provisioning_is_exact_and_never_starts_services() -> None:
     assert "systemctl enable" not in script
     assert "systemctl start" not in script
     assert "systemctl restart" not in script
+    assert "codex_cli_bin import bundled_codex_path" in script
+    assert 'chmod 0755 -- "${codex_runtime}"' in script
 
 
 def test_all_bash_scripts_parse() -> None:

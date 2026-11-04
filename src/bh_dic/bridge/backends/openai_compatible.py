@@ -190,6 +190,9 @@ class _OpenAICompatiblePlannerBackend:
         self._instruction = instruction
         self._transport = transport
 
+    async def preflight(self) -> None:
+        """Endpoint availability is intentionally verified only by an opt-in live check."""
+
     async def plan(self, request: BridgeRequest) -> BackendResult:
         timeout_seconds = (request.deadline_ms - request.issued_at_ms) / 1_000
         if not 0.0 < timeout_seconds <= 60.0:
